@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.24)
 
 project(QITestWorkstation LANGUAGES CXX)
 
-# 正式主程序目标保留英文标识，输出名称在下方设置为“飞秒质谱工作站”。
+# 正式主程序目标保留英文标识。MinGW 与 macOS 的输出名称是“飞秒质谱工作站”；
+# MSVC/JOM 的 link.exe 无法打开中文 exe 名（LNK1104 ????????.exe），改用 QITestWorkstation.exe。
 # 不要为了中文目录显示而改目标名或源码路径，插件和打包脚本依赖这些稳定标识。
 
 set(CMAKE_CXX_STANDARD 17)
@@ -91,11 +92,34 @@ target_link_libraries(qitest_ai_evidence PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${
 add_executable(qitest_library_import tools/LibraryImportMain.cpp)
 target_link_libraries(qitest_library_import PRIVATE qitest_library Qt${QT_VERSION_MAJOR}::Core)
 
+# Windows 的 JOM/NMake 按系统代码页解析 Makefile 路径，中文谱图会变成
+# dependent '...乱码.qit.json' does not exist。这些生成器下不把 qrc 交给 AUTORCC，
+# 改为直接调用 rcc；rcc 走 Unicode API，能打开中文文件名。Ninja/Xcode 仍用 AUTORCC。
+set(QITEST_QRC "${CMAKE_CURRENT_SOURCE_DIR}/resources/qitest.qrc")
+function(qitest_add_app_qrc target)
+    if(WIN32 AND CMAKE_GENERATOR MATCHES "Makefiles")
+        set(out "${CMAKE_CURRENT_BINARY_DIR}/${target}_qrc_qitest.cpp")
+        set(rcc_args -name qitest)
+        if(QT_VERSION_MAJOR EQUAL 6)
+            list(PREPEND rcc_args --no-zstd)
+        endif()
+        add_custom_command(
+            OUTPUT "${out}"
+            COMMAND "$<TARGET_FILE:Qt${QT_VERSION_MAJOR}::rcc>" ${rcc_args} -o "${out}" "${QITEST_QRC}"
+            DEPENDS "${QITEST_QRC}"
+            VERBATIM
+            COMMENT "RCC qitest.qrc for ${target}"
+        )
+        target_sources(${target} PRIVATE "${out}")
+    else()
+        target_sources(${target} PRIVATE "${QITEST_QRC}")
+    endif()
+endfunction()
+
 set(QITEST_APP_SOURCES
 # 下面是正式窗口程序的源文件，不是自动化测试程序。
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
-    resources/qitest.qrc
     src/main.cpp
     src/app/AppController.cpp
     src/ai/LocalAiBridge.cpp
@@ -115,6 +139,7 @@ if(APPLE)
         MACOSX_PACKAGE_LOCATION "Resources")
 endif()
 add_executable(QITestWorkstation ${QITEST_APP_SOURCES})
+qitest_add_app_qrc(QITestWorkstation)
 if(WIN32)
     enable_language(RC)
     configure_file(resources/windows.rc.in "${CMAKE_CURRENT_BINARY_DIR}/qitest-windows.rc" @ONLY)
@@ -126,10 +151,17 @@ target_compile_definitions(QITestWorkstation PRIVATE
     QITEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-set_target_properties(QITestWorkstation PROPERTIES
-    WIN32_EXECUTABLE TRUE
-    OUTPUT_NAME "飞秒质谱工作站"
-)
+if(MSVC)
+    set_target_properties(QITestWorkstation PROPERTIES
+        WIN32_EXECUTABLE TRUE
+        OUTPUT_NAME "QITestWorkstation"
+    )
+else()
+    set_target_properties(QITestWorkstation PROPERTIES
+        WIN32_EXECUTABLE TRUE
+        OUTPUT_NAME "飞秒质谱工作站"
+    )
+endif()
 if(APPLE)
     set_target_properties(QITestWorkstation PROPERTIES
         MACOSX_BUNDLE TRUE
@@ -180,7 +212,6 @@ add_test(NAME qitest_security_tests COMMAND qitest_security_tests)
 add_executable(qitest_ui_tests
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
-    resources/qitest.qrc
     tests/UiSmokeTests.cpp
     src/ui/UserStandardsPage.cpp
     src/ui/StandardComparisonDialog.cpp
@@ -195,6 +226,7 @@ add_executable(qitest_ui_tests
     src/ui/scientz/theme/ScientzTheme.cpp
     src/ui/scientz/models/ScientzActionRegistry.cpp
 )
+qitest_add_app_qrc(qitest_ui_tests)
 target_include_directories(qitest_ui_tests PRIVATE src)
 target_link_libraries(qitest_ui_tests PRIVATE qitest_core qitest_library qitest_workspace qitest_security
     qitest_ai_evidence Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Sql Qt${QT_VERSION_MAJOR}::Svg Qt${QT_VERSION_MAJOR}::Test)
