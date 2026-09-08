@@ -1,0 +1,43 @@
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+
+set(QITEST_LLVM_MINGW_ROOT "" CACHE PATH "Path to a macOS llvm-mingw distribution")
+set(QITEST_QT_WINDOWS_ROOT "" CACHE PATH "Path to the Qt Windows LLVM-MinGW target prefix")
+set(QITEST_QT_HOST_ROOT "" CACHE PATH "Path to the matching macOS Qt host tools")
+set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+    QITEST_LLVM_MINGW_ROOT
+    QITEST_QT_WINDOWS_ROOT
+    QITEST_QT_HOST_ROOT
+)
+
+if(NOT QITEST_LLVM_MINGW_ROOT
+   OR NOT EXISTS "${QITEST_LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-clang++")
+    message(FATAL_ERROR "Set QITEST_LLVM_MINGW_ROOT to a valid macOS llvm-mingw distribution")
+endif()
+if(NOT QITEST_QT_WINDOWS_ROOT
+   OR NOT EXISTS "${QITEST_QT_WINDOWS_ROOT}/lib/cmake/Qt6/Qt6Config.cmake")
+    message(FATAL_ERROR "Set QITEST_QT_WINDOWS_ROOT to the Qt Windows target prefix")
+endif()
+if(NOT QITEST_QT_HOST_ROOT
+   OR NOT EXISTS "${QITEST_QT_HOST_ROOT}/libexec/moc")
+    message(FATAL_ERROR "Set QITEST_QT_HOST_ROOT to matching macOS Qt host tools")
+endif()
+
+set(CMAKE_CXX_COMPILER
+    "${QITEST_LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-clang++")
+set(CMAKE_RC_COMPILER
+    "${QITEST_LLVM_MINGW_ROOT}/bin/x86_64-w64-mingw32-windres")
+
+list(APPEND CMAKE_FIND_ROOT_PATH
+    "${QITEST_QT_WINDOWS_ROOT}"
+    "${QITEST_LLVM_MINGW_ROOT}/x86_64-w64-mingw32"
+)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+set(CMAKE_PREFIX_PATH "${QITEST_QT_WINDOWS_ROOT}" CACHE PATH
+    "Qt Windows package prefix" FORCE)
+set(QT_HOST_PATH "${QITEST_QT_HOST_ROOT}" CACHE PATH "Qt host tools prefix" FORCE)
+set(QT_HOST_PATH_CMAKE_DIR "${QITEST_QT_HOST_ROOT}/lib/cmake" CACHE PATH
+    "Qt host tools CMake directory" FORCE)

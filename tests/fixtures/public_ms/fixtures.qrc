@@ -1,0 +1,4 @@
+<RCC><qresource prefix="/public-ms">
+  <file>openms_bsa.scan.csv</file>
+  <file>expected.json</file>
+</qresource></RCC>

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "profile": "embedded-8gb-light-assistant",
+  "defaultModelFile": "Qwen3.5-0.8B-Q4_0.gguf",
+  "modelLicenseFile": "Qwen3.5-LICENSE",
+  "allowToolProposals": false,
+  "fallbackModelFiles": [],
+  "runtime": "llama.cpp",
+  "contextTokens": 4096,
+  "maxOutputTokens": 256,
+  "maxQueuedRequests": 1,
+  "nGpuLayers": 0,
+  "parallelRequests": 1,
+  "cpuThreads": 2,
+  "batchTokens": 128,
+  "microBatchTokens": 64,
+  "idleUnloadMs": 30000,
+  "startupTimeoutMs": 180000,
+  "requestTimeoutMs": 180000,
+  "preloadOnWarmUp": false,
+  "lowMemoryProfile": {
+    "contextTokens": 4096,
+    "maxOutputTokens": 256,
+    "maxQueuedRequests": 1,
+    "nGpuLayers": 0,
+    "parallelRequests": 1,
+    "cpuThreads": 2,
+    "batchTokens": 128,
+    "microBatchTokens": 64,
+    "idleUnloadMs": 30000,
+    "requestTimeoutMs": 120000,
+    "preloadOnWarmUp": false
+  },
+  "modelFileBytes": 563036064,
+  "modelSha256": "57d1997790d1744fba5b40a7317df71ea5e2acee28c47e78f0cce39c0703f8cf",
+  "capabilities": {"text": true, "controlledUiIntent": false, "validatedToolEnvelope": false, "visionInThisPackage": false},
+  "rules": {
+    "loadOnDemand": true,
+    "bindLoopbackOnly": true,
+    "scientificValuesFromModel": false,
+    "criticalCommandsRequireHumanConfirmation": true
+  }
+}

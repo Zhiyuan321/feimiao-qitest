@@ -1,0 +1,45 @@
+# macOS 与编辑器临时文件
+.DS_Store
+*.swp
+*.tmp
+
+# 本地验证记录与工具链
+.qa/
+.tools/
+
+# CMake / Qt 构建产物
+build/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+Testing/
+*.user
+*.user.*
+
+# 本地模型权重（许可证和说明文档仍可入库）
+models/**/*.gguf
+models/**/*.bin
+models/**/*.safetensors
+
+# 客户或现场导入数据，不上传云端仓库
+resources/customer_samples/*.json
+resources/customer_samples/*.csv
+resources/customer_samples/*.xz
+
+# 安装包、压缩交付物和校验旁车文件
+*.dmg
+*.exe
+*.msi
+*.zip
+*.7z
+*.sha256
+
+# 运行时生成的数据、报告与日志
+*.log
+*.qit.json
+*.sqlite-wal
+*.sqlite-shm
+飞秒检测数据/
+飞秒质谱报告/
+飞秒质谱诊断/

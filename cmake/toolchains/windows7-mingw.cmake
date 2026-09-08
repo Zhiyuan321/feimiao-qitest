@@ -1,0 +1,18 @@
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+
+# GNU MinGW's stable libstdc++ ABI matches the official Qt 5.12 MinGW build.
+# Keep this separate from the Qt 6 LLVM/libc++ delivery toolchain.
+find_program(QITEST_MINGW_CC x86_64-w64-mingw32-gcc HINTS /opt/homebrew/bin REQUIRED)
+find_program(QITEST_MINGW_CXX x86_64-w64-mingw32-g++ HINTS /opt/homebrew/bin REQUIRED)
+find_program(QITEST_MINGW_RC x86_64-w64-mingw32-windres HINTS /opt/homebrew/bin REQUIRED)
+set(CMAKE_C_COMPILER "${QITEST_MINGW_CC}")
+set(CMAKE_CXX_COMPILER "${QITEST_MINGW_CXX}")
+set(CMAKE_RC_COMPILER "${QITEST_MINGW_RC}")
+set(CMAKE_C_FLAGS_INIT "-DWINVER=0x0601 -D_WIN32_WINNT=0x0601")
+set(CMAKE_CXX_FLAGS_INIT "-DWINVER=0x0601 -D_WIN32_WINNT=0x0601")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-Wl,--major-os-version,6,--minor-os-version,1,--major-subsystem-version,6,--minor-subsystem-version,1")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
