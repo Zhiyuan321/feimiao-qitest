@@ -1,14 +1,25 @@
-"""Install the exact EXE in the QA Wine prefix, verify payload, launch and uninstall."""
+"""Install the exact EXE in Wine, verify payload, launch and uninstall."""
+import argparse
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
 
 root = Path(__file__).resolve().parent.parent
-installer = root.parent / "05-交付/飞秒质谱工作站安装程序.exe"
-wine = "/Users/zhouzhiyuan/Applications/Wine Stable.app/Contents/Resources/wine/bin/wine"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--installer", type=Path,
+                    default=root.parent / "05-交付/飞秒质谱工作站安装程序.exe")
+parser.add_argument("--wine", help="Wine 可执行文件；默认读取 WINE_BIN 或 PATH")
+arguments = parser.parse_args()
+installer = arguments.installer.expanduser().resolve()
+wine = arguments.wine or os.environ.get("WINE_BIN") or shutil.which("wine")
+if not installer.is_file():
+    raise SystemExit(f"未找到 Windows 安装程序: {installer}")
+if not wine:
+    raise SystemExit("未找到 Wine；请用 --wine 或 WINE_BIN 指定。真实 Windows 7 验收不依赖此脚本。")
 stage = Path(tempfile.mkdtemp(prefix="installer-acceptance-", dir=root / ".qa"))
 installed = stage / "installed"
 def win(path): return "Z:" + str(path).replace("/", "\\")

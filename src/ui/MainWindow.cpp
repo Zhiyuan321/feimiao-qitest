@@ -11,6 +11,7 @@
 #include "core/ChromatogramEngine.h"
 #include "ui/ChromatogramDialog.h"
 #include "core/QtCompat.h"
+#include "core/PlatformPaths.h"
 #include "ui/scientz/models/ScientzActionRegistry.h"
 #include "ui/scientz/theme/ScientzTheme.h"
 
@@ -597,9 +598,10 @@ QWidget *MainWindow::createWorkspacePage() {
             connect(sample, &QLineEdit::textChanged, name, &QLineEdit::setText);
             auto *folder = field("保存位置 *", "sampleSaveFolder");
             QSettings settings("SCIENTZ", "QITest01");
-            const QString defaultFolder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/飞秒检测数据";
+            const QString defaultFolder = PlatformPaths::documentsSubdirectory("飞秒检测数据");
             QDir().mkpath(defaultFolder);
-            folder->setText(settings.value("sampleSaveFolder", defaultFolder).toString());
+            folder->setText(PlatformPaths::nativeDisplay(PlatformPaths::existingDirectoryOrDefault(
+                settings.value("sampleSaveFolder").toString(), defaultFolder)));
             auto *browse = new QPushButton("选择文件夹"); form->addRow("", browse);
             auto *options = new QPushButton("更改保存位置");
             options->setCheckable(true); form->addRow("", options);
@@ -611,7 +613,7 @@ QWidget *MainWindow::createWorkspacePage() {
             });
             connect(browse, &QPushButton::clicked, dialog, [dialog,folder] {
                 const auto path = QFileDialog::getExistingDirectory(dialog,"保存位置",folder->text());
-                if (!path.isEmpty()) folder->setText(path);
+                if (!path.isEmpty()) folder->setText(PlatformPaths::nativeDisplay(path));
             });
             auto *error = new QLabel; error->setWordWrap(true); error->setProperty("sciTone", "error"); layout->addWidget(error);
             auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -675,7 +677,7 @@ QWidget *MainWindow::createWorkspacePage() {
         if (phase == AppController::Phase::Failed) showReportAfterRunSaved_ = false;
     });
     connect(controller_, &AppController::reportGenerated, this, [this](const QString &path) {
-        reportStatus_->setText("报告已生成：" + path);
+        reportStatus_->setText("报告已生成：" + PlatformPaths::nativeDisplay(path));
         statusBar()->showMessage("报告已生成", 3000);
         if (reportExportButton_) {
             reportExportButton_->setText("已生成");
@@ -1948,8 +1950,10 @@ QWidget *MainWindow::createReportPage() {
     connect(reportReviewButton_, &QPushButton::clicked, controller_, &AppController::markCurrentRunReviewed);
     connect(openSavedData, &QPushButton::clicked, this, [this] {
         QSettings settings("SCIENTZ", "QITest01");
-        const QString initial = settings.value("sampleSaveFolder",
-            QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) + "/飞秒检测数据").toString();
+        const QString defaultFolder = PlatformPaths::documentsSubdirectory("飞秒检测数据");
+        QDir().mkpath(defaultFolder);
+        const QString initial = PlatformPaths::existingDirectoryOrDefault(
+            settings.value("sampleSaveFolder").toString(), defaultFolder);
         const QString path = QFileDialog::getOpenFileName(this, "打开已保存的检测数据", initial,
             "检测数据 (*.qit.json *.scan.csv);;全部支持文件 (*.json *.csv)");
         if (path.isEmpty()) return;
@@ -2168,7 +2172,7 @@ QWidget *MainWindow::createLibraryPage() {
     performLibrarySearch();
     pages->addWidget(page);
     QString workspacePath=qEnvironmentVariable("QITEST_WORKSPACE_DB");
-    if(workspacePath.isEmpty()) workspacePath=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)+"/workspace.sqlite";
+    if (workspacePath.isEmpty()) workspacePath = PlatformPaths::appDataFile("workspace.sqlite");
     auto *standards = new UserStandardsPage(QFileInfo(workspacePath).absolutePath()+"/user-standards.sqlite");
     standards->setComparisonProvider([this] {
         StandardComparisonInput input;
@@ -2536,7 +2540,9 @@ void MainWindow::updateWorkspaceLayout() {
 }
 
 void MainWindow::importRunArchiveFromDialog() {
-    const QStringList paths = QFileDialog::getOpenFileNames(this, "导入一批检测数据", {},
+    const QString initial = PlatformPaths::documentsSubdirectory("飞秒检测数据");
+    QDir().mkpath(initial);
+    const QStringList paths = QFileDialog::getOpenFileNames(this, "导入一批检测数据", initial,
         "检测数据 (*.qit.json *.scan.csv);;扫描 CSV (*.csv);;JSON (*.json)");
     if (paths.isEmpty()) return;
     setWorkspaceSection(3);
@@ -2702,7 +2708,7 @@ void MainWindow::refreshReport(const RunSummary &run) {
             operatorLabel(run.operatorName), displayMethod));
     reportStatus_->setText(QString("%1%2")
         .arg(run.reviewStatus == "REVIEWED" ? "已完成人工复核" : "等待人工复核",
-            run.reportPath.isEmpty() ? QString{} : "\n已生成：" + run.reportPath));
+            run.reportPath.isEmpty() ? QString{} : "\n已生成：" + PlatformPaths::nativeDisplay(run.reportPath)));
     const auto &candidates = controller_->result().candidates;
     if (reportQualityValue_)
         reportQualityValue_->setText(QString("%1 · %2/100").arg(qualityLabel(run.qualityLevel)).arg(run.qualityScore));

@@ -1,5 +1,6 @@
 #include "app/AppController.h"
 #include "core/MethodDraft.h"
+#include "core/PlatformPaths.h"
 #include "storage/ArchiveImportWorker.h"
 #include "ai/AiEvidenceBuilder.h"
 #include "ai/LocalAiBridge.h"
@@ -12,7 +13,6 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDir>
-#include <QStandardPaths>
 #include <QSysInfo>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -218,8 +218,7 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
                 : "操作未确认：" + (error.isEmpty() ? QString("设备回读与设定不一致") : error));
         });
     QString workspacePath = qEnvironmentVariable("QITEST_WORKSPACE_DB");
-    if (workspacePath.isEmpty()) workspacePath = QStandardPaths::writableLocation(
-        QStandardPaths::AppDataLocation) + "/workspace.sqlite";
+    if (workspacePath.isEmpty()) workspacePath = PlatformPaths::appDataFile("workspace.sqlite");
     workspace_ = std::make_unique<WorkspaceRepository>(workspacePath);
     QString workspaceError;
     if (!workspace_->open(&workspaceError)) workspace_.reset();
@@ -593,8 +592,7 @@ void AppController::exportSelectedReport(const QVector<int> &candidateRows) {
         emit notice("尚无可导出的检测结果");
         return;
     }
-    const QString directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-        + "/飞秒质谱报告";
+    const QString directory = PlatformPaths::documentsSubdirectory("飞秒质谱报告");
     if (!QDir().mkpath(directory)) { emit notice("无法创建报告目录"); return; }
     // 姓名优先、样本编号兜底；过滤 Windows 禁止字符并保留既有报告。
     const QString path = reportPathForRun(directory, currentRun_);
@@ -696,10 +694,9 @@ void AppController::exportCurrentArchive() {
         emit notice("当前角色无权导出归档"); return;
     }
     if (!workspace_ || currentRun_.id.isEmpty()) { emit notice("尚无可归档记录"); return; }
-    const QString directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-        + "/飞秒质谱归档";
+    const QString directory = PlatformPaths::documentsSubdirectory("飞秒质谱归档");
     if (!QDir().mkpath(directory)) { emit notice("无法创建归档目录"); return; }
-    const QString path = directory + "/QITest-" + currentRun_.id + ".qit.json";
+    const QString path = QDir(directory).filePath("QITest-" + currentRun_.id + ".qit.json");
     exportRunArchive(currentRun_.id, path);
 }
 
@@ -988,8 +985,7 @@ void AppController::exportDiagnosticBundle() {
     if (!AuthorizationPolicy::allows(sessionRole_, Permission::ExportData)) {
         emit notice("当前角色无权导出诊断包"); return;
     }
-    const QString directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-        + "/飞秒质谱诊断";
+    const QString directory = PlatformPaths::documentsSubdirectory("飞秒质谱诊断");
     if (!QDir().mkpath(directory)) { emit notice("无法创建诊断目录"); return; }
     const auto descriptor = instrument_->descriptor();
     const auto currentHealth = instrument_->health();
@@ -1007,8 +1003,8 @@ void AppController::exportDiagnosticBundle() {
             {"quality_level", currentRun_.qualityLevel}, {"quality_score", currentRun_.qualityScore},
             {"review_status", currentRun_.reviewStatus}}}
     };
-    const QString path = directory + "/QITest-diagnostic-"
-        + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss") + ".json";
+    const QString path = QDir(directory).filePath("QITest-diagnostic-"
+        + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss") + ".json");
     QString error;
     if (!DiagnosticBundle::write(path, context, &error)) {
         emit notice("诊断包导出失败：" + error); return;

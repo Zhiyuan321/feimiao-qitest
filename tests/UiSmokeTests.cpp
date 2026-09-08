@@ -87,7 +87,36 @@ private slots:
     void calibrationEditsPreservePrecisionAndRejectStaleWrites();
     void userStandardsPageCreatesImportsAndExports();
     void userStandardComparisonExportsFrozenEvidence();
+    void foreignSavedPathFallsBackToLocalDocuments();
 };
+
+void UiSmokeTests::foreignSavedPathFallsBackToLocalDocuments() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    qputenv("QITEST_WORKSPACE_DB", directory.filePath("path-fallback.sqlite").toUtf8());
+    QSettings settings("SCIENTZ", "QITest01");
+    settings.setValue("sampleSaveFolder", "/Users/other-computer/Documents/飞秒检测数据");
+
+    AppController controller(std::make_unique<SimulatedInstrument>());
+    MainWindow window(&controller);
+    window.show();
+    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
+    QVERIFY(enter);
+    enter->click();
+    auto *runAction = window.findChild<QAction *>("StartRun");
+    QVERIFY(runAction);
+    runAction->trigger();
+    auto *dialog = window.findChild<QDialog *>("sampleSaveDialog");
+    QVERIFY(dialog);
+    const QString actual = QDir::fromNativeSeparators(
+        dialog->findChild<QLineEdit *>("sampleSaveFolder")->text());
+    const QString expected = QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+        .filePath("飞秒检测数据");
+    QCOMPARE(QDir::cleanPath(actual), QDir::cleanPath(expected));
+    QVERIFY(!actual.startsWith("/Users/other-computer/"));
+    settings.remove("sampleSaveFolder");
+}
 
 void UiSmokeTests::customerResultReviewWorkflow() {
     QStandardPaths::setTestModeEnabled(true);
