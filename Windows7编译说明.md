@@ -6,6 +6,7 @@
 
 - CMake 3.24 或以上。
 - Qt **5.12.12 / MinGW 7.3 64位** 组件和匹配编译器。
+- Qt 官方归档：[Qt 5.12.12 Windows 安装器](https://download.qt.io/archive/qt/5.12/5.12.12/qt-opensource-windows-x86-5.12.12.exe)，文件大小 3,987,337,112 bytes，SHA-256 `27955827c9129e58c9147b201eee33f92d2b8360d9de58643800eb4ff1163f5a`。安装时选择 `MinGW 7.3 64-bit` 组件；该 3.7 GB SDK 不随本仓库上传。
 - Qt Creator 是 IDE，其版本不等于项目使用的 Qt 库版本。
 - Qt 模块：Core、Gui、Widgets、Network、Sql、Svg；开启测试另需 Test。
 - 源码包不含 Qt SDK、编译器、EXE/DLL 和模型权重。当前模型的固定下载地址、大小和 SHA-256 见 `models/使用说明.md`；模型不是编译基础功能的前置条件。
