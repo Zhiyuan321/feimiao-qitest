@@ -12,7 +12,7 @@
 ## 兼容基线
 
 - Windows 客户版：Qt 5.12.12 x64、Windows 7 SP1、8 GB 内存、1024×768 / 4:3 屏幕。
-- macOS 版独立构建，不与 Windows 安装包混用。
+- macOS 版只用于开发者本机预览，不作为对外交付或仓库发布件。
 - 主程序构建目标：`QITestWorkstation`。
 
 ## 目录说明
@@ -24,8 +24,12 @@
 - `scripts/`：构建、打包和验证脚本。
 - `docs/`、`design/`：接口、架构、交付与设计说明。
 
-## 发布文件
+## Windows 发布文件
 
-正式 Windows 和 macOS 安装包不写入 Git 历史，统一通过 GitHub Releases 发布。模型权重、客户检测数据、本地工具链、构建缓存和验证截图也不进入仓库。
+正式 Windows 安装包不写入 Git 历史，通过
+[GitHub Release](https://github.com/Zhiyuan321/feimiao-qitest/releases/tag/v2026.09.08)
+发布。Gitee 作为国内源码镜像时，只同步代码、分支和标签，不复制 GitHub Release 附件。
+
+模型权重、客户检测数据、本地工具链、构建缓存和验证截图不进入仓库。
 
 未经真实仪器、正式协议和客户验收的数据，不得作为正式检测结论。
