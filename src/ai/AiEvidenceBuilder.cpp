@@ -1,3 +1,4 @@
+#include "domain/DisplayLabels.h"
 #include "ai/AiEvidenceBuilder.h"
 
 #include <QStringList>
@@ -49,21 +50,21 @@ QString AiEvidenceBuilder::buildEvidence(const AiContextSnapshot &snapshot) {
     lines << "" << "【仪器状态】";
     lines << "通讯连接：" + boolText(snapshot.instrumentHealth.connected);
     lines << "允许采集：" + boolText(snapshot.instrumentHealth.ready);
-    lines << QString("真空度：%1 mbar").arg(snapshot.instrumentHealth.vacuumMbar, 0, 'E', 3);
-    lines << QString("TD 温度：%1 ℃").arg(snapshot.instrumentHealth.tdTemperatureC, 0, 'f', 1);
-    lines << QString("载气流速：%1 mL/min").arg(snapshot.instrumentHealth.carrierGasMlMin, 0, 'f', 2);
-    lines << QString("离子源电压：%1 kV").arg(snapshot.instrumentHealth.ionSourceKv, 0, 'f', 2);
-    lines << QString("分子泵转速：%1 RPM").arg(snapshot.instrumentTelemetry.molecularPumpRpm, 0, 'f', 0);
-    lines << QString("分子泵电流：%1 A").arg(snapshot.instrumentTelemetry.molecularPumpCurrentA, 0, 'f', 2);
-    lines << QString("泵体温度：%1 ℃").arg(snapshot.instrumentTelemetry.molecularPumpTemperatureC, 0, 'f', 1);
+    lines << QString("真空度：%1 mbar").arg(measurementText(snapshot.instrumentHealth.vacuumMbar, 'E', 3));
+    lines << QString("TD 温度：%1 ℃").arg(measurementText(snapshot.instrumentHealth.tdTemperatureC, 'f', 1));
+    lines << QString("载气流速：%1 mL/min").arg(measurementText(snapshot.instrumentHealth.carrierGasMlMin, 'f', 2));
+    lines << QString("离子源电压：%1 kV").arg(measurementText(snapshot.instrumentHealth.ionSourceKv, 'f', 2));
+    lines << QString("分子泵转速：%1 RPM").arg(measurementText(snapshot.instrumentTelemetry.molecularPumpRpm, 'f', 0));
+    lines << QString("分子泵电流：%1 A").arg(measurementText(snapshot.instrumentTelemetry.molecularPumpCurrentA, 'f', 2));
+    lines << QString("泵体温度：%1 ℃").arg(measurementText(snapshot.instrumentTelemetry.molecularPumpTemperatureC, 'f', 1));
     lines << "载气模式：" + snapshot.instrumentTelemetry.carrierGasMode;
-    lines << QString("载气压力：%1 Torr").arg(snapshot.instrumentTelemetry.carrierGasPressureTorr, 0, 'f', 1);
-    lines << QString("离子阱温度：%1 ℃").arg(snapshot.instrumentTelemetry.ionTrapTemperatureC, 0, 'f', 1);
-    lines << QString("倍增器电压：%1 V").arg(snapshot.instrumentTelemetry.multiplierVoltageV, 0, 'f', 1);
-    lines << QString("抽气流速：%1%%").arg(snapshot.instrumentTelemetry.extractionFlowPercent, 0, 'f', 1);
-    lines << QString("进样器余量：%1%%").arg(snapshot.instrumentTelemetry.syringeRemainingPercent, 0, 'f', 1);
+    lines << QString("载气压力：%1 Torr").arg(measurementText(snapshot.instrumentTelemetry.carrierGasPressureTorr, 'f', 1));
+    lines << QString("离子阱温度：%1 ℃").arg(measurementText(snapshot.instrumentTelemetry.ionTrapTemperatureC, 'f', 1));
+    lines << QString("倍增器电压：%1 V").arg(measurementText(snapshot.instrumentTelemetry.multiplierVoltageV, 'f', 1));
+    lines << QString("抽气流速：%1%%").arg(measurementText(snapshot.instrumentTelemetry.extractionFlowPercent, 'f', 1));
+    lines << QString("进样器余量：%1%%").arg(measurementText(snapshot.instrumentTelemetry.syringeRemainingPercent, 'f', 1));
     lines << QString("载气压力复核：%1 Torr；正式阈值尚未从真实仪器协议接入，不得判断为正常或在设定范围内。")
-        .arg(snapshot.instrumentTelemetry.carrierGasPressureTorr, 0, 'f', 1);
+        .arg(measurementText(snapshot.instrumentTelemetry.carrierGasPressureTorr, 'f', 1));
 
     if (!snapshot.activeMethod.id.isEmpty()) {
         lines << QString("当前方法：%1 v%2；已选择，但不代表已开始运行。")

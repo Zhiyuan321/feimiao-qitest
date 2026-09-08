@@ -1,4 +1,7 @@
 #include "ui/MainWindow.h"
+#include "ui/Rs485ConnectionPanel.h"
+#include "ui/NetworkConnectionPanel.h"
+#include <QTabWidget>
 #include "ui/MethodEditorDialog.h"
 #include "ui/InstrumentWorkbench.h"
 #include "device/VendorControlCatalog.h"
@@ -277,12 +280,20 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
     connect(controller_, &AppController::instrumentCommandPending, this,
         [this](const QString &, bool pending) {
             for (auto *widget : findChildren<QWidget *>())
-                if (widget->property("instrumentControl").toBool()) widget->setEnabled(!pending);
+                if (widget->property("instrumentControl").toBool()) widget->setEnabled(!pending && !controller_->instrumentReadOnly());
         });
     connect(controller_, &AppController::instrumentSettingsChanged, this, [this] {
-        if (settingsDetailAction_ && settingsDetailAction_->isVisible())
+        if (controller_->instrumentReadOnly())
+            for (auto *widget : findChildren<QWidget *>())
+                if (widget->property("instrumentControl").toBool()) widget->setEnabled(false);
+        if (settingsDetailAction_ && settingsDetailStack_->currentIndex() == 0)
             populateSettingsDetail(settingsDetailAction_->property("module").toString(),
                                    settingsDetailAction_->property("subpage").toString());
+    });
+    QTimer::singleShot(0, this, [this] {
+        if (controller_->instrumentReadOnly())
+            for (auto *widget : findChildren<QWidget *>())
+                if (widget->property("instrumentControl").toBool()) widget->setEnabled(false);
     });
     connect(controller_, &AppController::aiStateChanged, this, [this](const QString &state) {
         if (aiStatus_) { aiStatus_->setText(state); aiStatus_->show(); }
@@ -597,7 +608,7 @@ QWidget *MainWindow::createWorkspacePage() {
             name->setText(sample->text());
             connect(sample, &QLineEdit::textChanged, name, &QLineEdit::setText);
             auto *folder = field("保存位置 *", "sampleSaveFolder");
-            QSettings settings("SCIENTZ", "QITest01");
+            QSettings settings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
             const QString defaultFolder = PlatformPaths::documentsSubdirectory("飞秒检测数据");
             QDir().mkpath(defaultFolder);
             folder->setText(PlatformPaths::nativeDisplay(PlatformPaths::existingDirectoryOrDefault(
@@ -635,7 +646,7 @@ QWidget *MainWindow::createWorkspacePage() {
                 if (QFileInfo::exists(path)) { error->setText("已有同名文件，请更换名称，避免覆盖。"); return; }
                 QTemporaryFile probe(directory.absoluteFilePath(".qitest-write-XXXXXX"));
                 if (!probe.open()) { error->setText("该位置不能写入，请选择其他文件夹。"); return; }
-                QSettings("SCIENTZ", "QITest01").setValue("sampleSaveFolder",directory.absolutePath());
+                QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").setValue("sampleSaveFolder",directory.absolutePath());
                 const QJsonObject info{{"sample_id",sample->text().trimmed()}, {"person_name",person->text().trimmed()},
                     {"identity_number",identity->text().trimmed()}};
                 dialog->accept();
@@ -1090,20 +1101,20 @@ QWidget *MainWindow::createMonitorPanel() {
         const auto health = controller_->health();
         const auto telemetry = controller_->telemetry();
         const QMap<QString, QString> values{
-            {"vacuum", QString::number(health.vacuumMbar, 'E', 2)},
-            {"td", QString::number(health.tdTemperatureC, 'f', 1)},
-            {"flow", QString::number(health.carrierGasMlMin, 'f', 2)},
-            {"ion", QString::number(health.ionSourceKv, 'f', 1)},
-            {"pump", QString::number(telemetry.molecularPumpRpm, 'f', 0)},
-            {"pumpTemp", QString::number(telemetry.molecularPumpTemperatureC, 'f', 1)},
-            {"syringe", QString::number(telemetry.syringeRemainingPercent, 'f', 0)},
+            {"vacuum", measurementText(health.vacuumMbar, 'E', 2)},
+            {"td", measurementText(health.tdTemperatureC, 'f', 1)},
+            {"flow", measurementText(health.carrierGasMlMin, 'f', 2)},
+            {"ion", measurementText(health.ionSourceKv, 'f', 1)},
+            {"pump", measurementText(telemetry.molecularPumpRpm, 'f', 0)},
+            {"pumpTemp", measurementText(telemetry.molecularPumpTemperatureC, 'f', 1)},
+            {"syringe", measurementText(telemetry.syringeRemainingPercent, 'f', 0)},
             {"carrier", telemetry.carrierGasMode}};
         for (auto it = readings.begin(); it != readings.end(); ++it) {
             const QString value = health.connected ? values.value(it.key()) : "—";
             if (it.value()->text() != value) it.value()->setText(value);
         }
         const QString pressure = health.connected
-            ? QString::number(telemetry.carrierGasPressureTorr, 'f', 1) + " Torr" : "未连接";
+            ? measurementText(telemetry.carrierGasPressureTorr, 'f', 1) + " Torr" : "未连接";
         if (alarmDetail->text() != pressure) alarmDetail->setText(pressure);
     };
     refreshReadings();
@@ -1265,6 +1276,12 @@ QWidget *MainWindow::createSettingsPage() {
     settingsStatusTable_->verticalHeader()->hide();
     settingsStatusTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     settingsStatusTable_->setSelectionMode(QAbstractItemView::NoSelection);
+    auto *communicationTabs = new QTabWidget;
+    communicationTabs->setObjectName("communicationTabs");
+    communicationTabs->addTab(new Rs485ConnectionPanel(controller_), "485串口");
+    communicationTabs->addTab(new NetworkConnectionPanel(controller_), "网口TCP");
+    communicationTabs->hide();
+    placeholderLayout->addWidget(communicationTabs);
     placeholderLayout->addWidget(settingsStatusTable_);
     settingsDetailAction_ = new QPushButton;
     settingsDetailAction_->setObjectName("settingsPrimaryAction");
@@ -1329,9 +1346,9 @@ QWidget *MainWindow::createSettingsPage() {
     auto *readiness = new QGridLayout;
     readiness->setSpacing(8);
     const QList<QPair<QString, QString>> readinessValues{
-        {"真空系统", QString::number(initialHealth.vacuumMbar, 'E', 2) + " mbar"},
-        {"腔内温度", QString::number(initialSettings.value("trapTemperatureC").toInt()) + " ℃"},
-        {"TD 温度", QString::number(initialHealth.tdTemperatureC, 'f', 1) + " ℃"},
+        {"真空系统", measurementText(initialHealth.vacuumMbar, 'E', 2) + " mbar"},
+        {"腔内温度", measurementText(controller_->telemetry().ionTrapTemperatureC) + " ℃"},
+        {"TD 温度", measurementText(initialHealth.tdTemperatureC, 'f', 1) + " ℃"},
         {"系统状态", initialHealth.ready ? "✓ 允许采集" : "需要复核"}
     };
     for (int i = 0; i < readinessValues.size(); ++i) {
@@ -1347,9 +1364,9 @@ QWidget *MainWindow::createSettingsPage() {
         connect(controller_, &AppController::instrumentSettingsChanged, value,
             [this, value, i](const QVariantMap &settings) {
                 const auto health = controller_->health();
-                const QStringList values{QString::number(health.vacuumMbar, 'E', 2) + " mbar",
-                    QString::number(settings.value("trapTemperatureC").toInt()) + " ℃",
-                    QString::number(health.tdTemperatureC, 'f', 1) + " ℃",
+                const QStringList values{measurementText(health.vacuumMbar, 'E', 2) + " mbar",
+                    measurementText(controller_->telemetry().ionTrapTemperatureC) + " ℃",
+                    measurementText(health.tdTemperatureC, 'f', 1) + " ℃",
                     health.ready ? "✓ 允许采集" : "未就绪"};
                 value->setText(values[i]);
                 value->setProperty("sciState", health.ready ? "healthy" : "");
@@ -1542,7 +1559,7 @@ QWidget *MainWindow::createSettingsPage() {
     inletFlow->setAccessibleName("进气流速预设");
     pumpFlow->setAccessibleName("抽气流速预设");
     efc->setAccessibleName("EFC 流速预设");
-    QSettings savedPreset("SCIENTZ", "QITest01");
+    QSettings savedPreset(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     trapTemperature->setValue(savedPreset.value("preset/trapTemperatureC", trapTemperature->value()).toInt());
     inletFlow->setValue(savedPreset.value("preset/inletFlowPercent", inletFlow->value()).toInt());
     pumpFlow->setValue(savedPreset.value("preset/pumpFlowPercent", pumpFlow->value()).toInt());
@@ -1571,7 +1588,7 @@ QWidget *MainWindow::createSettingsPage() {
     powerSummary->setSpacing(8);
     const QList<QPair<QString, QString>> powerValues{
         {"当前阶段", "确认无采集任务"},
-        {"TD 温度", QString::number(initialHealth.tdTemperatureC, 'f', 1) + " ℃"},
+        {"TD 温度", measurementText(initialHealth.tdTemperatureC, 'f', 1) + " ℃"},
         {"降温状态", initialSettings.value("coolingModeOn").toBool() ? "进行中" : "未启动"},
         {"仪器电源", initialSettings.value("powerOn").toBool() ? "已开启" : "已关闭"}
     };
@@ -1581,7 +1598,24 @@ QWidget *MainWindow::createSettingsPage() {
         auto *tileLayout = new QVBoxLayout(tile);
         tileLayout->setContentsMargins(12, 10, 12, 10);
         tileLayout->addWidget(makeLabel(powerValues[i].first, "metadata"));
-        tileLayout->addWidget(makeLabel(powerValues[i].second, "contextTitle"));
+        auto *value = makeLabel(powerValues[i].second, "contextTitle");
+        value->setObjectName(QString("instrumentPowerSummary%1").arg(i));
+        const auto refresh = [this, value, i] {
+            const auto values = controller_->instrumentSettings();
+            const auto state = [&values](const QString &key, const QString &yes, const QString &no) {
+                const auto value = values.value(key);
+                return !value.isValid() ? QString("状态未知") : value.toBool() ? yes : no;
+            };
+            const QStringList labels{
+                controller_->phase() == AppController::Phase::Acquiring ? "采集中" : "无采集任务",
+                measurementText(controller_->health().tdTemperatureC) + " ℃",
+                state("coolingModeOn", "进行中", "未启动"), state("powerOn", "已开启", "已关闭")};
+            value->setText(labels[i]);
+        };
+        connect(controller_, &AppController::instrumentSettingsChanged, value, refresh);
+        connect(controller_, &AppController::phaseChanged, value, refresh);
+        refresh();
+        tileLayout->addWidget(value);
         powerSummary->addWidget(tile, 0, i);
         powerSummary->setColumnStretch(i, 1);
     }
@@ -1949,7 +1983,7 @@ QWidget *MainWindow::createReportPage() {
     });
     connect(reportReviewButton_, &QPushButton::clicked, controller_, &AppController::markCurrentRunReviewed);
     connect(openSavedData, &QPushButton::clicked, this, [this] {
-        QSettings settings("SCIENTZ", "QITest01");
+        QSettings settings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
         const QString defaultFolder = PlatformPaths::documentsSubdirectory("飞秒检测数据");
         QDir().mkpath(defaultFolder);
         const QString initial = PlatformPaths::existingDirectoryOrDefault(
@@ -2885,6 +2919,9 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
     settingsDetailAction_->setProperty("module", module);
     settingsDetailAction_->setProperty("subpage", subpage);
 
+    const bool serialPage = module == "仪器配置" && (subpage == "运行状态" || subpage == "硬件接入说明");
+    if (auto *panel = findChild<QWidget *>("communicationTabs")) panel->setVisible(serialPage);
+    settingsStatusTable_->setVisible(!serialPage);
     const auto health = controller_->health();
     const auto telemetry = controller_->telemetry();
     const auto descriptor = controller_->instrumentDescriptor();
@@ -2902,8 +2939,10 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         description = "显示仪器实测值与本地设定；所有操作以设备回执为准。";
         rows = {
             {"离子源", onOff(configured.value("ionSourceEnabled")),
-                QString::number(health.ionSourceKv, 'f', 1) + " kV",
-                QString::number(configured.value("ionSourceSetpointKv").toDouble(), 'f', 1) + " kV"},
+                measurementText(health.ionSourceKv, 'f', 1) + " kV",
+                configured.value("ionSourceSetpointKv").isValid()
+                    ? QString::number(configured.value("ionSourceSetpointKv").toDouble(), 'f', 1) + " kV"
+                    : QString("设定值未确认")},
             {"适配器", health.connected ? "已连接" : "未连接", descriptor.model,
                 descriptor.protocolVersion}
         };
@@ -2914,7 +2953,7 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         rows = {
             {"节省模式", onOff(configured.value("gasSavingOn")), "—", "设备回执"},
             {"载气流速", health.connected ? "实时" : "不可用",
-                QString::number(health.carrierGasMlMin, 'f', 2) + " mL/min", "由正式方法确认"},
+                measurementText(health.carrierGasMlMin, 'f', 2) + " mL/min", "由正式方法确认"},
             {"内载气", onOff(configured.value("internalCarrierGasOn")), "—", "仪器控制联动"}
         };
         actionText = configured.value("gasSavingOn").toBool() ? "关闭载气节省" : "开启载气节省";
@@ -3001,30 +3040,30 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
             description = "统一读取仪器遥测；界面、检测引擎和智能台共享同一份只读状态。";
             rows = {
                 {"分子泵", health.ready ? "运行" : "未就绪",
-                    QString::number(telemetry.molecularPumpRpm, 'f', 0) + " RPM",
-                    QString("%1 A · %2 V · %3 ℃").arg(telemetry.molecularPumpCurrentA, 0, 'f', 2)
-                        .arg(telemetry.molecularPumpVoltageV, 0, 'f', 1)
-                        .arg(telemetry.molecularPumpTemperatureC, 0, 'f', 1)},
+                    measurementText(telemetry.molecularPumpRpm, 'f', 0) + " RPM",
+                    QString("%1 A · %2 V · %3 ℃").arg(measurementText(telemetry.molecularPumpCurrentA, 'f', 2))
+                        .arg(measurementText(telemetry.molecularPumpVoltageV, 'f', 1))
+                        .arg(measurementText(telemetry.molecularPumpTemperatureC, 'f', 1))},
                 {"真空度", health.connected ? "实时" : "不可用",
-                    QString::number(telemetry.vacuumMbar, 'E', 2) + " mbar", "实时采样"},
+                    measurementText(telemetry.vacuumMbar, 'E', 2) + " mbar", "实时采样"},
                 {"载气", telemetry.carrierGasMode,
-                    QString::number(telemetry.carrierGasFlowMlMin, 'f', 2) + " mL/min",
-                    QString::number(telemetry.carrierGasPressureTorr, 'f', 1) + " Torr"},
+                    measurementText(telemetry.carrierGasFlowMlMin, 'f', 2) + " mL/min",
+                    measurementText(telemetry.carrierGasPressureTorr, 'f', 1) + " Torr"},
                 {"离子阱 / TD", "实时",
-                    QString("%1 ℃ / %2 ℃").arg(telemetry.ionTrapTemperatureC, 0, 'f', 1)
-                        .arg(telemetry.tdTemperatureC, 0, 'f', 1), "只读遥测"},
+                    QString("%1 ℃ / %2 ℃").arg(measurementText(telemetry.ionTrapTemperatureC, 'f', 1))
+                        .arg(measurementText(telemetry.tdTemperatureC, 'f', 1)), "只读遥测"},
                 {"离子源 / 倍增器", "实时",
-                    QString("%1 V / %2 V").arg(telemetry.ionSourceVoltageV, 0, 'f', 0)
-                        .arg(telemetry.multiplierVoltageV, 0, 'f', 0), "受控参数"},
+                    QString("%1 V / %2 V").arg(measurementText(telemetry.ionSourceVoltageV, 'f', 0))
+                        .arg(measurementText(telemetry.multiplierVoltageV, 'f', 0)), "受控参数"},
                 {"抽气 / 注射泵", "实时",
-                    QString("%1 % / %2 %").arg(telemetry.extractionFlowPercent, 0, 'f', 1)
-                        .arg(telemetry.syringeRemainingPercent, 0, 'f', 1), "抽气流速 / 注射泵剩余"}
+                    QString("%1 % / %2 %").arg(measurementText(telemetry.extractionFlowPercent, 'f', 1))
+                        .arg(measurementText(telemetry.syringeRemainingPercent, 'f', 1)), "抽气流速 / 注射泵剩余"}
             };
         } else if (subpage == "降温与关机") {
             description = "降温与关机保持独立受控步骤，执行结果以仪器回执为准。";
             rows = {
                 {"降温流程", onOff(configured.value("coolingModeOn")),
-                    QString::number(health.tdTemperatureC, 'f', 1) + " ℃", "持续监测 TD 温度"},
+                    measurementText(health.tdTemperatureC, 'f', 1) + " ℃", "持续监测 TD 温度"},
                 {"仪器电源", onOff(configured.value("powerOn")), "—", "降温完成后再关机"},
                 {"关机条件", health.ready ? "可检查" : "已阻断",
                     descriptor.protocolVersion, "温度与任务状态联锁"}
@@ -3032,20 +3071,12 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
             actionText = configured.value("coolingModeOn").toBool() ? "停止降温" : "开始降温";
             target = "toggle:coolingModeOn";
         } else if (subpage == "硬件接入说明") {
-            description = "以下三项尚未接通实际硬件，统一在此说明，不提供虚假执行按钮。"
-                "调谐与质量轴校准不同于设置侧栏中的定量曲线。"
-                "清洗液抽取也不能用清洗模式开关代替。\n\n"
-                "485：第3–5页为两字节长度，第8–9页示例为一字节长度；需要确认固件采用哪一种，"
-                "以及校验、回执和串口参数。\n"
-                "网口：缺少 TCP/UDP、IP、端口、完整 CRC 参数；状态表也有独立字节与位域两种描述。\n"
-                "已有命令数据区编码，不等于完成端口收发或真实设备回读。"
-                "请厂家提供当前固件版本、有效完整收发报文、CRC 代码与安全启停顺序。";
+            description = "485已实现只读状态查询，可在上方选择串口连接；9600、8N1、无流控。"
+                "网口TCP可在同页切换标签，默认监听11000，读取倍增管高压、真空规原始值与实验状态。超时清除旧读数。";
             rows = {
-                {"调谐与质量轴校准", "待接入", "—", "校准标准、调谐步骤与安全互锁待确认"},
-                {"进样与注射泵", "待接入", "—", "泵控制指令、量程及操作回执待确认"},
-                {"清洗液抽取", "待接入", "—", "缺少独立抽取指令与回执，不等同清洗模式"},
-                {"RS-485 通信", "未接通", "协议已核对", "长度字段与校验需确认；尚无串口收发驱动"},
-                {"网口通信", "未接通", "协议已核对", "传输方式、地址端口及 CRC 参数缺失"}
+                {"RS-485", "只读接入", controller_->instrumentConnectionSummary(), "0x30状态查询"},
+                {"网口TCP", "只读接入", "默认11000", "可与485同时连接；谱图转换仍待确认"},
+                {"硬件控制", "未开放", "—", "加热、电源、泵和载气控制需另行验证"}
             };
         }
     } else {
@@ -3083,7 +3114,8 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         settingsDetailAction_->setVisible(true);
         const bool busy = controller_->phase() == AppController::Phase::Acquiring
             || controller_->phase() == AppController::Phase::Analyzing;
-        settingsDetailAction_->setEnabled(target != "lock" || !busy);
+        settingsDetailAction_->setEnabled((target != "lock" || !busy)
+            && !(controller_->instrumentReadOnly() && target.startsWith("toggle:")));
         settingsDetailAction_->setToolTip(target == "lock" && busy ? "检测进行中，保持停止入口可用" : "");
     }
 }

@@ -13,9 +13,11 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 option(QITEST_BUILD_TESTS "Build QITest automated tests" ON)
-# Win7 开发必须开启下项；不开启则走 Mac 等平台使用的 Qt 6 构建分支。
-option(QITEST_WIN7 "Build the separate Windows 7 SP1 x64 compatibility target" OFF)
-set(QITEST_QT_COMPONENTS Core Gui Widgets Network Sql Svg)
+# New Windows builds default to the Qt 5 route; existing Qt 6 caches can keep OFF.
+option(QITEST_WIN7 "Build the separate Windows 7 SP1 x64 compatibility target" ${WIN32})
+set(QITEST_WIN7_QT_VERSION "5.15.2" CACHE STRING "Exact Qt 5 version for the Windows 7 target")
+set_property(CACHE QITEST_WIN7_QT_VERSION PROPERTY STRINGS "5.15.2" "5.12.12")
+set(QITEST_QT_COMPONENTS Core Gui Widgets Network Sql Svg SerialPort)
 if(QITEST_BUILD_TESTS)
     list(APPEND QITEST_QT_COMPONENTS Test)
 endif()
@@ -23,12 +25,15 @@ if(QITEST_WIN7)
     if(NOT WIN32)
         message(FATAL_ERROR "QITEST_WIN7 is only supported for Windows targets")
     endif()
-    find_package(Qt5 5.12.12 EXACT REQUIRED COMPONENTS ${QITEST_QT_COMPONENTS})
+    if(NOT QITEST_WIN7_QT_VERSION MATCHES "^(5\\.15\\.2|5\\.12\\.12)$")
+        message(FATAL_ERROR "QITEST_WIN7_QT_VERSION must be 5.15.2 or the legacy 5.12.12")
+    endif()
+    find_package(Qt5 ${QITEST_WIN7_QT_VERSION} EXACT REQUIRED COMPONENTS ${QITEST_QT_COMPONENTS})
     set(QT_VERSION_MAJOR 5)
     if(CMAKE_CROSSCOMPILING)
         foreach(tool moc rcc uic)
             if(NOT EXISTS "${QITEST_QT5_HOST_ROOT}/bin/${tool}")
-                message(FATAL_ERROR "Set QITEST_QT5_HOST_ROOT to Qt 5.12.12 macOS host tools")
+                message(FATAL_ERROR "Set QITEST_QT5_HOST_ROOT to matching Qt ${QITEST_WIN7_QT_VERSION} host tools")
             endif()
             set_target_properties(Qt5::${tool} PROPERTIES
                 IMPORTED_LOCATION "${QITEST_QT5_HOST_ROOT}/bin/${tool}")
@@ -53,6 +58,21 @@ add_library(qitest_core STATIC
 )
 target_include_directories(qitest_core PUBLIC src)
 target_link_libraries(qitest_core PUBLIC Qt${QT_VERSION_MAJOR}::Core)
+
+# Built-in, asynchronous RS-485 status adapter; no hardware write controls.
+add_library(qitest_rs485 STATIC
+    src/device/Rs485Protocol.cpp
+    src/device/Rs485Instrument.cpp
+)
+target_include_directories(qitest_rs485 PUBLIC src)
+target_link_libraries(qitest_rs485 PUBLIC qitest_core Qt${QT_VERSION_MAJOR}::SerialPort)
+
+add_library(qitest_network STATIC
+    src/device/NetworkProtocol.cpp
+    src/device/NetworkInstrument.cpp
+)
+target_include_directories(qitest_network PUBLIC src)
+target_link_libraries(qitest_network PUBLIC qitest_rs485 Qt${QT_VERSION_MAJOR}::Network)
 
 add_library(qitest_library STATIC
     src/library/SpectralLibraryRepository.cpp
@@ -118,6 +138,8 @@ endfunction()
 
 set(QITEST_APP_SOURCES
 # 下面是正式窗口程序的源文件，不是自动化测试程序。
+    src/ui/Rs485ConnectionPanel.cpp
+    src/ui/NetworkConnectionPanel.cpp
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
     src/main.cpp
@@ -146,7 +168,7 @@ if(WIN32)
     target_sources(QITestWorkstation PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/qitest-windows.rc")
 endif()
 target_include_directories(QITestWorkstation PRIVATE src)
-target_link_libraries(QITestWorkstation PRIVATE qitest_core qitest_library qitest_workspace qitest_security qitest_ai_evidence Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Sql Qt${QT_VERSION_MAJOR}::Svg)
+target_link_libraries(QITestWorkstation PRIVATE qitest_network qitest_rs485 qitest_core qitest_library qitest_workspace qitest_security qitest_ai_evidence Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Sql Qt${QT_VERSION_MAJOR}::Svg)
 target_compile_definitions(QITestWorkstation PRIVATE
     QITEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
@@ -173,9 +195,15 @@ endif()
 
 if(QITEST_BUILD_TESTS)
 enable_testing()
+add_executable(qitest_network_tests tests/NetworkTests.cpp)
+target_link_libraries(qitest_network_tests PRIVATE qitest_network Qt${QT_VERSION_MAJOR}::Test)
+add_test(NAME qitest_network_tests COMMAND qitest_network_tests)
+add_executable(qitest_rs485_tests tests/Rs485Tests.cpp)
+target_link_libraries(qitest_rs485_tests PRIVATE qitest_rs485 Qt${QT_VERSION_MAJOR}::Test)
+add_test(NAME qitest_rs485_tests COMMAND qitest_rs485_tests)
 add_executable(qitest_device_tests tests/InstrumentControlTests.cpp src/app/AppController.cpp src/ai/LocalAiBridge.cpp)
 target_include_directories(qitest_device_tests PRIVATE src)
-target_link_libraries(qitest_device_tests PRIVATE qitest_core qitest_library qitest_workspace
+target_link_libraries(qitest_device_tests PRIVATE qitest_network qitest_rs485 qitest_core qitest_library qitest_workspace
     qitest_security qitest_ai_evidence Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)
 target_compile_definitions(qitest_device_tests PRIVATE QITEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME qitest_device_tests COMMAND qitest_device_tests)
@@ -210,6 +238,8 @@ target_link_libraries(qitest_security_tests PRIVATE qitest_security Qt${QT_VERSI
 add_test(NAME qitest_security_tests COMMAND qitest_security_tests)
 
 add_executable(qitest_ui_tests
+    src/ui/NetworkConnectionPanel.cpp
+    src/ui/Rs485ConnectionPanel.cpp
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
     tests/UiSmokeTests.cpp
@@ -228,7 +258,7 @@ add_executable(qitest_ui_tests
 )
 qitest_add_app_qrc(qitest_ui_tests)
 target_include_directories(qitest_ui_tests PRIVATE src)
-target_link_libraries(qitest_ui_tests PRIVATE qitest_core qitest_library qitest_workspace qitest_security
+target_link_libraries(qitest_ui_tests PRIVATE qitest_network qitest_rs485 qitest_core qitest_library qitest_workspace qitest_security
     qitest_ai_evidence Qt${QT_VERSION_MAJOR}::Gui Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Sql Qt${QT_VERSION_MAJOR}::Svg Qt${QT_VERSION_MAJOR}::Test)
 target_compile_definitions(qitest_ui_tests PRIVATE QITEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME qitest_ui_tests COMMAND qitest_ui_tests)

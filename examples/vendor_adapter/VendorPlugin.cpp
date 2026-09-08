@@ -21,7 +21,7 @@ public:
 
 class VendorPlugin final : public QObject, public qitest::IInstrumentPlugin {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID "cn.feimiao.InstrumentPlugin/1.0")
+    Q_PLUGIN_METADATA(IID "cn.feimiao.InstrumentPlugin/1.1")
     Q_INTERFACES(qitest::IInstrumentPlugin)
 public:
     qitest::IInstrumentAdapter *createAdapter() override { return new VendorAdapter; }

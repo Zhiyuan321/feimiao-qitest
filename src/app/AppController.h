@@ -45,6 +45,11 @@ public:
     InstrumentHealth health() const;
     InstrumentTelemetry telemetry() const;
     InstrumentDescriptor instrumentDescriptor() const;
+    bool instrumentReadOnly() const { return instrument_->readOnly(); }
+    QString instrumentConnectionSummary() const { return instrument_->connectionSummary(); }
+    QVariantMap rs485Status() const;
+    QStringList rs485Ports() const;
+    QVariantMap networkStatus() const;
     QVariantMap instrumentSettings() const { return instrumentSettings_; }
     QString sessionSummary() const;
     QString librarySummary() const { return librarySummary_; }
@@ -67,6 +72,11 @@ public:
     const AnalysisResult &result() const { return result_; }
 
 public slots:
+    bool connectRs485(const QString &portName);
+    void disconnectRs485();
+    bool startNetworkListening(const QString &address, quint16 port = 11000, int staleMs = 5000);
+    void stopNetworkListening();
+    bool exportNetworkFrames(const QString &path);
     void startDetection();
     void startSampleDetection(const QJsonObject &sampleInfo, const QString &savePath);
     void cancelDetection();
@@ -132,6 +142,8 @@ signals:
     void importFinished(const QString &summary);
 
 private:
+    void bindInstrumentSignals();
+    void refreshInstrumentReadback();
     void setPhase(Phase phase, const QString &label);
     void finishAcquisition();
     AiContextSnapshot buildAiContext() const;

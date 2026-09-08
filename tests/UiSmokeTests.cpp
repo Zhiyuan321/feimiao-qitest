@@ -1,5 +1,11 @@
 #include "app/AppController.h"
 #include "device/SimulatedInstrument.h"
+#include "device/Rs485Instrument.h"
+#include "Rs485TestDevice.h"
+#include "NetworkTestFrames.h"
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTabWidget>
 #include "ui/MainWindow.h"
 #include "ui/ChatTranscript.h"
 #include "ui/ChromatogramDialog.h"
@@ -32,6 +38,7 @@
 #include <QDialog>
 #include <QComboBox>
 #include <QScreen>
+#include <QFontDatabase>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QLabel>
@@ -71,7 +78,24 @@ QToolButton *commandButton(QWidget &root, const QString &actionId) {
 
 class UiSmokeTests final : public QObject {
     Q_OBJECT
+private:
+    QTemporaryDir settingsDirectory_;
 private slots:
+    void initTestCase() {
+        QVERIFY(settingsDirectory_.isValid());
+        const auto font = qEnvironmentVariable("QITEST_UI_FONT");
+        if (!font.isEmpty()) {
+            const int id = QFontDatabase::addApplicationFont(font);
+            QVERIFY(id >= 0);
+            QApplication::setFont(QFont(QFontDatabase::applicationFontFamilies(id).first()));
+        }
+        // Tests must not read/write the operator's registry or saved COM port.
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
+        QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDirectory_.path());
+    }
+    void rs485StatusPanelReadsAndInvalidates();
+    void networkPanelConnectsAlongside485();
     void bundledSamplesImportWithoutDuplicates();
     void externalArchivePreview();
     void customerResultReviewWorkflow();
@@ -90,12 +114,152 @@ private slots:
     void foreignSavedPathFallsBackToLocalDocuments();
 };
 
+void UiSmokeTests::networkPanelConnectsAlongside485() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir directory;
+    qputenv("QITEST_WORKSPACE_DB", directory.filePath("network-ui.sqlite").toUtf8());
+    test::FakeSerial port; port.reply = test::frame(test::statusPayload());
+    auto instrument = std::make_unique<Rs485Instrument>(&port, nullptr);
+    QVERIFY(instrument->openPort("TEST_ONLY"));
+    AppController controller(std::move(instrument));
+    QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
+    MainWindow window(&controller); window.resize(1024, 768); window.show();
+    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站"); QVERIFY(enter); enter->click();
+    auto *workspace = window.findChild<QStackedWidget *>("centralWorkspace"); QVERIFY(workspace);
+    QTRY_VERIFY_WITH_TIMEOUT(workspace->isVisibleTo(&window), 4000);
+    auto *settings = window.findChild<QAction *>("OpenSettings"); QVERIFY(settings); settings->trigger();
+    auto *tree = window.findChild<QTreeWidget *>("settingsTree"); QVERIFY(tree);
+    bool opened = false;
+    QTreeWidgetItemIterator it(tree);
+    while (*it) {
+        auto *item = *it;
+        if (item->data(0, Qt::UserRole + 1).toString() == "运行状态") {
+            opened = QMetaObject::invokeMethod(tree, "itemClicked", Qt::DirectConnection,
+                Q_ARG(QTreeWidgetItem *, item), Q_ARG(int, 0)); break;
+        }
+        ++it;
+    }
+    QVERIFY(opened);
+    auto *tabs = window.findChild<QTabWidget *>("communicationTabs"); QVERIFY(tabs); tabs->setCurrentIndex(1);
+    auto *panel = window.findChild<QWidget *>("networkConnectionPanel");
+    auto *table = window.findChild<QTableWidget *>("networkReadings");
+    auto *address = window.findChild<QComboBox *>("networkAddress");
+    auto *tcpPort = window.findChild<QSpinBox *>("networkPort");
+    auto *listen = window.findChild<QPushButton *>("networkListen");
+    auto *stop = window.findChild<QPushButton *>("networkStop");
+    QVERIFY(panel && table && address && tcpPort && listen && stop); QVERIFY(panel->isVisibleTo(&window));
+    QTcpServer reservation; QVERIFY(reservation.listen(QHostAddress::LocalHost));
+    const auto portNumber = reservation.serverPort(); reservation.close();
+    address->setCurrentText("127.0.0.1"); tcpPort->setValue(portNumber); listen->click();
+    QVERIFY(controller.networkStatus().value("listening").toBool());
+    QVERIFY(controller.rs485Status().value("connected").toBool());
+    QVERIFY(controller.instrumentReadOnly()); QVERIFY(!controller.instrumentDescriptor().simulation);
+    QCOMPARE(table->item(0, 1)->text(), QString("—"));
+    QTcpSocket client; client.connectToHost(QHostAddress::LocalHost, portNumber);
+    QTRY_VERIFY(controller.networkStatus().value("tcpConnected").toBool());
+    client.write(test::networkStatusWire());
+    QTRY_COMPARE(table->item(0, 1)->text(), QString("3000 V"));
+    QCOMPARE(table->item(1, 1)->text(), QString("1234"));
+    QCOMPARE(table->item(2, 1)->text(), QString("开启"));
+    QCOMPARE(controller.telemetry().tdTemperatureC, 245.6);
+    QVERIFY(!controller.updateInstrumentSetting("powerOn", true, true));
+    controller.startDetection(); QVERIFY(controller.phase() != AppController::Phase::Acquiring);
+    QCoreApplication::processEvents();
+    QVERIFY(window.rect().contains(QRect(listen->mapTo(&window, QPoint()), listen->size())));
+    QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
+    const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/network-readback.png"));
+    QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp.json")));
+    stop->click(); QCOMPARE(table->item(0, 1)->text(), QString("—"));
+    QVERIFY(controller.rs485Status().value("connected").toBool());
+    QCOMPARE(controller.telemetry().tdTemperatureC, 245.6);
+    controller.disconnectRs485(); QVERIFY(!controller.health().connected);
+    // The same 485 adapter remains available after adding/stopping TCP.
+    QVERIFY(controller.connectRs485("TEST_ONLY")); QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
+    controller.disconnectRs485();
+    qunsetenv("QITEST_WORKSPACE_DB");
+}
+
+void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir directory;
+    qputenv("QITEST_WORKSPACE_DB", directory.filePath("rs485-ui.sqlite").toUtf8());
+    test::FakeSerial port;
+    auto instrument = std::make_unique<Rs485Instrument>(&port, nullptr);
+    auto *adapter = instrument.get();
+    AppController controller(std::move(instrument));
+    MainWindow window(&controller);
+    window.resize(1024, 768);
+    window.show();
+    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
+    QVERIFY(enter);
+    QVERIFY(enter->isEnabled());
+    enter->click();
+    auto *workspace = window.findChild<QStackedWidget *>("centralWorkspace");
+    QVERIFY(workspace);
+    QTRY_VERIFY_WITH_TIMEOUT(workspace->isVisibleTo(&window), 4000);
+    auto *settings = window.findChild<QAction *>("OpenSettings");
+    QVERIFY(settings);
+    settings->trigger();
+    auto *tree = window.findChild<QTreeWidget *>("settingsTree");
+    QVERIFY(tree);
+    bool opened = false;
+    QTreeWidgetItemIterator it(tree);
+    while (*it) {
+        auto *item = *it;
+        if (item->data(0, Qt::UserRole + 1).toString() == "运行状态") {
+            opened = QMetaObject::invokeMethod(tree, "itemClicked", Qt::DirectConnection,
+                Q_ARG(QTreeWidgetItem *, item), Q_ARG(int, 0));
+            break;
+        }
+        ++it;
+    }
+    QVERIFY(opened);
+    auto *panel = window.findChild<QWidget *>("rs485ConnectionPanel");
+    auto *table = window.findChild<QTableWidget *>("rs485Readings");
+    auto *connectButton = window.findChild<QPushButton *>("rs485Connect");
+    QVERIFY(panel && table && connectButton);
+    QVERIFY(panel->isVisibleTo(&window));
+    QCOMPARE(table->item(0, 1)->text(), QString("—"));
+    port.reply = test::frame(test::statusPayload());
+    QVERIFY(adapter->openPort("TEST_ONLY"));
+    QTRY_COMPARE(table->item(0, 1)->text(), QString("245.6 ℃"));
+    QCOMPARE(table->item(2, 1)->text(), QString("28.4 mL/min"));
+    QCOMPARE(table->item(5, 1)->text(), QString("3200 V"));
+    QCOMPARE(table->item(8, 1)->text(), QString("内载气"));
+    for (auto *widget : window.findChildren<QWidget *>())
+        if (widget->property("instrumentControl").toBool()) QVERIFY(!widget->isEnabled());
+    QCoreApplication::processEvents();
+    QVERIFY(window.rect().contains(QRect(connectButton->mapTo(&window, QPoint()), connectButton->size())));
+    QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
+    const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/rs485-readback.png"));
+    // A new poll must not navigate away from the user's selected control page.
+    QTreeWidgetItemIterator controls(tree);
+    while (*controls) {
+        auto *item = *controls;
+        if (item->data(0, Qt::UserRole + 1).toString() == "常用部件") {
+            QVERIFY(QMetaObject::invokeMethod(tree, "itemClicked", Qt::DirectConnection,
+                Q_ARG(QTreeWidgetItem *, item), Q_ARG(int, 0)));
+            break;
+        }
+        ++controls;
+    }
+    auto *controlPages = window.findChild<QStackedWidget *>("instrumentControlPages");
+    QVERIFY(controlPages && controlPages->isVisibleTo(&window));
+    controller.disconnectRs485();
+    QVERIFY(controlPages->isVisibleTo(&window));
+    QCOMPARE(table->item(0, 1)->text(), QString("—"));
+    QCOMPARE(table->item(5, 1)->text(), QString("—"));
+    qunsetenv("QITEST_WORKSPACE_DB");
+}
+
 void UiSmokeTests::foreignSavedPathFallsBackToLocalDocuments() {
     QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     qputenv("QITEST_WORKSPACE_DB", directory.filePath("path-fallback.sqlite").toUtf8());
-    QSettings settings("SCIENTZ", "QITest01");
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     settings.setValue("sampleSaveFolder", "/Users/other-computer/Documents/飞秒检测数据");
 
     AppController controller(std::make_unique<SimulatedInstrument>());

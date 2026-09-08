@@ -1,5 +1,6 @@
 #include "app/AppController.h"
 #include "device/SimulatedInstrument.h"
+#include "device/Rs485Instrument.h"
 #include "device/IInstrumentPlugin.h"
 #include "ui/MainWindow.h"
 
@@ -44,7 +45,16 @@ int main(int argc, char *argv[]) {
     std::unique_ptr<qitest::IInstrumentAdapter> instrument;
     QPluginLoader driverLoader;
     const QString pluginPath = qEnvironmentVariable("QITEST_INSTRUMENT_PLUGIN");
-    if (pluginPath.isEmpty()) instrument = std::make_unique<qitest::SimulatedInstrument>();
+    const QString serialPort = qEnvironmentVariable("QITEST_RS485_PORT").trimmed();
+    if (!serialPort.isEmpty() && !pluginPath.isEmpty()) {
+        QMessageBox::critical(nullptr, "设备配置冲突", "请只选择485串口或厂家插件中的一种设备来源。");
+        return 2;
+    }
+    if (!serialPort.isEmpty()) {
+        auto serial = std::make_unique<qitest::Rs485Instrument>();
+        serial->openPort(serialPort); // Failed connections stay real/unknown, never simulation.
+        instrument = std::move(serial);
+    } else if (pluginPath.isEmpty()) instrument = std::make_unique<qitest::SimulatedInstrument>();
     else {
         driverLoader.setFileName(pluginPath);
         auto *factory = qobject_cast<qitest::IInstrumentPlugin *>(driverLoader.instance());

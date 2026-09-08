@@ -5,6 +5,7 @@
 #include "ai/LocalKnowledgeStore.h"
 
 #include <QtTest>
+#include <limits>
 
 using namespace qitest;
 
@@ -12,6 +13,14 @@ class AiEvidenceTests final : public QObject {
     Q_OBJECT
 
 private slots:
+    void missingHardwareValuesAreExplicit() {
+        AiContextSnapshot snapshot;
+        snapshot.instrumentHealth.vacuumMbar = std::numeric_limits<double>::quiet_NaN();
+        snapshot.instrumentTelemetry.molecularPumpRpm = std::numeric_limits<double>::quiet_NaN();
+        const auto evidence = AiEvidenceBuilder::buildEvidence(snapshot);
+        QVERIFY(evidence.contains("真空度：未提供 mbar"));
+        QVERIFY(evidence.contains("分子泵转速：未提供 RPM"));
+    }
     void evidenceIsBoundedAndExplicit();
     void defaultQuestionTracksAvailableEvidence();
     void commandRouterAllowsOnlyWhitelistedNavigation();

@@ -1,6 +1,10 @@
 #include "app/AppController.h"
 #include "device/VendorControlCatalog.h"
 #include "device/SimulatedInstrument.h"
+#include "device/Rs485Instrument.h"
+#include "Rs485TestDevice.h"
+#include <QTcpServer>
+#include <cmath>
 #include <limits>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -26,7 +30,66 @@ public:
 
 class InstrumentControlTests : public QObject {
     Q_OBJECT
+private:
+    QTemporaryDir settingsDirectory_;
 private slots:
+    void initTestCase() {
+        QVERIFY(settingsDirectory_.isValid());
+        // Tests must not read/write the operator's registry or saved COM port.
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
+        QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDirectory_.path());
+    }
+    void rs485ReadbackClearsUnknownFieldsAndCannotControlOrAcquire() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB", dir.filePath("rs485.sqlite").toUtf8());
+        test::FakeSerial port;
+        auto instrument = std::make_unique<Rs485Instrument>(&port, nullptr);
+        auto *adapter = instrument.get();
+        AppController controller(std::move(instrument));
+        QVERIFY(controller.instrumentReadOnly());
+        QVERIFY(!controller.instrumentDescriptor().simulation);
+        for (const auto &check : controller.startupChecks())
+            if (check.name == "仪器接口") QVERIFY(!check.blocking);
+        QVERIFY(!controller.instrumentSettings().value("powerOn").isValid());
+        QVERIFY(std::isnan(controller.health().tdTemperatureC));
+        port.reply = test::frame(test::statusPayload());
+        QVERIFY(adapter->openPort("TEST_ONLY"));
+        QVERIFY(!controller.health().connected);
+        QTRY_VERIFY(controller.health().connected);
+        QCOMPARE(controller.telemetry().ionTrapTemperatureC, 85.3);
+        QVERIFY(controller.instrumentSettings().value("observationLightOn").toBool());
+        QVERIFY(!controller.instrumentSettings().value("trapTemperatureC").isValid());
+        const auto count = port.writes.size();
+        QVERIFY(!controller.updateInstrumentSetting("wastePumpOn", false, true));
+        controller.startDetection();
+        QVERIFY(controller.phase() != AppController::Phase::Acquiring);
+        QCOMPARE(port.writes.size(), count);
+        controller.disconnectRs485();
+        QVERIFY(!controller.health().connected);
+        QVERIFY(std::isnan(controller.telemetry().ionTrapTemperatureC));
+        QVERIFY(!controller.instrumentSettings().value("observationLightOn").isValid());
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void networkFailureLeavesRealUnknownAndCannotReplacePlugin() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB", dir.filePath("network-controller.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        QTcpServer occupied; QVERIFY(occupied.listen(QHostAddress::LocalHost));
+        QVERIFY(!controller.startNetworkListening("127.0.0.1", occupied.serverPort()));
+        QVERIFY(!controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.instrumentReadOnly()); QVERIFY(!controller.health().connected);
+        QVERIFY(std::isnan(controller.telemetry().multiplierVoltageV));
+        QVERIFY(!controller.instrumentSettings().value("powerOn").isValid());
+        QVERIFY(controller.startNetworkListening("127.0.0.1", 0));
+        controller.stopNetworkListening(); QVERIFY(!controller.instrumentDescriptor().simulation);
+        auto plugin = std::make_unique<TestInstrument>();
+        AppController vendor(std::move(plugin));
+        QVERIFY(!vendor.startNetworkListening("127.0.0.1", 0));
+        QCOMPARE(vendor.instrumentDescriptor().model, QString("test"));
+        QVERIFY(vendor.networkStatus().isEmpty());
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void detectionTimingStopsAndHistoryDoesNotReplaceActiveAcquisition() {
         QTemporaryDir dir;
         qputenv("QITEST_WORKSPACE_DB", dir.filePath("timing.sqlite").toUtf8());

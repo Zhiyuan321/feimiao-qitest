@@ -20,6 +20,8 @@ public:
     virtual CommandValidation validate(const InstrumentCommand &command) const = 0;
     virtual QVector<SpectrumPoint> acquireSpectrum() = 0;
     virtual void cancel() = 0;
+    virtual bool readOnly() const { return false; }
+    virtual QString connectionSummary() const { return {}; }
     // 返回实际已确认状态。缺失项表示未知，不可用上次保存的设定值填充。
     virtual QVariantMap confirmedSettings() const { return {}; }
     // 检查固件支持、连接、单位、安全范围及硬件互锁；这里只校验，不发送。
@@ -34,6 +36,8 @@ public:
     // 禁止盲目重发高压、泵或电源命令。
     virtual void cancelSetting(const QString &) {}
 signals:
+    // Cached telemetry/settings changed, including loss of connection/freshness.
+    void stateChanged();
     // success=true 仍须提供有效 readback；控制器会与原请求目标值比较。
     // 仅“写入串口成功”或“命令已收到”不能冒充物理状态确认。
     void settingFinished(const QString &requestId, const QString &key,

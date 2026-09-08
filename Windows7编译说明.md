@@ -1,80 +1,75 @@
-# Windows 7 源码：从解压到运行
+# Windows 7：Qt 5.15.2 构建与485测试包
 
-## 1. 开发环境
+## 当前工具链
 
-建议在 Windows 10/11 开发电脑编译，再到 Windows 7 SP1 x64 验证。
+当前Windows方案使用 **Qt 5.15.2 / MinGW 8.1 64位**，目标为Windows 7 SP1 x64。开发机可以使用Windows 10/11；Qt Creator可以继续使用现有版本。
 
-- CMake 3.24 或以上。
-- Qt **5.12.12 / MinGW 7.3 64位** 组件和匹配编译器。
-- Qt 官方归档：[Qt 5.12.12 Windows 安装器](https://download.qt.io/archive/qt/5.12/5.12.12/qt-opensource-windows-x86-5.12.12.exe)，文件大小 3,987,337,112 bytes，SHA-256 `27955827c9129e58c9147b201eee33f92d2b8360d9de58643800eb4ff1163f5a`。安装时选择 `MinGW 7.3 64-bit` 组件；该 3.7 GB SDK 不随本仓库上传。
-- Qt Creator 是 IDE，其版本不等于项目使用的 Qt 库版本。
-- Qt 模块：Core、Gui、Widgets、Network、Sql、Svg；开启测试另需 Test。
-- 源码包不含 Qt SDK、编译器、EXE/DLL 和模型权重。当前模型的固定下载地址、大小和 SHA-256 见 `models/使用说明.md`；模型不是编译基础功能的前置条件。
+本机已有工具链：
 
-## 2. Qt Creator
+- Qt：`D:/Qt/5.15.2/mingw81_64`
+- 编译器：`D:/Qt/Tools/mingw810_64/bin/g++.exe`
+- CMake：`D:/Qt/Tools/CMake_64/bin/cmake.exe`（要求3.24或以上）
+- Qt模块：Core、Gui、Widgets、Network、Sql、Svg、**SerialPort**；测试另需Test。
 
-打开根目录 **CMakeLists.txt**，选择上述 Kit，首次配置设置：
+路径是本机示例，其他电脑请传入实际安装路径。Qt6的DLL不能与此包混用。仅开启Win7宏不会把Qt6转换为Win7运行库。
+
+## 一条命令构建和打包
+
+在工程根目录打开PowerShell：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt5152.ps1
+```
+
+脚本配置独立的 `build/win7-qt5152-release`，构建Release主程序，并自动收集Qt与MinGW运行库。每次生成新的 `build/packages/Feimiao-Win7-Qt5.15.2-485-时间戳` 文件夹和同名ZIP，不覆盖以前的包。
+
+不同安装位置可指定：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt5152.ps1 -QtRoot C:\Qt\5.15.2\mingw81_64 -MinGWRoot C:\Qt\Tools\mingw810_64 -CMakeExe C:\Qt\Tools\CMake_64\bin\cmake.exe
+```
+
+追加 `-WithTests` 会先执行485、设备控制器、核心计算、AI证据测试及485/控制状态界面专项测试。此选项不是全量UI测试。
+
+测试包用于485读取和基础界面联调；不附带AI模型、推理程序、外部参考谱库或用户运行数据库。完整解压后运行“飞秒质谱工作站.exe”，保留所有DLL与子目录。详细操作见包内“测试说明.txt”。
+
+## 在Qt Creator里构建
+
+1. 打开工程 `CMakeLists.txt`，选择 **Desktop Qt 5.15.2 MinGW 64-bit** Kit。若未自动识别，在Kits的Qt Versions中添加上述Qt目录的 `bin/qmake.exe`，编译器选择MinGW 8.1 x64。
+2. 新建构建目录，例如 `build/creator-qt5152-release`；不要复用Qt6/MSVC构建缓存。
+3. 设置：
 
 ```text
 QITEST_WIN7:BOOL=ON
+QITEST_WIN7_QT_VERSION:STRING=5.15.2
 QITEST_BUILD_TESTS:BOOL=OFF
 CMAKE_BUILD_TYPE:STRING=Release
 ```
 
-构建并运行 **QITestWorkstation**。不要选择 qitest_*_tests 或 qitest_library_import。
-误选过 Qt 6 时，应换空构建目录重新配置，不要复用旧 CMakeCache。
+4. 构建/运行目标选择 **QITestWorkstation**。此MinGW Kit生成“飞秒质谱工作站.exe”，`qitest_*_tests`不是主程序。
+5. 在“设置 → 仪器控制 → 运行状态”选择实际COM口，点击“连接并读取”。9600/8N1/无流控，只查询状态，未开放硬件控制或真实谱图采集。
 
-## 3. 等价 PowerShell 命令
+新Windows构建默认开启Qt5方案。已经存在的Qt6缓存会保留原来的OFF值；使用Qt5 Kit时请显式核对ON。macOS仍使用Qt6分支。
 
-进入源码根目录。Qt 路径按实际安装位置调整，每步成功后再执行下一步：
+## 打包工具的实际用法
 
-```powershell
-$env:PATH = "C:\Qt\Tools\mingw730_64\bin;C:\Qt\5.12.12\mingw73_64\bin;" + $env:PATH
-cmake -S . -B build-win7 -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DQITEST_WIN7=ON -DQITEST_BUILD_TESTS=OFF -DCMAKE_PREFIX_PATH=C:/Qt/5.12.12/mingw73_64
-cmake --build build-win7 --target QITestWorkstation --parallel 2
-& ".\build-win7\飞秒质谱工作站.exe"
-```
-
-从保留上述 PATH 的终端运行；Qt Creator 使用所选 Kit 的环境。
-
-## 4. 排错
-
-| 现象 | 检查 |
-| --- | --- |
-| 找不到 Qt6 | 未设置 QITEST_WIN7=ON |
-| 找不到 Qt5Config.cmake | CMAKE_PREFIX_PATH 指向 Qt 安装目录，不是 bin |
-| Qt 版本不匹配 | 精确要求 5.12.12，不是 5.12.0 / 5.15 |
-| 编译器不能工作 | 检查匹配的 MinGW 64位、PATH 和生成器 |
-| 缺 Qt5 DLL | 从正确 Kit / 终端运行，交付前收集运行库 |
-| 没有产品窗口 | 运行目标选择 QITestWorkstation |
-| 深度问答不可用 | 源码不含模型，先验证基础功能 |
-
-提供问题时请发 Kit 截图、配置命令、第一条完整错误及前后日志，不要只发最后一行“构建失败”。
-
-## 5. 可选测试
-
-主程序跑通后再开启测试：
+上述脚本会调用匹配Qt5工具链的windeployqt。**这套MinGW环境不要强制传 `--release`**：Qt5.15源码说明MinGW的PE调试标记不能可靠判断，此选项会错误筛掉平台插件，报“Unable to find the platform plugin”。程序仍按CMake Release编译，打包时让工具自动选择MinGW插件。
 
 ```powershell
-cmake -S . -B build-win7 -DQITEST_BUILD_TESTS=ON
-cmake --build build-win7 --parallel 2
-ctest --test-dir build-win7 --output-on-failure
+$env:PATH = "D:\Qt\5.15.2\mingw81_64\bin;D:\Qt\Tools\mingw810_64\bin;" + $env:PATH
+& "D:\Qt\5.15.2\mingw81_64\bin\windeployqt.exe" --compiler-runtime --no-translations "D:\测试包\飞秒质谱工作站.exe"
 ```
 
-## 6. 开发与交付的区别
+脚本还检查Qt5SerialPort、qwindows、qsqlite和MinGW运行库，并生成SHA256清单。USB转485适配器的驱动需另在目标机器安装。
 
-编译出的 EXE 仍依赖 Qt DLL 和资源，不能单独发给用户。
-windeployqt --release --compiler-runtime 可收集 Qt 运行库，但不会收集模型和 AI 子进程全部依赖。
-普通用户使用“飞秒质谱工作站安装程序.exe”，工程师使用源码 ZIP。
+## 保留的旧方案
 
-## 7. 维护入口（首次运行不需要）
+Qt5.12.12旧工具链仍可使用，需显式指定 `QITEST_WIN7_QT_VERSION=5.12.12`，并使用配套MinGW 7.3和新的构建目录。`scripts/package_windows_qt512_cross.sh`保持Mac交叉构建旧版本的用途，已明确固定5.12.12；旧校验/安装脚本也保持其原有交付目录约定。
 
-- scripts/package_source.py：生成不含模型的源码 ZIP 和校验清单。
-- scripts/package_windows_qt512_cross.sh：Mac 交叉编译专用，需要额外配置工具链。
-- scripts/package_windows_installer.py：从完整已校验 Windows 运行目录生成安装 EXE。
-- third_party/llama.cpp-b10752：本项目的 Win7 推理引擎适配源码，不代表上游官方支持 Win7。
-- config/ai-model-manifest.json：当前 Qwen3.5-0.8B Q4_0 模型配置。
-- models/使用说明.md：模型固定下载链接、文件大小、SHA-256 和替换规则；模型权重不上传 GitHub。
+根目录 `package-windows.ps1` 属于Qt6旧维护路径；本次Qt5.15.2测试包使用新的 `scripts/build_win7_qt5152.ps1`。
 
-没有模型仍可编译和运行基础功能。模型解释与受控操作路由分离。
-真实仪器必须按协议联调；Wine 检查不能代替 Win7 工控机的驱动、性能和硬件验收。
+## 验证边界
+
+2026-09-08：在本机Windows、Qt5.15.2/MinGW8.1 Release下，主程序编译通过；485协议、设备控制器、核心计算、AI证据四组测试通过；485回读/失效、控制开关回读、固定横屏布局三项UI测试通过。仅记录这些已执行测试，不代表全量UI回归通过。
+
+Win7 SP1目标工控机、实际USB转485驱动和硬件读数仍需现场验收，开发机测试不替代实机验证。

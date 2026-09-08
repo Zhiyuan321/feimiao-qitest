@@ -1,4 +1,5 @@
 #include "ai/AiCommandRouter.h"
+#include <QStringList>
 
 #include <initializer_list>
 #include <QVector>

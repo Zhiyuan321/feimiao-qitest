@@ -42,6 +42,7 @@ done
   -DQt5_DIR="$qt_root/lib/cmake/Qt5" \
   -DQITEST_QT5_HOST_ROOT="$qt_host_root" \
   -DQITEST_WIN7=ON \
+  -DQITEST_WIN7_QT_VERSION=5.12.12 \
   -DQITEST_LLVM_MINGW_ROOT="$llvm_root" \
   -DQITEST_QT_WINDOWS_ROOT="$qt_root" \
   -DQITEST_QT_HOST_ROOT="$qt_host_root" \

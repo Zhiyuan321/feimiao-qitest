@@ -1,3 +1,6 @@
+#include "device/Rs485Instrument.h"
+#include "device/NetworkInstrument.h"
+#include "domain/DisplayLabels.h"
 #include "app/AppController.h"
 #include "core/MethodDraft.h"
 #include "core/PlatformPaths.h"
@@ -164,7 +167,7 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
         {"ionSourceEnabled", true}, {"trapTemperatureC", 85}, {"inletFlowPercent", 20},
         {"pumpFlowPercent", 20}, {"efcMlMin", 28.4}, {"ionSourceSetpointKv", 3.2}
     };
-    QSettings persistentSettings("SCIENTZ", "QITest01");
+    QSettings persistentSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     // Disk preferences are not hardware readback. Never restore an ON indicator
     // from yesterday's process. Real hardware starts unknown until read back.
     const auto readback = instrument_->confirmedSettings();
@@ -186,37 +189,7 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
         if (workspace_) workspace_->appendAudit(sessionOperator_, "INSTRUMENT_COMMAND_TIMEOUT", key, id);
         emit notice("仪器未及时回执，状态未知；请检查设备，不要反复点击。");
     });
-    connect(instrument_.get(), &IInstrumentAdapter::settingFinished, this,
-        [this](const QString &id, const QString &key, bool success, const QVariant &actual, const QString &error) {
-            // 调试第一检查点：请求号和控制键必须匹配，不能把其他命令的 ACK 串进来。
-            if (id != pendingSettingId_ || key != pendingSettingKey_ || id.isEmpty()) return;
-            settingTimeout_.stop();
-            pendingSettingId_.clear(); pendingSettingKey_.clear();
-            // 调试第二检查点：成功标志、有效回读、目标值三者缺一不可。
-            const bool acknowledged = success && actual.isValid() && actual == pendingSettingValue_;
-            if (acknowledged) {
-                instrumentSettings_[key] = actual;
-                // The simulator may acknowledge a start/stop affecting several
-                // parts. Pull its single state snapshot; never invent real-device
-                // part states from an aggregate power ACK.
-                if (instrument_->descriptor().simulation) {
-                    const auto readback = instrument_->confirmedSettings();
-                    for (auto it = readback.begin(); it != readback.end(); ++it)
-                        if (instrumentSettings_.contains(it.key())) instrumentSettings_[it.key()] = it.value();
-                }
-                if (actual.userType() != QMetaType::Bool) {
-                    QSettings preferences("SCIENTZ", "QITest01");
-                    preferences.setValue("instrument/" + key, actual);
-                }
-            } else if (!instrument_->descriptor().simulation) instrumentSettings_[key] = QVariant();
-            if (workspace_) workspace_->appendAudit(sessionOperator_,
-                acknowledged ? "INSTRUMENT_COMMAND_CONFIRMED" : "INSTRUMENT_COMMAND_FAILED", key,
-                id + "; " + (instrument_->descriptor().simulation ? "simulation; " : "hardware; ") + error.left(300));
-            emit instrumentSettingsChanged(instrumentSettings_);
-            emit instrumentCommandPending(key, false);
-            emit notice(acknowledged ? "操作已确认"
-                : "操作未确认：" + (error.isEmpty() ? QString("设备回读与设定不一致") : error));
-        });
+    bindInstrumentSignals();
     QString workspacePath = qEnvironmentVariable("QITEST_WORKSPACE_DB");
     if (workspacePath.isEmpty()) workspacePath = PlatformPaths::appDataFile("workspace.sqlite");
     workspace_ = std::make_unique<WorkspaceRepository>(workspacePath);
@@ -310,6 +283,133 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
     });
 }
 
+void AppController::bindInstrumentSignals() {
+    connect(instrument_.get(), &IInstrumentAdapter::stateChanged,
+            this, &AppController::refreshInstrumentReadback);
+    connect(instrument_.get(), &IInstrumentAdapter::settingFinished, this,
+        [this](const QString &id, const QString &key, bool success, const QVariant &actual, const QString &error) {
+            // 调试第一检查点：请求号和控制键必须匹配，不能把其他命令的 ACK 串进来。
+            if (id != pendingSettingId_ || key != pendingSettingKey_ || id.isEmpty()) return;
+            settingTimeout_.stop();
+            pendingSettingId_.clear(); pendingSettingKey_.clear();
+            // 调试第二检查点：成功标志、有效回读、目标值三者缺一不可。
+            const bool acknowledged = success && actual.isValid() && actual == pendingSettingValue_;
+            if (acknowledged) {
+                instrumentSettings_[key] = actual;
+                // The simulator may acknowledge a start/stop affecting several
+                // parts. Pull its single state snapshot; never invent real-device
+                // part states from an aggregate power ACK.
+                if (instrument_->descriptor().simulation) {
+                    const auto readback = instrument_->confirmedSettings();
+                    for (auto it = readback.begin(); it != readback.end(); ++it)
+                        if (instrumentSettings_.contains(it.key())) instrumentSettings_[it.key()] = it.value();
+                }
+                if (actual.userType() != QMetaType::Bool) {
+                    QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
+                    preferences.setValue("instrument/" + key, actual);
+                }
+            } else if (!instrument_->descriptor().simulation) instrumentSettings_[key] = QVariant();
+            if (workspace_) workspace_->appendAudit(sessionOperator_,
+                acknowledged ? "INSTRUMENT_COMMAND_CONFIRMED" : "INSTRUMENT_COMMAND_FAILED", key,
+                id + "; " + (instrument_->descriptor().simulation ? "simulation; " : "hardware; ") + error.left(300));
+            emit instrumentSettingsChanged(instrumentSettings_);
+            emit instrumentCommandPending(key, false);
+            emit notice(acknowledged ? "操作已确认"
+                : "操作未确认：" + (error.isEmpty() ? QString("设备回读与设定不一致") : error));
+        });
+}
+
+void AppController::refreshInstrumentReadback() {
+    const auto values = instrument_->confirmedSettings();
+    for (auto it = instrumentSettings_.begin(); it != instrumentSettings_.end(); ++it) {
+        if (it.key() == pendingSettingKey_) continue;
+        if (!instrument_->descriptor().simulation || values.contains(it.key()))
+            it.value() = values.value(it.key());
+    }
+    emit instrumentSettingsChanged(instrumentSettings_);
+}
+
+QStringList AppController::rs485Ports() const { return Rs485Instrument::availablePorts(); }
+QVariantMap AppController::rs485Status() const {
+    const auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get());
+    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) adapter = network->serial();
+    return adapter ? adapter->statusDetails() : QVariantMap{};
+}
+
+bool AppController::connectRs485(const QString &portName) {
+    if (portName.trimmed().isEmpty()) { emit notice("请选择485串口"); return false; }
+    if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing || !pendingSettingId_.isEmpty()) {
+        emit notice("请先结束采集或待确认操作，再更换设备连接"); return false;
+    }
+    auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get());
+    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) adapter = network->serial();
+    if (!adapter) {
+        // Never replace a loaded vendor plugin through the serial settings UI.
+        if (!instrument_->descriptor().simulation) {
+            emit notice("当前使用厂家插件，请通过插件配置设备连接"); return false;
+        }
+        QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
+        auto serial = std::make_unique<Rs485Instrument>();
+        adapter = serial.get();
+        instrument_ = std::move(serial);
+        bindInstrumentSignals();
+        refreshInstrumentReadback();
+    }
+    const bool opened = adapter->openPort(portName);
+    if (opened) QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").setValue("rs485/port", portName.trimmed());
+    // Opening a COM port is not proof of an instrument reply; stateChanged will
+    // report connected only after a validated status frame.
+    emit notice(adapter->connectionSummary());
+    return opened;
+}
+
+void AppController::disconnectRs485() {
+    if (auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get())) adapter->closePort();
+    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) network->serial()->closePort();
+}
+
+QVariantMap AppController::networkStatus() const {
+    auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get());
+    return adapter ? adapter->statusDetails() : QVariantMap{};
+}
+bool AppController::startNetworkListening(const QString &address, quint16 port, int staleMs) {
+    if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing || !pendingSettingId_.isEmpty()) {
+        emit notice("请先结束采集或待确认操作，再更换设备连接"); return false;
+    }
+    auto *network = qobject_cast<NetworkInstrument *>(instrument_.get());
+    if (!network) {
+        auto *serial = qobject_cast<Rs485Instrument *>(instrument_.get());
+        if (!serial && !instrument_->descriptor().simulation) {
+            emit notice("当前使用厂家插件，请通过插件配置设备连接"); return false;
+        }
+        QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
+        std::unique_ptr<Rs485Instrument> existingSerial;
+        if (serial) { instrument_.release(); existingSerial.reset(serial); }
+        auto adapter = std::make_unique<NetworkInstrument>(std::move(existingSerial));
+        network = adapter.get(); instrument_ = std::move(adapter);
+        bindInstrumentSignals(); refreshInstrumentReadback();
+    }
+    const bool opened = network->startListening(address, port, staleMs);
+    if (opened) {
+        QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
+        preferences.setValue("network/address", address.trimmed());
+        if (port) preferences.setValue("network/port", port);
+        preferences.setValue("network/staleMs", staleMs);
+    }
+    emit notice(network->connectionSummary()); return opened;
+}
+void AppController::stopNetworkListening() {
+    if (auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get())) adapter->stopListening();
+}
+bool AppController::exportNetworkFrames(const QString &path) {
+    auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get());
+    if (!adapter || path.isEmpty()) return false;
+    QString error;
+    const bool saved = adapter->exportFrames(path, &error);
+    emit notice(saved ? "已导出最近网口报文：" + path : "报文导出失败：" + error);
+    return saved;
+}
+
 InstrumentHealth AppController::health() const { return instrument_->health(); }
 
 InstrumentTelemetry AppController::telemetry() const { return instrument_->telemetry(); }
@@ -321,6 +421,7 @@ QString AppController::sessionSummary() const {
 }
 
 bool AppController::updateInstrumentSetting(const QString &key, const QVariant &value, bool confirmed) {
+    if (instrument_->readOnly()) { emit notice("当前设备仅提供状态读取，硬件控制未开放"); return false; }
     // 固定顺序：并发限制 → 类型/范围 → 权限/连接 → 厂家校验 → 用户确认 → 审计 → 下发。
     // 下方通用输入范围不是设备的物理安全范围；厂家适配器必须继续收紧校验。
     if (!pendingSettingId_.isEmpty()) { emit notice("请等待仪器确认上一项操作"); return false; }
@@ -387,7 +488,7 @@ bool AppController::saveInstrumentPreset(const QVariantMap &preset) {
             emit notice("预设参数不合法"); return false;
         }
     }
-    QSettings preferences("SCIENTZ", "QITest01");
+    QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     for (auto it = preset.begin(); it != preset.end(); ++it) preferences.setValue("preset/" + it.key(), it.value());
     preferences.sync();
     if (preferences.status() != QSettings::NoError) { emit notice("预设保存失败"); return false; }
@@ -425,8 +526,9 @@ QVector<StartupCheck> AppController::startupChecks() const {
         {"本地 C++ 科学引擎", AnalysisEngine::Version, true, true},
         {"正式参考谱库", librarySummary_, !libraryDatabasePath_.isEmpty(), false},
         {"检测记录与审计", workspaceSummary(), workspace_ != nullptr, true},
-        {"仪器接口", instrumentHealth.connected ? "接口已就绪" : "仪器未连接",
-            instrumentHealth.connected && instrumentHealth.ready, true},
+        {"仪器接口", instrument_->readOnly() ? instrument_->connectionSummary()
+                : instrumentHealth.connected ? "接口已就绪" : "仪器未连接",
+            instrumentHealth.connected && instrumentHealth.ready, !instrument_->readOnly()},
         {"离线 AI 解释层", aiSummary(), aiBridge_->componentsAvailable(), false}
     };
 }
@@ -485,7 +587,7 @@ void AppController::explainFeature(const QString &feature) {
     const auto hits = knowledgeStore_.search(feature, 1);
     QString answer = "此处用于查看“" + feature + "”。状态与数值以实际数据为准。";
     if (feature == "载气压力")
-        answer = "载气压力读数：" + QString::number(instrument_->telemetry().carrierGasPressureTorr, 'f', 1)
+        answer = "载气压力读数：" + measurementText(instrument_->telemetry().carrierGasPressureTorr, 'f', 1)
             + " Torr。\n厂家允许范围尚未配置，不能据此判断过载或正常。请在“查看状态”中核对连接和实测值，按厂家规范检查气路；不要直接关闭泵或阀。"
             + QString("\n请按厂家规范核对气路和仪器状态。");
     else if (feature == "质量复核") {

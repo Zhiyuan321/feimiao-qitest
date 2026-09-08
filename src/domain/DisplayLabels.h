@@ -1,7 +1,12 @@
 #pragma once
 #include <QString>
+#include <cmath>
 
 namespace qitest {
+// A real adapter uses NaN for unavailable numeric telemetry, never fabricated 0.
+inline QString measurementText(double value, char format = 'f', int precision = 1) {
+    return std::isfinite(value) ? QString::number(value, format, precision) : QString("未提供");
+}
 // Presentation only: persisted identifiers and audit values stay unchanged.
 inline QString dataScopeLabel(const QString &scope) {
     if (scope == "PUBLIC_EXAMPLE") return "公开示例 · 非检测结果";

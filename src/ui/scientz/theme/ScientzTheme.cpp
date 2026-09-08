@@ -28,6 +28,12 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#analysisCanvas { background: %2; }
         QWidget#standardLibraryTabs, QStackedWidget#standardLibraryPages { background: %2; border: 0; }
         QWidget#calibrationPage, QWidget#userStandardsPage { background: %2; }
+        QTabWidget#communicationTabs::pane { background: %2; border: 0; }
+        QTabWidget#communicationTabs QStackedWidget,
+        QWidget#networkConnectionPanel, QWidget#rs485ConnectionPanel { background: %2; }
+        QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; padding: 8px 16px; min-height: 24px; }
+        QTabWidget#communicationTabs QTabBar::tab:selected { background: %17; color: %20; font-weight: 600; }
+        QTabWidget#communicationTabs QTabBar::tab:hover { background: %19; }
         QPushButton[sciRole="librarySelector"] { min-height: 30px; background: %6; border: 0; padding: 0 14px; }
         QPushButton[sciRole="librarySelector"]:checked { background: %17; color: %20; font-weight: 600; }
         QPushButton[sciRole="librarySelector"]:hover { background: %19; }
