@@ -1,6 +1,6 @@
 # 飞秒质谱工作站 · 工程师入口
 
-**不熟悉英文目录名？先打开 [中文功能导航](先看这里-中文导航.md)，按要调试的功能找代码。**
+**不熟悉英文目录名？先打开 [中文功能导航](START_HERE.md)，按要调试的功能找代码。**
 
 这是 **C++17 / Qt Widgets / CMake** 产品源码，不是测试示例，也不是 QML 或 qmake 工程。
 
@@ -12,7 +12,7 @@
 4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_BUILD_TESTS=OFF**。
 5. 构建并运行目标 **QITestWorkstation**，生成“飞秒质谱工作站.exe”。
 
-详见 [Windows 构建步骤与排错](Windows7编译说明.md)。
+详见 [Windows 构建步骤与排错](WINDOWS7_BUILD_GUIDE.md)。
 
 ## 名称说明
 
@@ -25,7 +25,7 @@
 
 ## 代码目录
 
-**接手调试先读 [源码总览](src/使用说明.md)，厂家接口直接看 [设备接入](src/device/使用说明.md)。各业务子目录均有中文 README。**
+**接手调试先读 [源码总览](src/README.md)，厂家接口直接看 [设备接入](src/device/README.md)。各业务子目录均有中文 README。**
 
 | 位置 | 职责 |
 | --- | --- |
@@ -42,7 +42,7 @@
 | third_party/ | 第三方源码，首次启动无需单独编译 AI |
 | models/ | 模型说明和许可证，源码 ZIP 不含权重 |
 | cmake/、scripts/ | 工具链、维护和打包脚本 |
-| docs/ | [架构、仪器接入与验证导航](docs/使用说明.md) |
+| docs/ | [架构、仪器接入与验证导航](docs/README.md) |
 
 本机 build-*、.qa、.tools 是开发产物，不进入源码 ZIP。不要把其他电脑的构建目录复制过来使用。
 

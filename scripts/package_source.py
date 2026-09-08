@@ -55,8 +55,8 @@ def main():
     skill_ui = PROJECT_SKILL / "agents/openai.yaml"
     for source, name in (
         (agents, "QITestQt/AGENTS.md"),
-        (skill, "QITestQt/项目专用Skill/SKILL.md"),
-        (skill_ui, "QITestQt/项目专用Skill/agents/openai.yaml"),
+        (skill, "QITestQt/project-skill/SKILL.md"),
+        (skill_ui, "QITestQt/project-skill/agents/openai.yaml"),
     ):
         if not source.is_file() or source.is_symlink():
             raise RuntimeError("Source handoff missing project guidance: " + str(source))
@@ -97,7 +97,7 @@ def main():
         if bad:
             raise RuntimeError("ZIP CRC failure: " + bad)
         for required in ("src/core/QtCompat.h", "src/ai/LocalAiBridge.cpp", "CMakeLists.txt",
-                         "Windows7编译说明.md", "AGENTS.md", "项目专用Skill/SKILL.md",
+                         "WINDOWS7_BUILD_GUIDE.md", "AGENTS.md", "project-skill/SKILL.md",
                          "third_party/llama.cpp-b10752/vendor/cpp-httplib/httplib.cpp"):
             if "QITestQt/" + required not in archive.namelist():
                 raise RuntimeError("Source handoff missing " + required)

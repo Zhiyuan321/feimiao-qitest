@@ -1,6 +1,6 @@
 # QITest Qt/C++ Design Contract
 
-本工程使用 Qt Widgets-first 的 SCIENTZ 4S 视觉基线，但页面流程和功能层级以飞秒质谱仪 Word 文档 2.3 为最高产品依据。详细参考绑定见 `design/界面交互参考.md`。
+本工程使用 Qt Widgets-first 的 SCIENTZ 4S 视觉基线，但页面流程和功能层级以飞秒质谱仪 Word 文档 2.3 为最高产品依据。详细参考绑定见 `design/UI_INTERACTION_REFERENCE.md`。
 
 - Word 2.3 是页面、功能和层级的上位依据。
 - 使用 Instrument Console Profile：顶部命令、中央 TIC/MS、右侧遥测、底部状态。

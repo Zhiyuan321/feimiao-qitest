@@ -34,5 +34,5 @@ $env:QITEST_INSTRUMENT_PLUGIN = "C:\Dev\driver\QITestVendorAdapter.dll"
 ```
 
 未设置使用模拟器；指定插件加载失败会报错退出，不会偷偷退回模拟。
-详细契约见 ../../docs/integration/厂家仪器接入说明.md。
+详细契约见 ../../docs/integration/VENDOR_INSTRUMENT_INTEGRATION.md。
 对应 tests/InstrumentControlTests.cpp；这组测试通过不代表实机通过。

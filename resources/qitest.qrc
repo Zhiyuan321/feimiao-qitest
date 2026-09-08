@@ -1,26 +1,26 @@
 <RCC>
   <qresource prefix="/qitest/resources">
-    <file>customer_samples/饼干-MS-第01谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第02谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第03谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第04谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第05谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第06谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第07谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第08谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第09谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第10谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第11谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第12谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第13谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第14谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第15谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第16谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第17谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第18谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第19谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第20谱.qit.json</file>
-    <file>customer_samples/饼干-MS-第21谱.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-01.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-02.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-03.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-04.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-05.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-06.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-07.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-08.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-09.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-10.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-11.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-12.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-13.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-14.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-15.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-16.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-17.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-18.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-19.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-20.qit.json</file>
+    <file>customer_samples/biscuit-ms-spectrum-21.qit.json</file>
     <file>brand/qitest-app.svg</file>
     <file>icons/home.svg</file>
     <file>icons/run.svg</file>

@@ -2,8 +2,9 @@ cmake_minimum_required(VERSION 3.24)
 
 project(QITestWorkstation LANGUAGES CXX)
 
-# 正式主程序目标保留英文标识，输出名称在下方设置为“飞秒质谱工作站”。
-# 不要为了中文目录显示而改目标名或源码路径，插件和打包脚本依赖这些稳定标识。
+# Keep the application target identifier in English. The customer-facing output
+# name remains Chinese below. Plugins and packaging scripts depend on these
+# stable target and source path identifiers.
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +13,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
 option(QITEST_BUILD_TESTS "Build QITest automated tests" ON)
-# Win7 开发必须开启下项；不开启则走 Mac 等平台使用的 Qt 6 构建分支。
+# Enable this option for the Windows 7 build. Other platforms use the Qt 6 branch.
 option(QITEST_WIN7 "Build the separate Windows 7 SP1 x64 compatibility target" OFF)
 set(QITEST_QT_COMPONENTS Core Gui Widgets Network Sql Svg)
 if(QITEST_BUILD_TESTS)
@@ -41,7 +42,7 @@ else()
 endif()
 
 add_library(qitest_core STATIC
-# 科学计算及模拟设备基础层；界面不在此目标中。
+# Scientific computation and simulated-instrument foundation; no UI sources.
     src/device/IInstrumentAdapter.h
     src/core/AnalysisEngine.cpp
     src/core/QuantitationEngine.cpp
@@ -61,7 +62,7 @@ target_include_directories(qitest_library PUBLIC src)
 target_link_libraries(qitest_library PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Sql)
 
 add_library(qitest_workspace STATIC
-# 数据保存、归档和报告；与模型推理分离。
+# Persistence, archives, and reports; kept separate from model inference.
     src/storage/WorkspaceRepository.cpp
     src/storage/RunArchiveCodec.cpp
     src/storage/ScanSeriesCodec.cpp
@@ -92,7 +93,7 @@ add_executable(qitest_library_import tools/LibraryImportMain.cpp)
 target_link_libraries(qitest_library_import PRIVATE qitest_library Qt${QT_VERSION_MAJOR}::Core)
 
 set(QITEST_APP_SOURCES
-# 下面是正式窗口程序的源文件，不是自动化测试程序。
+# Sources for the production desktop application, not the automated test binaries.
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
     resources/qitest.qrc

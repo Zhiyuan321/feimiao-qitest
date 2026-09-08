@@ -1,6 +1,6 @@
 # 厂家插件模板
 
-先阅读 ../../src/device/使用说明.md 与 ../../docs/integration/厂家仪器接入说明.md。
+先阅读 ../../src/device/README.md 与 ../../docs/integration/VENDOR_INSTRUMENT_INTEGRATION.md。
 VendorPlugin.cpp 故意返回“未配置/拒绝”，不能当成已经接通的驱动。
 
 此目录有独立 CMakeLists.txt，只构建插件，不生成主程序。

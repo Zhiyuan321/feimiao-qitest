@@ -9,7 +9,7 @@
 - Qt 官方归档：[Qt 5.12.12 Windows 安装器](https://download.qt.io/archive/qt/5.12/5.12.12/qt-opensource-windows-x86-5.12.12.exe)，文件大小 3,987,337,112 bytes，SHA-256 `27955827c9129e58c9147b201eee33f92d2b8360d9de58643800eb4ff1163f5a`。安装时选择 `MinGW 7.3 64-bit` 组件；该 3.7 GB SDK 不随本仓库上传。
 - Qt Creator 是 IDE，其版本不等于项目使用的 Qt 库版本。
 - Qt 模块：Core、Gui、Widgets、Network、Sql、Svg；开启测试另需 Test。
-- 源码包不含 Qt SDK、编译器、EXE/DLL 和模型权重。当前模型的固定下载地址、大小和 SHA-256 见 `models/使用说明.md`；模型不是编译基础功能的前置条件。
+- 源码包不含 Qt SDK、编译器、EXE/DLL 和模型权重。当前模型的固定下载地址、大小和 SHA-256 见 `models/README.md`；模型不是编译基础功能的前置条件。
 
 ## 2. Qt Creator
 
@@ -74,7 +74,7 @@ windeployqt --release --compiler-runtime 可收集 Qt 运行库，但不会收�
 - scripts/package_windows_installer.py：从完整已校验 Windows 运行目录生成安装 EXE。
 - third_party/llama.cpp-b10752：本项目的 Win7 推理引擎适配源码，不代表上游官方支持 Win7。
 - config/ai-model-manifest.json：当前 Qwen3.5-0.8B Q4_0 模型配置。
-- models/使用说明.md：模型固定下载链接、文件大小、SHA-256 和替换规则；模型权重不上传 GitHub。
+- models/README.md：模型固定下载链接、文件大小、SHA-256 和替换规则；模型权重不上传 GitHub。
 
 没有模型仍可编译和运行基础功能。模型解释与受控操作路由分离。
 真实仪器必须按协议联调；Wine 检查不能代替 Win7 工控机的驱动、性能和硬件验收。

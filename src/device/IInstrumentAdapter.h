@@ -7,7 +7,7 @@ namespace qitest {
 
 // 厂家接入的核心接口。界面不直接调用串口/TCP/SDK，而通过本接口下发。
 // 接口不得阻塞调用线程：耗时通信放到厂家自己的工作线程，查询函数返回缓存。
-// 只有实际回读确认后才能报告成功；具体联调步骤见本目录 使用说明.md。
+// 只有实际回读确认后才能报告成功；具体联调步骤见本目录 README.md。
 class IInstrumentAdapter : public QObject {
     Q_OBJECT
 public:
