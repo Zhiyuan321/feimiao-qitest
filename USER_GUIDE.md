@@ -10,7 +10,7 @@
 2. 用 Qt Creator 打开 **CMakeLists.txt**，不要单独打开 cpp 或新建空工程。
 3. Windows 7 目标选择 **Qt 5.12.12 / MinGW 7.3 64位** Kit。
 4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_BUILD_TESTS=OFF**。
-5. 构建并运行目标 **QITestWorkstation**，生成“飞秒质谱工作站.exe”。
+5. 构建并运行目标 **QITestWorkstation**。MSVC Kit 生成 QITestWorkstation.exe；MinGW / Mac 仍生成“飞秒质谱工作站”。
 
 详见 [Windows 构建步骤与排错](WINDOWS7_BUILD_GUIDE.md)。
 
