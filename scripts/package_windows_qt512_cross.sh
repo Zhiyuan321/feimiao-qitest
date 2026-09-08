@@ -78,7 +78,7 @@ cp "$project_dir/data/library/qitest_spectral_library.sqlite" "$package/resource
 cp "$project_dir/config/ai-model-manifest.json" "$package/resources/config/"
 cp "$project_dir/resources/knowledge/operator_manual_zh.md" "$package/resources/knowledge/"
 mkdir -p "$package/示例数据"
-for sample in openms_bsa.scan.csv 使用说明.md LICENSE-OpenMS.txt; do
+for sample in openms_bsa.scan.csv README.md LICENSE-OpenMS.txt; do
   cp "$project_dir/tests/fixtures/public_ms/$sample" "$package/示例数据/"
 done
 cp "$project_dir/THIRD_PARTY_NOTICES.md" "$package/resources/notices/"

@@ -1,0 +1,10 @@
+# 维护入口
+
+这是持续维护的 Qt/C++ 工作站，不是独立的界面样稿。先看职责和验证边界，再改代码。
+
+- [代码树与修改路线](architecture/CODE_MAINTENANCE_GUIDE.md)：从功能找到代码、状态所有者和测试。
+- [厂家仪器接入](integration/VENDOR_INSTRUMENT_INTEGRATION.md)：开关、参数、回执、超时和安全边界。
+- [Windows 7 构建与交付](../WINDOWS7_BUILD_GUIDE.md)：Qt 5.12 编译、运行库与 AI。
+- [交付验证记录](verification/DELIVERY_VERIFICATION_RECORD.md)：已测内容与不能承诺的内容。
+
+新增文档按 architecture / integration / verification 分类；不要把日志、模型、构建输出混入这些目录。

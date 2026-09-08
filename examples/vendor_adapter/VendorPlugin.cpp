@@ -2,7 +2,7 @@
 
 // 厂家接入模板：故意拒绝操作，不是可用硬件驱动。
 // 在自己的适配器中补充缓存回读、校验、工作线程和带请求号的异步回执。
-// 不能只把 connected/ready 改成 true 就宣布接通；详见本目录 使用说明.md。
+// 不能只把 connected/ready 改成 true 就宣布接通；详见本目录 README.md。
 class VendorAdapter final : public qitest::IInstrumentAdapter {
 public:
     qitest::InstrumentDescriptor descriptor() const override {

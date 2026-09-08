@@ -6,7 +6,7 @@
 
 - `要求/飞秒质谱仪软件界面优化设计.docx`：完整读取 OOXML 正文和表格；渲染图可核对内嵌界面，但本机渲染存在中文字体缺失，文字结论以原文件 XML 为准，不从缺字页面猜测内容。以下章节号对应原文。
 - `要求/飞秒质谱仪中文版.pdf`：两页产品介绍，文字提取和两页图像交叉核对；宣传性能不等于软件验证结果。
-- `厂家参考/便携式质谱485通讯协议V2.1.pdf`：9 页，命令及歧义见 `厂家协议核对.md`。
+- `厂家参考/便携式质谱485通讯协议V2.1.pdf`：9 页，命令及歧义见 `VENDOR_PROTOCOL_REVIEW.md`。
 - `厂家参考/便携式质谱网口通讯协议1.4(最新版).pdf`：16 页，同上。
 
 这些文件作为需求证据，不覆盖用户后续明确决定：保持 Qt Widgets/C++、Windows 使用 Qt 5.12 x64、主界面精简、三图、低频入口进入设置、本地 AI 按需加载。原 Word 的 BMP 切图交付与重复导航不照搬。不得因厂家文档未写 AI 或用户标准就删除用户明确要求的功能。
@@ -58,7 +58,7 @@
 
 当前不能写“所有厂家要求都已经加完”。先完成上述可核实修复与有边界的构建/回归，再更新发布包。协议尚缺 CRC、完整帧、网络连接参数、状态换算、扫描解释及安全顺序时，保留明确需求和拒绝未实现接口的行为，不捏造硬件适配。无需为了此次核对重新安装或关闭厂家软件。
 
-源码索引：`src/device/VendorControlCatalog.h`、`IInstrumentAdapter.h`、`src/app/AppController.cpp`、`src/ui/MainWindow.cpp`、`src/domain/DisplayLabels.h`；专业缺口清单见 `厂家接口待补项.md`。本轮后续测试结果应记录在本文件末尾，发布包状态独立记录。
+源码索引：`src/device/VendorControlCatalog.h`、`IInstrumentAdapter.h`、`src/app/AppController.cpp`、`src/ui/MainWindow.cpp`、`src/domain/DisplayLabels.h`；专业缺口清单见 `VENDOR_INTERFACE_OPEN_ITEMS.md`。本轮后续测试结果应记录在本文件末尾，发布包状态独立记录。
 
 ## 本轮验证记录
 

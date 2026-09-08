@@ -2,7 +2,7 @@
 
 ## 交付路径
 
-本次统一放在开发目录下 `07-当前交付/`：Windows7、macOS、源码各自独立。源码入口见 [维护地图](../architecture/代码维护导航.md)。不混入 SCIENTZ 项目或客户数据库。
+本次统一放在开发目录下 `07-当前交付/`：Windows7、macOS、源码各自独立。源码入口见 [维护地图](../architecture/CODE_MAINTENANCE_GUIDE.md)。不混入 SCIENTZ 项目或客户数据库。
 
 ## 已执行的验证方法
 

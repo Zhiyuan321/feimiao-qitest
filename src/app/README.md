@@ -9,4 +9,4 @@
 - 深度问答：askAiAssistant，科学证据由程序提供。
 
 状态从控制器发给界面；不要在 MainWindow 中单独保存另一套硬件真值。
-调试设备先看 ../device/使用说明.md；回归测试是 tests/InstrumentControlTests.cpp、WorkspaceTests.cpp。
+调试设备先看 ../device/README.md；回归测试是 tests/InstrumentControlTests.cpp、WorkspaceTests.cpp。

@@ -73,3 +73,21 @@ Qt5.12.12旧工具链仍可使用，需显式指定 `QITEST_WIN7_QT_VERSION=5.12
 2026-09-08：在本机Windows、Qt5.15.2/MinGW8.1 Release下，主程序编译通过；485协议、设备控制器、核心计算、AI证据四组测试通过；485回读/失效、控制开关回读、固定横屏布局三项UI测试通过。仅记录这些已执行测试，不代表全量UI回归通过。
 
 Win7 SP1目标工控机、实际USB转485驱动和硬件读数仍需现场验收，开发机测试不替代实机验证。
+
+## 开发与交付的区别
+
+编译出的 EXE 仍依赖 Qt DLL 和资源，不能单独发给用户。
+windeployqt 可收集 Qt 运行库，但不会收集模型和 AI 子进程全部依赖。
+普通用户使用“飞秒质谱工作站安装程序.exe”，工程师使用源码 ZIP。
+
+## 维护入口（首次运行不需要）
+
+- scripts/package_source.py：生成不含模型的源码 ZIP 和校验清单。
+- scripts/package_windows_qt512_cross.sh：Mac 交叉编译专用，需要额外配置工具链。
+- scripts/package_windows_installer.py：从完整已校验 Windows 运行目录生成安装 EXE。
+- third_party/llama.cpp-b10752：本项目的 Win7 推理引擎适配源码，不代表上游官方支持 Win7。
+- config/ai-model-manifest.json：当前 Qwen3.5-0.8B Q4_0 模型配置。
+- models/README.md：模型固定下载链接、文件大小、SHA-256 和替换规则；模型权重不上传 Git。
+
+没有模型仍可编译和运行基础功能。模型解释与受控操作路由分离。
+真实仪器必须按协议联调；Wine 检查不能代替 Win7 工控机的驱动、性能和硬件验收。

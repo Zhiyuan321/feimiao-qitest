@@ -2,9 +2,10 @@ cmake_minimum_required(VERSION 3.24)
 
 project(QITestWorkstation LANGUAGES CXX)
 
-# 正式主程序目标保留英文标识。MinGW 与 macOS 的输出名称是“飞秒质谱工作站”；
-# MSVC/JOM 的 link.exe 无法打开中文 exe 名（LNK1104 ????????.exe），改用 QITestWorkstation.exe。
-# 不要为了中文目录显示而改目标名或源码路径，插件和打包脚本依赖这些稳定标识。
+# Keep the application target identifier and engineering paths in English.
+# MSVC emits QITestWorkstation.exe to avoid linker code-page failures; MinGW
+# and macOS retain the Chinese customer-facing product name below. Plugins and
+# packaging scripts depend on these stable identifiers.
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -47,7 +48,7 @@ else()
 endif()
 
 add_library(qitest_core STATIC
-# 科学计算及模拟设备基础层；界面不在此目标中。
+# Scientific computation and simulated-instrument foundation; no UI sources.
     src/device/IInstrumentAdapter.h
     src/core/AnalysisEngine.cpp
     src/core/QuantitationEngine.cpp
@@ -82,7 +83,7 @@ target_include_directories(qitest_library PUBLIC src)
 target_link_libraries(qitest_library PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Sql)
 
 add_library(qitest_workspace STATIC
-# 数据保存、归档和报告；与模型推理分离。
+# Persistence, archives, and reports; kept separate from model inference.
     src/storage/WorkspaceRepository.cpp
     src/storage/RunArchiveCodec.cpp
     src/storage/ScanSeriesCodec.cpp
@@ -112,9 +113,9 @@ target_link_libraries(qitest_ai_evidence PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${
 add_executable(qitest_library_import tools/LibraryImportMain.cpp)
 target_link_libraries(qitest_library_import PRIVATE qitest_library Qt${QT_VERSION_MAJOR}::Core)
 
-# Windows 的 JOM/NMake 按系统代码页解析 Makefile 路径，中文谱图会变成
-# dependent '...乱码.qit.json' does not exist。这些生成器下不把 qrc 交给 AUTORCC，
-# 改为直接调用 rcc；rcc 走 Unicode API，能打开中文文件名。Ninja/Xcode 仍用 AUTORCC。
+# JOM and NMake parse generated Makefile paths through the active Windows code
+# page. Invoke rcc directly for Makefile generators so resource compilation is
+# independent of that parser. Ninja and Xcode continue to use AUTORCC.
 set(QITEST_QRC "${CMAKE_CURRENT_SOURCE_DIR}/resources/qitest.qrc")
 function(qitest_add_app_qrc target)
     if(WIN32 AND CMAKE_GENERATOR MATCHES "Makefiles")
@@ -137,7 +138,7 @@ function(qitest_add_app_qrc target)
 endfunction()
 
 set(QITEST_APP_SOURCES
-# 下面是正式窗口程序的源文件，不是自动化测试程序。
+# Sources for the production desktop application, not the automated test binaries.
     src/ui/Rs485ConnectionPanel.cpp
     src/ui/NetworkConnectionPanel.cpp
     src/ui/InstrumentWorkbench.cpp

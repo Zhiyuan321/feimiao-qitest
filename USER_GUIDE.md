@@ -1,6 +1,6 @@
 # 飞秒质谱工作站 · 工程师入口
 
-**不熟悉英文目录名？先打开 [中文功能导航](先看这里-中文导航.md)，按要调试的功能找代码。**
+**不熟悉英文目录名？先打开 [中文功能导航](START_HERE.md)，按要调试的功能找代码。**
 
 这是 **C++17 / Qt Widgets / CMake** 产品源码，不是测试示例，也不是 QML 或 qmake 工程。
 
@@ -12,7 +12,7 @@
 4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_WIN7_QT_VERSION=5.15.2、QITEST_BUILD_TESTS=OFF**。
 5. 构建并运行目标 **QITestWorkstation**。MSVC Kit 生成 QITestWorkstation.exe；MinGW / Mac 仍生成“飞秒质谱工作站”。
 
-详见 [Windows 构建步骤与排错](Windows7编译说明.md)。
+详见 [Windows 构建步骤与排错](WINDOWS7_BUILD_GUIDE.md)。
 
 网口联调入口：**设置 → 仪器控制 → 运行状态 → 网口TCP**，默认监听11000；可与485同时连接。已接入范围与操作步骤见 [网口首版说明](docs/integration/网口首版接入说明.md)。
 
@@ -27,7 +27,7 @@
 
 ## 代码目录
 
-**接手调试先读 [源码总览](src/使用说明.md)，厂家接口直接看 [设备接入](src/device/使用说明.md)。各业务子目录均有中文 README。**
+**接手调试先读 [源码总览](src/README.md)，厂家接口直接看 [设备接入](src/device/README.md)。各业务子目录均有中文 README。**
 
 | 位置 | 职责 |
 | --- | --- |
@@ -44,7 +44,7 @@
 | third_party/ | 第三方源码，首次启动无需单独编译 AI |
 | models/ | 模型说明和许可证，源码 ZIP 不含权重 |
 | cmake/、scripts/ | 工具链、维护和打包脚本 |
-| docs/ | [架构、仪器接入与验证导航](docs/使用说明.md) |
+| docs/ | [架构、仪器接入与验证导航](docs/README.md) |
 
 本机 build-*、.qa、.tools 是开发产物，不进入源码 ZIP。不要把其他电脑的构建目录复制过来使用。
 
@@ -58,4 +58,4 @@
 - 当前模型为 Qwen3.5-0.8B Q4_0，以 config/ai-model-manifest.json 为准。
 - 模拟操作不等于真实仪器已接通，实际控制必须按协议逐项联调。
 
-Windows本机一键构建485测试包：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt5152.ps1`。工具路径和验证范围见Windows7编译说明。
+Windows本机一键构建485测试包：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt5152.ps1`。工具路径和验证范围见 WINDOWS7_BUILD_GUIDE.md。

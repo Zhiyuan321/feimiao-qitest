@@ -6,7 +6,7 @@
 
 ## 已内置485只读驱动
 
-在“仪器配置 → 运行状态”选择实际COM口后连接，9600/8N1/无流控；无需厂家插件。仅查询0x30状态，回读温度、流量、气压、原始真空规电压、高压模块读数和部件标志。控制与真实采集尚未接入；错误/超时清空读数并关闭端口。完整数据偏移、启动环境变量及实机验收项见 `../../docs/integration/厂家仪器接入说明.md`。
+在“仪器配置 → 运行状态”选择实际COM口后连接，9600/8N1/无流控；无需厂家插件。仅查询0x30状态，回读温度、流量、气压、原始真空规电压、高压模块读数和部件标志。控制与真实采集尚未接入；错误/超时清空读数并关闭端口。完整数据偏移、启动环境变量及实机验收项见 `../../docs/integration/VENDOR_INSTRUMENT_INTEGRATION.md`。
 
 ## 文件职责
 
@@ -47,7 +47,7 @@ $env:QITEST_INSTRUMENT_PLUGIN = "C:\Dev\driver\QITestVendorAdapter.dll"
 ```
 
 未指定插件或485串口时使用模拟器；指定插件加载失败会报错退出，不会偷偷退回模拟。
-详细契约见 ../../docs/integration/厂家仪器接入说明.md。
+详细契约见 ../../docs/integration/VENDOR_INSTRUMENT_INTEGRATION.md。
 对应 tests/InstrumentControlTests.cpp；这组测试通过不代表实机通过。
 
 插件ABI已升级为1.1；接口新增readOnly、connectionSummary、stateChanged，宿主与插件必须同步重编译。

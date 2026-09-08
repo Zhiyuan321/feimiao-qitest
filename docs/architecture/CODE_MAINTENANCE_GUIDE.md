@@ -1,20 +1,20 @@
 # 架构与修改路线
 
-唯一源码入口是根目录 CMakeLists.txt。业务阅读顺序见 [src/使用说明.md](../../src/使用说明.md)，各模块职责只在对应目录说明中维护，避免复制多份后过期。
+唯一源码入口是根目录 CMakeLists.txt。业务阅读顺序见 [src/README.md](../../src/README.md)，各模块职责只在对应目录说明中维护，避免复制多份后过期。
 
 ## 调一个功能，找到一个负责层
 
 | 任务 | 入口 | 需要检查 |
 | --- | --- | --- |
 | 控制按钮没有反馈 | app/AppController.cpp → device/IInstrumentAdapter.h | 请求号、key、回读、超时；InstrumentControlTests |
-| 接厂家 SDK / 串口 / TCP | device/使用说明.md → examples/vendor_adapter | 固件、单位、线程、真实台架 |
-| 页面和按钮布局 | ui/使用说明.md | UiSmokeTests 与 1024×768 实际画面 |
-| 曲线、积分、校准 | core/使用说明.md | CoreTests，单位与可手算案例 |
-| 导入和保存 | storage/使用说明.md | WorkspaceTests，损坏文件与事务 |
-| 谱库编辑 | library/使用说明.md | LibraryTests，公共库只读 |
+| 接厂家 SDK / 串口 / TCP | device/README.md → examples/vendor_adapter | 固件、单位、线程、真实台架 |
+| 页面和按钮布局 | ui/README.md | UiSmokeTests 与 1024×768 实际画面 |
+| 曲线、积分、校准 | core/README.md | CoreTests，单位与可手算案例 |
+| 导入和保存 | storage/README.md | WorkspaceTests，损坏文件与事务 |
+| 谱库编辑 | library/README.md | LibraryTests，公共库只读 |
 | 自然语言导航 | ai/AiCommandRouter.cpp | AiEvidenceTests，否定和歧义指令 |
 | 深度问答慢或失败 | ai/LocalAiBridge.cpp + config/ai-model-manifest.json | LocalAiBridgeTests，实际模型独立测试 |
-| PDF 与复核 | report/使用说明.md | 保存证据、复核状态与实际 PDF |
+| PDF 与复核 | report/README.md | 保存证据、复核状态与实际 PDF |
 
 表中代码路径以 src/ 为起点，examples、tests、config 为工程根目录下路径。
 

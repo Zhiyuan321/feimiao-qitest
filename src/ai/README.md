@@ -8,4 +8,4 @@
 
 发布配置见 ../../config/ai-model-manifest.json。当前 allowToolProposals=false，小模型只解释，不直接执行工具。
 删除 GGUF 不等于删除基础助手，但深度问答将不可用。不要把通用 LocalAiConfig 默认值当作发布配置。
-对应 tests/AiEvidenceTests.cpp、tests/LocalAiBridgeTests.cpp；测试目录入口见 ../../tests/使用说明.md。
+对应 tests/AiEvidenceTests.cpp、tests/LocalAiBridgeTests.cpp；测试目录入口见 ../../tests/README.md。

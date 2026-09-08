@@ -4,10 +4,10 @@
 
 ## 阅读顺序
 
-1. [中文导航](先看这里-中文导航.md)
-2. [工程入口与运行步骤](使用说明.md)
-3. [项目架构](架构说明.md)
-4. [Windows 7 编译说明](Windows7编译说明.md)
+1. [中文导航](START_HERE.md)
+2. [工程入口与运行步骤](USER_GUIDE.md)
+3. [项目架构](ARCHITECTURE.md)
+4. [Windows 7 编译说明](WINDOWS7_BUILD_GUIDE.md)
 
 ## 兼容基线
 

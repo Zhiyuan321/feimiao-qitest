@@ -834,7 +834,7 @@ void AppController::loadBundledCustomerSamples() {
     QStringList paths;
     for (const auto &name : directory.entryList({"*.qit.json"}, QDir::Files, QDir::Name))
         paths.append(directory.filePath(name));
-    const QString preview = directory.filePath(QString::fromUtf8("饼干-MS-第13谱.qit.json"));
+    const QString preview = directory.filePath(QString::fromUtf8("biscuit-ms-spectrum-13.qit.json"));
     if (paths.removeOne(preview)) paths.append(preview);
     importRunArchives(paths);
 }
@@ -846,7 +846,7 @@ QVector<SpectrumPoint> AppController::bundledIntensityTrend(double mz, double to
     static const auto spectra = [] {
         QVector<QVector<SpectrumPoint>> result;
         for (int row = 1; row <= 21; ++row) {
-            const auto archive = RunArchiveCodec::read(QString(":/qitest/resources/customer_samples/饼干-MS-第%1谱.qit.json")
+            const auto archive = RunArchiveCodec::read(QString(":/qitest/resources/customer_samples/biscuit-ms-spectrum-%1.qit.json")
                 .arg(row, 2, 10, QChar('0')));
             if (!archive.valid) return QVector<QVector<SpectrumPoint>>{};
             result.append(archive.rawSpectrum);

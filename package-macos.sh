@@ -29,7 +29,7 @@ ditto "$PROJECT_DIR/resources/knowledge/operator_manual_zh.md" \
 ditto "$PROJECT_DIR/THIRD_PARTY_NOTICES.md" \
   "$APP_TARGET/Contents/Resources/notices/THIRD_PARTY_NOTICES.md"
 mkdir -p "$DELIVERY_DIR/示例数据"
-for SAMPLE in openms_bsa.scan.csv 使用说明.md LICENSE-OpenMS.txt; do
+for SAMPLE in openms_bsa.scan.csv README.md LICENSE-OpenMS.txt; do
   ditto "$PROJECT_DIR/tests/fixtures/public_ms/$SAMPLE" "$DELIVERY_DIR/示例数据/$SAMPLE"
 done
 ditto "$PROJECT_DIR/third_party/notices" "$APP_TARGET/Contents/Resources/notices"

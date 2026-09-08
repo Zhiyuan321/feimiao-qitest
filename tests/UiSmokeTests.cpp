@@ -399,7 +399,7 @@ void UiSmokeTests::bundledSamplesImportWithoutDuplicates() {
     QCOMPARE(controller.recentRuns().size(), 21);
     const auto trend = controller.bundledIntensityTrend();
     QCOMPARE(trend.size(), 21);
-    const auto first = RunArchiveCodec::read(":/qitest/resources/customer_samples/饼干-MS-第01谱.qit.json");
+    const auto first = RunArchiveCodec::read(":/qitest/resources/customer_samples/biscuit-ms-spectrum-01.qit.json");
     double sum = 0, extracted = 0;
     for (const auto &point : first.rawSpectrum) {
         sum += point.intensity;
