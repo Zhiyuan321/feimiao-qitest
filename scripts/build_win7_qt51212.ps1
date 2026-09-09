@@ -52,7 +52,7 @@ try {
     }
     $tests = if ($WithTests) { "ON" } else { "OFF" }
     Invoke-Checked $CMakeExe @("-S", $ProjectDir, "-B", $BuildDir, "-G", "MinGW Makefiles",
-        "-DCMAKE_BUILD_TYPE=Release", "-DQITEST_WIN7=ON", "-DQITEST_WIN7_QT_VERSION=5.12.12",
+        "-DCMAKE_BUILD_TYPE=Release", "-DQITEST_WIN7=ON", "-DQITEST_QT_VERSION=5.12.12",
         "-DQITEST_BUILD_TESTS=$tests", "-DCMAKE_PREFIX_PATH=$QtRoot",
         "-DCMAKE_CXX_COMPILER=$Gcc", "-DCMAKE_MAKE_PROGRAM=$Make")
     Invoke-Checked $CMakeExe @("--build", $BuildDir, "--parallel", "4", "--target", "QITestWorkstation")
@@ -80,7 +80,7 @@ try {
         "sqldrivers\qsqlite.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
         if (!(Test-Path -LiteralPath (Join-Path $PackageDir $required))) { throw "Deployment missing: $required" }
     }
-    if (Get-ChildItem -LiteralPath $PackageDir -Filter "Qt6*.dll" -Recurse) { throw "Qt6 DLL found in Qt5 package" }
+    if (Get-ChildItem -LiteralPath $PackageDir -Include "Qt[6-9]*.dll" -Recurse) { throw "Non-Qt5 DLL found in Qt 5.12.12 package" }
     foreach ($folder in @("config", "knowledge", "notices")) {
         New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "resources\$folder") | Out-Null
     }

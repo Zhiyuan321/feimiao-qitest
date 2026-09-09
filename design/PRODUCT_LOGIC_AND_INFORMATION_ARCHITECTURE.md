@@ -117,7 +117,7 @@ Qt Widgets / QAction / Model-View
 
 ## 六、嵌入式 Qt 决策
 
-- 当前唯一实现是 **Qt 6 + C++17 + Qt Widgets**。
+- 当前唯一实现是 **Qt 5.12.12 + C++17 + Qt Widgets**。
 - Qt 官方说明：Widgets 适合结构明确的传统界面；在嵌入式 Linux 上 Widgets 使用软件渲染，简单、低动画、低重绘界面仍可能合适，复杂动画界面则应评估 Qt Quick。
 - 本项目刻意保持低动画、稳定布局和 QPainter 科学图表，因此在目标硬件参数未知前不迁移 QML；必须先在实际屏幕分辨率、CPU/GPU、触控设备上测量。
 - 嵌入式部署需要单独验证 EGLFS/Wayland、触控设备映射、旋转、DPI、断电恢复和全屏启动。Mac 版验证不能替代目标设备验证。
@@ -136,7 +136,7 @@ Qt Widgets / QAction / Model-View
 - Apple Human Interface Guidelines — Sidebars: https://developer.apple.com/design/human-interface-guidelines/sidebars
 - ISA101 Human-Machine Interfaces: https://www.isa.org/standards-and-publications/isa-standards/isa-standards-committees/isa101
 - Qt for Embedded Linux: https://doc.qt.io/qt-6/embedded-linux.html
-- Qt Embedded Linux Inputs: https://doc.qt.io/qt-6/inputs-linux-device.html
+- Qt 5.12 Embedded Linux: https://doc.qt.io/archives/qt-5.12/embedded-linux.html
 - Agilent MassHunter Qualitative Analysis: https://www.agilent.com/en/product/software-informatics/mass-spectrometry-software/data-analysis/qualitative-analysis
 - SCIEX OS brochure: https://sciex.com/content/dam/SCIEX/pdf/brochures/sciexosbrochure.pdf
 - SWGDRUG Recommendations 8.1: https://swgdrug.org/Documents/SWGDRUG%20Recommendations%20Version%208.1_FINAL_ForPosting_Rev%201-23-23.pdf

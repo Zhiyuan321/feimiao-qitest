@@ -2,9 +2,9 @@
 set -euo pipefail
 
 PROJECT_DIR="${0:A:h}"
-QT_DIR="$PROJECT_DIR/.tools/Qt/6.10.2/macos"
+QT_DIR="$PROJECT_DIR/.tools/qt512-host/5.12.12/clang_64"
 DELIVERY_DIR="${QITEST_MAC_DELIVERY_DIR:-$PROJECT_DIR/../05-交付/Mac}"
-APP_SOURCE="$PROJECT_DIR/build-qt610/飞秒质谱工作站.app"
+APP_SOURCE="$PROJECT_DIR/build-macos-qt512/飞秒质谱工作站.app"
 APP_TARGET="$DELIVERY_DIR/飞秒质谱工作站.app"
 
 if [[ "${QITEST_SKIP_BUILD:-0}" != 1 ]]; then
@@ -44,7 +44,7 @@ if [[ -x "$AI_RUNTIME/llama-server" && -f "$AI_MODEL" ]]; then
 else
   echo "警告：离线 AI 运行时或模型尚未就绪，交付包将保留确定性核心但不含 AI 解释。" >&2
 fi
-"$QT_DIR/bin/macdeployqt" "$APP_TARGET" -always-overwrite -no-plugins
+"$QT_DIR/bin/macdeployqt" "$APP_TARGET" -always-overwrite
 for PLUGIN in \
   platforms/libqcocoa.dylib \
   sqldrivers/libqsqlite.dylib \
@@ -53,8 +53,9 @@ for PLUGIN in \
   mkdir -p "$APP_TARGET/Contents/PlugIns/${PLUGIN:h}"
   ditto "$QT_DIR/plugins/$PLUGIN" "$APP_TARGET/Contents/PlugIns/$PLUGIN"
 done
+"$PROJECT_DIR/.tools/venv/bin/cmake" -E rm -f \
+  "$APP_TARGET/Contents/PlugIns/sqldrivers/libqsqlodbc.dylib" \
+  "$APP_TARGET/Contents/PlugIns/sqldrivers/libqsqlpsql.dylib"
 /usr/libexec/PlistBuddy -c "Delete :CFBundleShortVersionString" "$APP_TARGET/Contents/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Delete :CFBundleVersion" "$APP_TARGET/Contents/Info.plist" 2>/dev/null || true
-codesign --force --deep --sign - "$APP_TARGET"
-codesign --verify --deep --strict "$APP_TARGET"
 echo "$APP_TARGET"

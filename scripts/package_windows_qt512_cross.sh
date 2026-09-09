@@ -42,7 +42,7 @@ done
   -DQt5_DIR="$qt_root/lib/cmake/Qt5" \
   -DQITEST_QT5_HOST_ROOT="$qt_host_root" \
   -DQITEST_WIN7=ON \
-  -DQITEST_WIN7_QT_VERSION=5.12.12 \
+  -DQITEST_QT_VERSION=5.12.12 \
   -DQITEST_LLVM_MINGW_ROOT="$llvm_root" \
   -DQITEST_QT_WINDOWS_ROOT="$qt_root" \
   -DQITEST_QT_HOST_ROOT="$qt_host_root" \
@@ -63,7 +63,7 @@ mkdir -p "$package/platforms" "$package/sqldrivers" "$package/imageformats" "$pa
 
 cp "$app_exe" "$package/"
 
-for dll in Qt5Core Qt5Gui Qt5Widgets Qt5Network Qt5Sql Qt5Svg; do
+for dll in Qt5Core Qt5Gui Qt5Widgets Qt5Network Qt5Sql Qt5Svg Qt5SerialPort; do
   [[ -f "$qt_root/bin/${dll}.dll" ]] && cp "$qt_root/bin/${dll}.dll" "$package/"
 done
 

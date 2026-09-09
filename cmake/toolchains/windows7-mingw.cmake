@@ -2,7 +2,6 @@ set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 # GNU MinGW's stable libstdc++ ABI matches the official Qt 5.12 MinGW build.
-# Keep this separate from the Qt 6 LLVM/libc++ delivery toolchain.
 find_program(QITEST_MINGW_CC x86_64-w64-mingw32-gcc HINTS /opt/homebrew/bin REQUIRED)
 find_program(QITEST_MINGW_CXX x86_64-w64-mingw32-g++ HINTS /opt/homebrew/bin REQUIRED)
 find_program(QITEST_MINGW_RC x86_64-w64-mingw32-windres HINTS /opt/homebrew/bin REQUIRED)

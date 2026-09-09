@@ -13,8 +13,8 @@ MODEL="$APP/Contents/Resources/ai/$MODEL_NAME"
 LIBRARY="$APP/Contents/Resources/data/qitest_spectral_library.sqlite"
 
 [[ -d "$APP" ]]
-[[ "$(file "$APP/Contents/MacOS/飞秒质谱工作站")" == *"arm64"* ]]
-codesign --verify --deep --strict "$APP"
+[[ "$(file "$APP/Contents/MacOS/飞秒质谱工作站")" == *"x86_64"* ]]
+otool -L "$APP/Contents/MacOS/飞秒质谱工作站" | grep -q 'QtCore.framework/Versions/5/QtCore'
 [[ "$(sqlite3 "$LIBRARY" 'PRAGMA integrity_check;')" == "ok" ]]
 [[ "$(sqlite3 "$LIBRARY" 'SELECT COUNT(*) FROM spectra;')" == "3826" ]]
 [[ "$(sqlite3 "$LIBRARY" 'PRAGMA user_version;')" == "2" ]]
@@ -24,11 +24,12 @@ codesign --verify --deep --strict "$APP"
 [[ -f "$APP/Contents/Resources/ai/$MODEL_LICENSE" ]]
 [[ -x "$APP/Contents/Resources/ai/llama-server" ]]
 [[ -f "$APP/Contents/PlugIns/sqldrivers/libqsqlite.dylib" ]]
+[[ -f "$APP/Contents/PlugIns/platforms/libqcocoa.dylib" ]]
+[[ -f "$APP/Contents/Frameworks/QtDBus.framework/Versions/5/QtDBus" ]]
 [[ -f "$APP/Contents/Resources/notices/THIRD_PARTY_NOTICES.md" ]]
 [[ -f "$APP/Contents/Resources/knowledge/operator_manual_zh.md" ]]
 [[ -f "$MANIFEST" ]]
 [[ -f "$APP/Contents/Resources/notices/Qwen3-Apache-2.0.txt" ]]
 [[ -f "$APP/Contents/Resources/notices/llama.cpp-MIT.txt" ]]
 [[ -f "$APP/Contents/Resources/notices/Qt-LGPL-3.0.txt" ]]
-[[ -f "$APP/Contents/Resources/notices/qt-sbom/qtbase-6.10.2.spdx.json" ]]
-echo "Release verification passed: $APP"
+echo "Local preview verification passed: $APP"

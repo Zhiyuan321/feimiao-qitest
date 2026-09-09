@@ -53,8 +53,8 @@ def main():
     files = sorted(package.rglob("*"))
     if any(p.is_symlink() for p in files):
         raise RuntimeError("Portable packages must not contain symlinks")
-    if any(p.name.startswith("Qt6") for p in files):
-        raise RuntimeError("Qt6 runtime found in Qt5.12 package")
+    if any(re.match(r"Qt[6-9]", p.name) for p in files):
+        raise RuntimeError("Non-Qt5 runtime found in Qt 5.12.12 package")
     errors = []
     for binary in (p for p in files if p.suffix.lower() in (".exe", ".dll")):
         text = subprocess.check_output([args.objdump, "-p", str(binary)], text=True)

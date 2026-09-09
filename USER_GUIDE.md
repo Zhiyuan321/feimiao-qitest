@@ -9,7 +9,7 @@
 1. 解压到短路径，如 C:\Dev\Feimiao，进入包含 CMakeLists.txt 的目录。
 2. 用 Qt Creator 打开 **CMakeLists.txt**，不要单独打开 cpp 或新建空工程。
 3. Windows 7 目标选择 **Qt 5.12.12 / MinGW 7.3 64位** Kit。
-4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_WIN7_QT_VERSION=5.12.12、QITEST_BUILD_TESTS=OFF**。
+4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_QT_VERSION=5.12.12、QITEST_BUILD_TESTS=OFF**。
 5. 构建并运行目标 **QITestWorkstation**。MSVC Kit 生成 QITestWorkstation.exe；MinGW / Mac 仍生成“飞秒质谱工作站”。
 
 详见 [Windows 构建步骤与排错](WINDOWS7_BUILD_GUIDE.md)。
@@ -51,8 +51,8 @@
 ## 平台与能力边界
 
 - Windows 7 SP1 x64：Qt 5.12.12 / MinGW 7.3，QITEST_WIN7=ON。
-- Mac：独立原生程序，当前默认构建路径需要 Qt 6.9 或以上，不使用 Windows Kit。
-- package-windows.ps1 是 Qt 6 / Windows 10+ 维护路径，**不要用于 Win7**。
+- Mac：仅供开发者在本机预览成品效果，使用 Qt 5.12.12 / Apple Clang 生成 x86_64 应用，不作为交付件。
+- 所有平台只使用 Qt 5.12.12，不保留其他 Qt 主版本的构建入口。
 - 首次只构建主程序，不运行交叉编译、模型编译、安装打包脚本。
 - 没有模型仍可编译并使用模拟采集、离线分析、方法、谱库、记录及基础助手；深度问答需部署模型及推理引擎。
 - 当前模型为 Qwen3.5-0.8B Q4_0，以 config/ai-model-manifest.json 为准。

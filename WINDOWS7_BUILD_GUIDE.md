@@ -40,7 +40,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt51212
 
 ```text
 QITEST_WIN7:BOOL=ON
-QITEST_WIN7_QT_VERSION:STRING=5.12.12
+QITEST_QT_VERSION:STRING=5.12.12
 QITEST_BUILD_TESTS:BOOL=OFF
 CMAKE_BUILD_TYPE:STRING=Release
 ```
@@ -49,7 +49,7 @@ CMAKE_BUILD_TYPE:STRING=Release
 5. 部署配置选普通“部署设置”，不要使用Automatic Application Manager Deploy Configuration。遇到appman-controller不存在时，检查此项；本程序无需Application Manager部署。
 6. 设置 → 仪器控制 → 运行状态，可选择“485串口”或“网口TCP”。两者可同时连接，只读状态；详细步骤见 [网口首版说明](docs/integration/网口首版接入说明.md)。
 
-新Windows构建默认使用此Qt5方案。旧缓存若保留其他版本，会报明确错误；修改版本值并使用匹配Qt套件和新构建目录。原有Qt6/Windows10+及macOS路径仍由 `QITEST_WIN7=OFF` 选择，不能用于Win7。
+全工程固定使用 Qt 5.12.12。旧缓存若保留其他版本，会报明确错误；请使用匹配 Qt 5.12.12 套件和新构建目录。`QITEST_WIN7=OFF` 仅用于 macOS 等非 Windows 平台，不会切换 Qt 主版本。
 
 ## 交付与验证
 
@@ -65,6 +65,5 @@ Qt编译器、DLL与外部厂家插件必须匹配版本及架构；更换Qt版�
 
 - `scripts/package_windows_qt512_cross.sh`：macOS交叉构建Qt 5.12.12，需要额外工具链。
 - `scripts/package_windows_installer.py`：从完整已校验Windows运行目录制作安装向导。
-- 根目录 `package-windows.ps1`：Qt6/Windows10+维护路径，不用于Win7。
 - `scripts/package_source.py`：源码打包。
 - `config/ai-model-manifest.json`、`models/README.md`：AI模型部署说明。windeployqt不会收集模型和AI子进程全部依赖。

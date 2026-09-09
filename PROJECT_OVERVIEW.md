@@ -2,8 +2,8 @@
 
 - 产品：飞秒质谱工作站
 - 密度：Compact
-- 首发平台：macOS
-- 唯一技术底座：Qt 6.10.2 Widgets + C++17 + CMake
+- 主交付平台：Windows 7 x64；macOS 仅供本地效果预览
+- 唯一技术底座：Qt 5.12.12 Widgets + C++17 + CMake
 - 主任务：登录 -> 启动检查 -> 仪器就绪 -> 采集 -> 确定性分析 -> 复核 -> 报告
 - 主框架：顶部 Identity/Command Bar + 中央科学画布 + 右侧 Inspector/Telemetry + 底部 Status Rail
 - 产品依据：飞秒质谱仪 Word 文档 2.3 的全部页面、子页和操作逻辑

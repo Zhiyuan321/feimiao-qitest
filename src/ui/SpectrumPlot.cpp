@@ -109,11 +109,7 @@ void SpectrumPlot::zoomAt(double centerX, double factor) {
     viewMaximum_=viewMinimum_+span; zoomed_=true; cacheWidth_=-1; hoveredIndex_=-1; update();
 }
 void SpectrumPlot::wheelEvent(QWheelEvent *event) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    const auto position=event->position();
-#else
     const auto position=event->posF();
-#endif
     if(!plotRect().contains(position) || !event->angleDelta().y()) { event->ignore(); return; }
     const double x=viewMinimum_+(position.x()-plotRect().left())/plotRect().width()*(viewMaximum_-viewMinimum_);
     zoomAt(x,event->angleDelta().y()>0 ? 0.8:1.25); event->accept();
@@ -140,7 +136,7 @@ void SpectrumPlot::ensureDisplayCache() const {
     };
     for(qsizetype i=begin;i<end;++i) {
         const double relative=(points_[i].mz-viewMinimum_)/std::max(1e-12,viewMaximum_-viewMinimum_);
-        const int next=int(std::floor(std::clamp(relative,-1.0,2.0)*columns));
+        const int next=std::min(columns-1, int(std::floor(std::clamp(relative,0.0,1.0)*columns)));
         if(next!=bucket) { if(i>begin) flush(); bucket=next; start=low=high=i; }
         if(points_[i].intensity<points_[low].intensity) low=i;
         if(points_[i].intensity>points_[high].intensity) high=i;
@@ -203,11 +199,7 @@ qsizetype SpectrumPlot::nearestPointIndex(double x, const QRectF &plot) const {
 }
 
 void SpectrumPlot::mouseMoveEvent(QMouseEvent *event) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-    const qsizetype next = nearestPointIndex(event->position().x(), plotRect());
-#else
     const qsizetype next = nearestPointIndex(event->localPos().x(), plotRect());
-#endif
     if (next != hoveredIndex_) {
         hoveredIndex_ = next;
         if (hoveredIndex_ >= 0) {
@@ -224,11 +216,7 @@ void SpectrumPlot::mouseMoveEvent(QMouseEvent *event) {
 
 void SpectrumPlot::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        const auto pos = event->position();
-#else
         const auto pos = event->localPos();
-#endif
         const auto index = nearestPointIndex(pos.x(), plotRect());
         if (plotRect().contains(pos) && index >= 0) emit pointActivated(points_[index].mz);
     }

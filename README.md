@@ -12,7 +12,7 @@
 ## 兼容基线
 
 - Windows 客户版：Qt 5.12.12 x64、Windows 7 SP1、8 GB 内存、1024×768 / 4:3 屏幕。
-- macOS 版只用于开发者本机预览，不作为对外交付或仓库发布件。
+- macOS 预览版：Qt 5.12.12 / Apple Clang / x86_64，Apple Silicon 通过 Rosetta 2 运行；不作为对外交付或仓库发布件。
 - 主程序构建目标：`QITestWorkstation`。
 
 ## 目录说明
