@@ -8,8 +8,8 @@
 
 1. 解压到短路径，如 C:\Dev\Feimiao，进入包含 CMakeLists.txt 的目录。
 2. 用 Qt Creator 打开 **CMakeLists.txt**，不要单独打开 cpp 或新建空工程。
-3. Windows 7 目标选择 **Qt 5.15.2 / MinGW 8.1 64位** Kit。
-4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_WIN7_QT_VERSION=5.15.2、QITEST_BUILD_TESTS=OFF**。
+3. Windows 7 目标选择 **Qt 5.12.12 / MinGW 7.3 64位** Kit。
+4. CMake 配置设置 **QITEST_WIN7=ON、QITEST_WIN7_QT_VERSION=5.12.12、QITEST_BUILD_TESTS=OFF**。
 5. 构建并运行目标 **QITestWorkstation**。MSVC Kit 生成 QITestWorkstation.exe；MinGW / Mac 仍生成“飞秒质谱工作站”。
 
 详见 [Windows 构建步骤与排错](WINDOWS7_BUILD_GUIDE.md)。
@@ -50,7 +50,7 @@
 
 ## 平台与能力边界
 
-- Windows 7 SP1 x64：Qt 5.15.2 / MinGW 8.1，QITEST_WIN7=ON。
+- Windows 7 SP1 x64：Qt 5.12.12 / MinGW 7.3，QITEST_WIN7=ON。
 - Mac：独立原生程序，当前默认构建路径需要 Qt 6.9 或以上，不使用 Windows Kit。
 - package-windows.ps1 是 Qt 6 / Windows 10+ 维护路径，**不要用于 Win7**。
 - 首次只构建主程序，不运行交叉编译、模型编译、安装打包脚本。
@@ -58,4 +58,4 @@
 - 当前模型为 Qwen3.5-0.8B Q4_0，以 config/ai-model-manifest.json 为准。
 - 模拟操作不等于真实仪器已接通，实际控制必须按协议逐项联调。
 
-Windows本机一键构建485测试包：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt5152.ps1`。工具路径和验证范围见 WINDOWS7_BUILD_GUIDE.md。
+Windows本机一键构建485测试包：`powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_win7_qt51212.ps1`。工具路径和验证范围见 WINDOWS7_BUILD_GUIDE.md。

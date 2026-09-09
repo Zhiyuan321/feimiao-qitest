@@ -62,7 +62,7 @@
 ## 接入步骤
 
 1. 提供协议/SDK、仪器型号、固件、USB/串口/TCP 信息、开关含义、硬件互锁、安全范围、单位、回执示例、断线恢复策略、原始谱图样本。
-2. 以 `examples/vendor_adapter` 为起点实现 `IInstrumentPlugin` 工厂及 `IInstrumentAdapter`。编译器、Qt 版本、架构与主程序一致：Win7 x64 Qt 5.15.2/MinGW 8.1（旧5.12.12构建另行匹配）；Mac 当前 Qt 6/Apple Clang。
+2. 以 `examples/vendor_adapter` 为起点实现 `IInstrumentPlugin` 工厂及 `IInstrumentAdapter`。编译器、Qt 版本、架构与主程序一致：Win7 x64 Qt 5.12.12/MinGW 7.3；Mac 当前 Qt 6/Apple Clang。
 3. `descriptor()` 返回真实设备标识且 simulation=false；`health()`、`telemetry()` 和 `confirmedSettings()` 只返回缓存的实际回读，不能在 GUI 线程同步等待硬件。
 4. `validateSetting()` 核对厂家确认的安全范围、连接、实时互锁、能力及运行状态。主程序数值输入上限只是演示编辑器范围，**不是物理安全范围**。
 5. `requestSetting(requestId,key,value)` 立即返回，在自有工作线程调用 SDK；收到匹配设备回执和回读后发 `settingFinished`。Qt 会将信号转回控制器线程。
@@ -107,4 +107,4 @@
 
 全量界面测试未通过：`bundledExampleLoadsThreePlotsWithoutAi` 的 `home->isVisibleTo(&window)` 检查失败，随后较长的导航测试被中止。本次不将整套UI回归、Win7安装包或实机联调标记为通过。
 
-2026-09-08补充：485适配器已在Qt5.15.2/MinGW8.1 Release下编译，协议、设备控制器及485界面专项测试通过；不代表Win7实机已通过。打包入口为scripts/build_win7_qt5152.ps1，详见根目录 WINDOWS7_BUILD_GUIDE.md。
+2026-09-08补充：485适配器已在Qt5.15.2/MinGW8.1 Release下编译，协议、设备控制器及485界面专项测试通过；不代表Win7实机已通过。该记录仅为历史验证，不表示当前仍支持此版本；当前打包入口为scripts/build_win7_qt51212.ps1，详见根目录 WINDOWS7_BUILD_GUIDE.md。

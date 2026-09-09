@@ -9,12 +9,22 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $ProjectDir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-if (!$QtRoot) { $QtRoot = "D:\Qt\5.15.2\mingw81_64" }
+if (!$QtRoot) { $QtRoot = "D:\Qt\5.12.12\5.12.12\mingw73_64" }
 $QtRoot = [IO.Path]::GetFullPath($QtRoot)
 $QtInstall = Split-Path (Split-Path $QtRoot -Parent) -Parent
-if (!$MinGWRoot) { $MinGWRoot = Join-Path $QtInstall "Tools\mingw810_64" }
-if (!$CMakeExe) { $CMakeExe = Join-Path $QtInstall "Tools\CMake_64\bin\cmake.exe" }
-if (!$BuildDir) { $BuildDir = Join-Path $ProjectDir "build\win7-qt5152-release" }
+if (!$MinGWRoot) { $MinGWRoot = Join-Path $QtInstall "Tools\mingw730_64" }
+if (!$CMakeExe) {
+    foreach ($candidate in @((Join-Path $QtInstall "Tools\CMake_64\bin\cmake.exe"),
+            (Join-Path (Split-Path $QtInstall -Parent) "Tools\CMake_64\bin\cmake.exe"))) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $CMakeExe = $candidate; break }
+    }
+    if (!$CMakeExe) {
+        $found = Get-Command cmake.exe -ErrorAction SilentlyContinue
+        if ($found) { $CMakeExe = $found.Source }
+    }
+    if (!$CMakeExe) { throw "Set -CMakeExe to CMake 3.24 or newer" }
+}
+if (!$BuildDir) { $BuildDir = Join-Path $ProjectDir "build\win7-qt51212-release" }
 if (!$OutputRoot) { $OutputRoot = Join-Path $ProjectDir "build\packages" }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
@@ -34,22 +44,22 @@ $OriginalPath = $env:PATH
 try {
     $env:PATH = (Join-Path $MinGWRoot "bin") + ";" + (Join-Path $QtRoot "bin") + ";" + $env:PATH
     $version = & $Qmake -query QT_VERSION
-    if ($LASTEXITCODE -ne 0 -or $version -ne "5.15.2") { throw "Requires Qt 5.15.2, found: $version" }
+    if ($LASTEXITCODE -ne 0 -or $version -ne "5.12.12") { throw "Requires Qt 5.12.12, found: $version" }
     $machine = & $Gcc -dumpmachine
     $compilerVersion = & $Gcc -dumpfullversion
-    if ($machine -ne "x86_64-w64-mingw32" -or $compilerVersion -ne "8.1.0") {
-        throw "Requires MinGW 8.1.0 x64; found $compilerVersion / $machine"
+    if ($machine -ne "x86_64-w64-mingw32" -or $compilerVersion -ne "7.3.0") {
+        throw "Requires MinGW 7.3.0 x64; found $compilerVersion / $machine"
     }
     $tests = if ($WithTests) { "ON" } else { "OFF" }
     Invoke-Checked $CMakeExe @("-S", $ProjectDir, "-B", $BuildDir, "-G", "MinGW Makefiles",
-        "-DCMAKE_BUILD_TYPE=Release", "-DQITEST_WIN7=ON", "-DQITEST_WIN7_QT_VERSION=5.15.2",
+        "-DCMAKE_BUILD_TYPE=Release", "-DQITEST_WIN7=ON", "-DQITEST_WIN7_QT_VERSION=5.12.12",
         "-DQITEST_BUILD_TESTS=$tests", "-DCMAKE_PREFIX_PATH=$QtRoot",
         "-DCMAKE_CXX_COMPILER=$Gcc", "-DCMAKE_MAKE_PROGRAM=$Make")
     Invoke-Checked $CMakeExe @("--build", $BuildDir, "--parallel", "4", "--target", "QITestWorkstation")
     if ($WithTests) {
         Invoke-Checked $CMakeExe @("--build", $BuildDir, "--parallel", "4", "--target",
             "qitest_network_tests", "qitest_rs485_tests", "qitest_device_tests", "qitest_ai_tests", "qitest_core_tests", "qitest_ui_tests")
-        Invoke-Checked $Deploy @("--compiler-runtime", "--no-translations", (Join-Path $BuildDir "qitest_ui_tests.exe"))
+        Invoke-Checked $Deploy @("--release", "--compiler-runtime", "--no-translations", (Join-Path $BuildDir "qitest_ui_tests.exe"))
         Copy-Item -LiteralPath (Join-Path $QtRoot "plugins\platforms\qoffscreen.dll") -Destination (Join-Path $BuildDir "platforms\qoffscreen.dll")
         $CTest = Join-Path (Split-Path $CMakeExe -Parent) "ctest.exe"
         Invoke-Checked $CTest @("--test-dir", $BuildDir, "-R", "qitest_(network|rs485|device|ai|core)_tests", "--output-on-failure")
@@ -57,16 +67,14 @@ try {
             "networkPanelConnectsAlongside485", "rs485StatusPanelReadsAndInvalidates", "instrumentPowerButtonsReflectPartialState")
     }
     # Every delivery gets a new folder: never delete or overwrite an earlier package.
-    $name = "Feimiao-Win7-Qt5.15.2-TCP-485-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
+    $name = "Feimiao-Win7-Qt5.12.12-TCP-485-" + (Get-Date -Format "yyyyMMdd-HHmmss-fff")
     $PackageDir = Join-Path $OutputRoot $name
     if (Test-Path -LiteralPath $PackageDir) { throw "Output already exists: $PackageDir" }
     New-Item -ItemType Directory -Path $PackageDir -Force | Out-Null
     $App = Join-Path $PackageDir "飞秒质谱工作站.exe"
     Copy-Item -LiteralPath (Join-Path $BuildDir "飞秒质谱工作站.exe") -Destination $App
-    # Qt 5.15 MinGW PE debug detection is unreliable; auto mode accepts matching
-    # MinGW plugins, while --release can wrongly exclude qwindows.dll.
-    # The executable itself was built with CMAKE_BUILD_TYPE=Release above.
-    Invoke-Checked $Deploy @("--compiler-runtime", "--no-translations", $App)
+    # The executable is built as Release; deploy the corresponding release DLLs and plugins explicitly.
+    Invoke-Checked $Deploy @("--release", "--compiler-runtime", "--no-translations", $App)
     foreach ($required in @("Qt5Core.dll", "Qt5Gui.dll", "Qt5Widgets.dll", "Qt5Network.dll",
         "Qt5Sql.dll", "Qt5SerialPort.dll", "Qt5Svg.dll", "platforms\qwindows.dll",
         "sqldrivers\qsqlite.dll", "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
@@ -81,7 +89,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $ProjectDir "third_party\notices\Qt-LGPL-3.0.txt") -Destination (Join-Path $PackageDir "resources\notices")
     Copy-Item -LiteralPath (Join-Path $ProjectDir "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $PackageDir "resources\notices")
     @'
-网口TCP与485状态读取测试包 / Qt 5.15.2 / MinGW 8.1 x64 / Release
+网口TCP与485状态读取测试包 / Qt 5.12.12 / MinGW 7.3 x64 / Release
 
 完整解压后运行“飞秒质谱工作站.exe”，保留所有DLL与子目录。
 设置 -> 仪器控制 -> 运行状态：选择“485串口”或“网口TCP”标签，可同时连接。
@@ -100,9 +108,8 @@ try {
 编译、依赖收集及开发机测试不等于Win7实机验收通过。
 此包不含AI模型、推理程序、外部参考谱库或用户运行数据库。
 
-本包动态使用Qt 5.15.2，实际模块见Qt5*.dll；许可文本见resources/notices。
-Qt 5.15.2对应源码：https://download.qt.io/archive/qt/5.15/5.15.2/single/
-本次实际Qt版本为5.15.2，历史第三方核查记录中的5.12.12不代表本包版本。
+本包动态使用Qt 5.12.12，实际模块见Qt5*.dll；许可文本见resources/notices。
+Qt 5.12.12对应源码：https://download.qt.io/archive/qt/5.12/5.12.12/single/
 '@ | Set-Content -LiteralPath (Join-Path $PackageDir "测试说明.txt") -Encoding UTF8
     $hashLines = Get-ChildItem -LiteralPath $PackageDir -File -Recurse | Sort-Object FullName | ForEach-Object {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "  " +

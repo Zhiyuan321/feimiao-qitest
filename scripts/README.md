@@ -4,7 +4,7 @@
 
 | 任务 | 脚本 |
 | --- | --- |
-| Windows本机Qt5.15.2构建与TCP/485测试包 | build_win7_qt5152.ps1 |
+| Windows本机Qt5.12.12构建与TCP/485测试包 | build_win7_qt51212.ps1 |
 | 整理源码 ZIP | package_source.py |
 | Mac 交叉构建 Win7 | package_windows_qt512_cross.sh |
 | 校验 Win7 运行目录 | verify_windows_qt512.py |
