@@ -28,7 +28,8 @@ env = os.environ.copy()
 env.update(WINEPREFIX=str(Path(args.prefix).resolve()), WINEDEBUG="-all", MVK_CONFIG_LOG_LEVEL="0",
            QT_QPA_PLATFORM="offscreen", QITEST_AI_LOW_MEMORY="1", WINEPATH="Z:" + str(target).replace("/", "\\"),
            QITEST_UI_CAPTURE_DIR="captures")
-names = ("ai_lifecycle", "device", "core", "ai", "library", "workspace", "security", "ui")
+names = ("ai_lifecycle", "device", "core", "ai", "library", "workspace", "security",
+         "network", "rs485", "pump", "ui")
 if args.test:
     if any(name not in names for name in args.test):
         raise ValueError("Unknown test")

@@ -5,6 +5,7 @@
 - NetworkConnectionPanel / Rs485ConnectionPanel：运行状态页的网口TCP与485标签，可同时连接。
 - Rs485ConnectionPanel同时显示主控板状态与分子泵换算值（说明保留原始值），一组COM连接按钮，支持共享收发报文导出。
 - DeviceWaveformPanel：仪器配置运行状态中的 0x82 单包气压诊断曲线、射频调谐启停；样品分析页只保留 TIC、质谱图和 EIC，RF曲线编码/倍率仍待确认。
+- SpectrumPlot / DeviceWaveformPanel：数据到达时最多每 16 ms 合并刷新一次（约 60 Hz），空闲时不持续重绘；数值自适应量程并为最高峰和边缘刻度保留显示余量。
 - InstrumentWorkbench：质量轴等离线工作区。
 - MethodEditorDialog：所有会话均显示完整方法参数，连接或断开485/TCP时字段不缩减。保存新版本仍为离线草稿，不直接下发设备；真实设备的激活继续由权限、协议映射和回读校验。当前沿用既有登录角色，未实现本地账户创建/密码管理。
 - SpectrumPlot / ChromatogramDialog：谱图与提取积分。

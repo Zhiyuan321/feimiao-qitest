@@ -134,6 +134,7 @@ private slots:
         auto *plot=pressure->findChild<QWidget *>("pressureVoltagePlot");QVERIFY(plot);
         QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
         QCOMPARE(plot->property("yMaximum").toDouble(),15.0);
+        QCOMPARE(plot->property("frameIntervalMs").toInt(),16);
         QVERIFY(pressure->findChild<QLabel *>("pressureWaveformStatus")->text().contains("14.25"));
         const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
         if(!capture.isEmpty()) {
@@ -348,9 +349,9 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QLabel *ionReading = nullptr;
     for (auto *label : window.findChildren<QLabel *>())
         if (label->property("telemetryKey") == "ion") ionReading = label;
-    QVERIFY(ionReading); QCOMPARE(ionReading->text(), QString("4.9"));
-    auto *ionUnit = ionReading->parentWidget()->findChild<QLabel *>("readoutUnit");
-    QVERIFY(ionUnit); QCOMPARE(ionUnit->text(), QString("V"));
+    // Monitor values carry their unit in the same label so a narrow Win7 rail
+    // cannot separate or vertically misalign the number and unit.
+    QVERIFY(ionReading); QCOMPARE(ionReading->text(), QString("4.9 V"));
     QCOMPARE(controller.telemetry().ionSourceVoltageV, 4.9);
     QCOMPARE(table->item(12, 1)->text(), QString("内载气"));
     for (auto *widget : window.findChildren<QWidget *>())
@@ -933,6 +934,7 @@ void UiSmokeTests::calibrationEditsPreservePrecisionAndRejectStaleWrites() {
 
 void UiSmokeTests::densePlotsKeepFullDataButBoundPaintingAndExportOffThread() {
     SpectrumPlot plot(SpectrumPlot::Mode::Line); plot.resize(600,300); plot.show();
+    QCOMPARE(plot.property("frameIntervalMs").toInt(),16);
     QVector<SpectrumPoint> points;
     for(int i=0;i<100000;++i) points.append({i*0.001, i==43210 ? 10000.0:double(i%31)});
     plot.setPoints(points); QVERIFY(!plot.grab().isNull());

@@ -97,7 +97,9 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         table->setVisible(true);
         const auto telemetry = controller->telemetry();
         const auto numeric = [connected](double v, const QString &unit) {
-            return connected ? measurementText(v, 'f', 1) + unit : QString("—");
+            if (!connected) return QString("—");
+            const QString value = measurementText(v, 'f', 1);
+            return value == "未提供" ? value : value + unit;
         };
         const auto raw = [&data](const QString &key, const QString &unit) {
             return data.contains(key) ? data.value(key).toString() + unit : QString("—");
@@ -106,7 +108,9 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
             return !data.contains(key) ? QString("—") : data.value(key).toBool() ? QString("开启") : QString("关闭");
         };
         const auto pumpValue = [&pump](const QString &key, int decimals, const QString &unit) {
-            return pump.contains(key) ? measurementText(pump.value(key).toDouble(), 'f', decimals) + unit : QString("—");
+            if (!pump.contains(key)) return QString("—");
+            const QString value = measurementText(pump.value(key).toDouble(), 'f', decimals);
+            return value == "未提供" ? value : value + unit;
         };
         const auto pumpSource = [&pump](const QString &parameter) {
             return "原始 " + pump.value(parameter, "—").toString() + " · " + pump.value(parameter + "Time", "未更新").toString();

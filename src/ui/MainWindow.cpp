@@ -762,23 +762,26 @@ QWidget *MainWindow::createHomePage() {
     // clock measures this software session, never the physical device uptime.
     auto *runStatus = new QWidget;
     runStatus->setObjectName("runStatusStrip");
-    runStatus->setFixedHeight(36);
+    runStatus->setFixedHeight(30);
     runStatus->setMinimumWidth(138);
     auto *runStatusLayout = new QHBoxLayout(runStatus);
-    runStatusLayout->setContentsMargins(4, 0, 4, 0);
+    runStatusLayout->setContentsMargins(0, 0, 0, 0);
     runStatusLayout->setSpacing(6);
     auto *deviceState = makeLabel({}, "metadata"); deviceState->setObjectName("runDeviceState");
     auto *detectionTime = makeLabel({}, "metadata"); detectionTime->setObjectName("runDetectionTime");
     auto *softwareTime = makeLabel({}, "metadata"); softwareTime->setObjectName("runSoftwareTime");
     for (auto *label : {deviceState, detectionTime}) {
         label->setWordWrap(false); label->setMinimumWidth(0);
-        label->setFixedHeight(36);
+        label->setFixedHeight(30);
+        label->setProperty("sciRole", "statusPill");
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         runStatusLayout->addWidget(label);
     }
     softwareTime->setWordWrap(false);
     softwareTime->setProperty("sciRole","compactRuntime");
+    softwareTime->setProperty("sciSurface","statusPill");
+    softwareTime->setFixedHeight(30);
     softwareTime->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Fixed);
     contextLayout->addWidget(softwareTime);
     contextLayout->addWidget(runStatus);
@@ -1113,11 +1116,13 @@ QWidget *MainWindow::createMonitorPanel() {
         for (auto it = readings.begin(); it != readings.end(); ++it) {
             const QString value = health.connected ? values.value(it.key()) : "—";
             const QString unit = it.value()->property("displayUnit").toString();
-            const QString display = value == "—" || unit.isEmpty() ? value : value + " " + unit;
+            const QString display = value == "—" || value == "未提供" || unit.isEmpty()
+                ? value : value + " " + unit;
             if (it.value()->text() != display) it.value()->setText(display);
         }
+        const QString pressureValue = measurementText(telemetry.carrierGasPressureTorr, 'f', 1);
         const QString pressure = health.connected
-            ? measurementText(telemetry.carrierGasPressureTorr, 'f', 1) + " Torr" : "未连接";
+            ? pressureValue + (pressureValue == "未提供" ? QString() : QString(" Torr")) : "未连接";
         if (alarmDetail->text() != pressure) alarmDetail->setText(pressure);
     };
     refreshReadings();

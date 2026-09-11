@@ -20,10 +20,13 @@
 namespace qitest {
 
 SpectrumPlot::SpectrumPlot(Mode mode, QWidget *parent) : QWidget(parent), mode_(mode) {
-    // Coalesce data-driven repaint requests at about 30 FPS without dropping source points.
+    // Coalesce data-driven repaint requests at no more than about 60 FPS. The
+    // timer remains single-shot, so an idle Windows 7 workstation does not
+    // continuously repaint just to maintain a nominal frame rate.
     repaintTimer_ = new QTimer(this);
     repaintTimer_->setSingleShot(true);
-    repaintTimer_->setInterval(33);
+    repaintTimer_->setInterval(16);
+    setProperty("frameIntervalMs", 16);
     connect(repaintTimer_, &QTimer::timeout, this, [this] { update(); });
     setMinimumHeight(mode == Mode::Line ? 145 : 210);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -143,6 +146,9 @@ void SpectrumPlot::ensureDisplayCache() const {
         cachedMaximum_=std::max(cachedMaximum_,points_[i].intensity); previous=i;
     }
     if(end>begin) flush();
+    // Keep the tallest stroke and hover marker inside the plotting area rather
+    // than drawing the maximum exactly against the upper clipping boundary.
+    cachedMaximum_=std::max(0.000001,cachedMaximum_*1.05);
     // At most four original points per display column (extrema and endpoints).
     // Full resolution stays in points_ for export, selection and computation.
 }
@@ -168,7 +174,9 @@ QRectF SpectrumPlot::plotRect() const {
     // font backends. Fixed 45 px clipped million-scale TIC labels on macOS.
     const QFontMetricsF ticks(QFont(font().family(), 10));
     const double left = std::max(64.0, ticks.horizontalAdvance("9.99e+099") + 8.0);
-    return QRectF(left, 16.0, std::max(1.0, width() - left - 30.0),
+    // The final tick label extends 32 px on either side of its anchor. A 36 px
+    // right margin prevents the final digits from being clipped on Win7 fonts.
+    return QRectF(left, 16.0, std::max(1.0, width() - left - 36.0),
                   std::max(1.0, height() - 54.0));
 }
 

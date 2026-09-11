@@ -1,11 +1,19 @@
 #pragma once
 #include <QString>
+#include <algorithm>
 #include <cmath>
 
 namespace qitest {
 // A real adapter uses NaN for unavailable numeric telemetry, never fabricated 0.
 inline QString measurementText(double value, char format = 'f', int precision = 1) {
-    return std::isfinite(value) ? QString::number(value, format, precision) : QString("未提供");
+    if (!std::isfinite(value)) return QString("未提供");
+    const double magnitude = std::abs(value);
+    // Fixed decimals are easiest to scan for ordinary telemetry, but can turn
+    // extreme valid values into hundreds of digits or misleading zeroes.
+    if (format == 'f' && (magnitude >= 1.0e7
+            || (magnitude > 0.0 && magnitude < std::pow(10.0, -precision))))
+        return QString::number(value, 'E', std::max(1, std::min(precision, 4)));
+    return QString::number(value, format, precision);
 }
 // Presentation only: persisted identifiers and audit values stay unchanged.
 inline QString dataScopeLabel(const QString &scope) {

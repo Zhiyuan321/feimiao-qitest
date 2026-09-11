@@ -7,6 +7,7 @@
 #include <QPainterPath>
 #include <QMouseEvent>
 #include <QMessageBox>
+#include <QTimer>
 #include <algorithm>
 #include <cmath>
 
@@ -15,10 +16,15 @@ namespace {
 // A packet is never joined to another packet until cycle boundaries/time parameters are known.
 class VoltagePlot final : public QWidget {
 public:
-    explicit VoltagePlot(bool tuning):tuning_(tuning) {setMinimumSize(240,220);setMouseTracking(true);}
+    explicit VoltagePlot(bool tuning):tuning_(tuning) {
+        repaintTimer_.setSingleShot(true);repaintTimer_.setInterval(16);
+        QObject::connect(&repaintTimer_,&QTimer::timeout,this,[this]{update();});
+        setProperty("frameIntervalMs",16);setMinimumSize(240,220);setMouseTracking(true);
+    }
     void setValues(const QVector<double> &v) {
         if(values_==v)return;
-        values_=v;setProperty("sampleCount",v.size());setProperty("yMaximum",scaleMaximum());update();
+        values_=v;setProperty("sampleCount",v.size());setProperty("yMaximum",scaleMaximum());
+        if(!repaintTimer_.isActive())repaintTimer_.start();
     }
 protected:
     QRectF area() const {return QRectF(66,24,std::max(1,width()-90),std::max(1,height()-82));}
@@ -59,7 +65,7 @@ protected:
         setToolTip(QString("采样点 %1：%2 V").arg(index).arg(values_[index],0,'f',2));
     }
 private:
-    bool tuning_;QVector<double> values_;
+    bool tuning_;QVector<double> values_;QTimer repaintTimer_;
 };
 }
 QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget *parent) {

@@ -28,13 +28,14 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#runStatusStrip { background: transparent; border: 0; }
         QWidget#runStatusStrip QLabel { font-size: 14px; font-weight: 500; margin: 0; padding: 0; }
         QLabel[sciRole="compactRuntime"] { font-size: 14px; font-weight: 500; }
+        QLabel[sciRole="statusPill"], QLabel[sciSurface="statusPill"] { background: %4; border: 1px solid %5; border-radius: 9px; padding: 0 9px; }
         QWidget#analysisCanvas { background: %2; }
         QWidget#standardLibraryTabs, QStackedWidget#standardLibraryPages { background: %2; border: 0; }
         QWidget#calibrationPage, QWidget#userStandardsPage { background: %2; }
         QTabWidget#communicationTabs::pane { background: %2; border: 0; }
         QTabWidget#communicationTabs QStackedWidget,
         QWidget#networkConnectionPanel, QWidget#rs485ConnectionPanel { background: %2; }
-        QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; padding: 8px 10px; min-height: 24px; }
+        QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; border-radius: 8px; margin-right: 4px; padding: 8px 10px; min-height: 24px; }
         QTabWidget#communicationTabs QTabBar::tab:selected { background: %17; color: %20; font-weight: 600; }
         QTabWidget#communicationTabs QTabBar::tab:hover { background: %19; }
         QPushButton[sciRole="librarySelector"] { min-height: 30px; background: %6; border: 0; padding: 0 14px; }
@@ -97,7 +98,7 @@ QString Theme::buildStyleSheet(Density density) {
         QPlainTextEdit[sciRole="assistantTranscript"] { background: %4; border-color: %5; border-radius: 9px; padding: 10px; }
         QPushButton { background: %4; border: 1px solid %5; border-radius: 8px; min-height: %16px; padding: 0 12px; }
         QPushButton:hover { background: %19; border-color: %18; }
-        QPushButton:pressed { background: %7; border-color: %15; padding-top: 1px; }
+        QPushButton:pressed { background: %7; border-color: %15; }
         QPushButton:focus { border: 2px solid %18; }
         QPushButton[sciRole="primary"] { background: %18; color: %4; border-color: %18; font-weight: 600; }
         QPushButton[sciRole="primary"]:hover { background: %20; }
@@ -110,7 +111,7 @@ QString Theme::buildStyleSheet(Density density) {
         QPushButton[sciState="current"] { background: %17; color: %20; border-color: transparent; font-weight: 600; }
         QToolButton[sciRole="command"] { background: transparent; border: 0; border-radius: 9px; padding: 4px 8px; font-size: 14px; font-weight: 600; }
         QToolButton[sciRole="command"]:hover { background: %19; }
-        QToolButton[sciRole="command"]:pressed { background: %7; padding-top: 5px; }
+        QToolButton[sciRole="command"]:pressed { background: %7; }
         QToolButton[sciRole="command"][sciState="current"] { background: %17; color: %20; font-weight: 600; }
         QToolButton[sciRole="command"][sciEmphasis="primary"] { color: %20; font-weight: 600; }
         QLabel#batteryStatus { background: transparent; border: 0; padding: 0 6px; }
@@ -200,6 +201,17 @@ QString Theme::buildStyleSheet(Density density) {
 #ifdef Q_OS_WIN
     style.replace("PingFang SC", "Microsoft YaHei");
     style.replace("Menlo", "Consolas");
+#ifdef QITEST_WIN7
+    // Win7/Fusion rasterizes a two-pixel focus border more heavily than macOS
+    // and it appears to move the text inside compact controls. Keep a crisp,
+    // stable one-pixel edge while retaining the teal focus colour.
+    style += QStringLiteral(R"QSS(
+        QLineEdit:focus, QPlainTextEdit:focus, QPushButton:focus { border-width: 1px; }
+        QComboBox:on { border-width: 1px; }
+        QTabWidget#communicationTabs QTabBar::tab { border: 1px solid transparent; }
+        QTabWidget#communicationTabs QTabBar::tab:selected { border-color: %1; }
+    )QSS").arg(Colors::Border.name());
+#endif
 #endif
     return style;
 }

@@ -78,6 +78,8 @@ private slots:
         QCOMPARE(adapter.health().ionSourceKv, 0.32);
         QCOMPARE(adapter.telemetry().ionSourceVoltageV, 320.0);
         QCOMPARE(measurementText(adapter.telemetry().multiplierVoltageV), QString("未提供"));
+        QCOMPARE(measurementText(5.03e-5, 'f', 2), QString("5.03E-05"));
+        QCOMPARE(measurementText(1.0e20, 'f', 1), QString("1.0E+20"));
         QVERIFY(!adapter.confirmedSettings().contains("trapTemperatureC"));
         QVERIFY(!adapter.confirmedSettings().contains("internalCarrierGasOn"));
         QCOMPARE(adapter.statusDetails().value("highVoltageCurrentUa").toUInt(), 123u);
