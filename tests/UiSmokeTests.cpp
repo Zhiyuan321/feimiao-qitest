@@ -176,6 +176,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto instrument = std::make_unique<Rs485Instrument>(&port, nullptr);
     AppController controller(std::move(instrument));
     MainWindow window(&controller); window.resize(1024, 768); window.show();
+    QCOMPARE(QApplication::font().family(), QString("IBM Plex Sans SC"));
     auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站"); QVERIFY(enter); enter->click();
     auto *workspace = window.findChild<QStackedWidget *>("centralWorkspace"); QVERIFY(workspace);
     QTRY_VERIFY_WITH_TIMEOUT(workspace->isVisibleTo(&window), 4000);

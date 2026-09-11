@@ -2,17 +2,43 @@
 
 #include <QApplication>
 #include <QFont>
+#include <QFontDatabase>
 #include <QPalette>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QWidget>
 
 namespace Scientz::Ui {
+namespace {
+
+QString workstationFontFamily() {
+    static const QString family = [] {
+        QString selected;
+        const QStringList resources{
+            ":/qitest/resources/fonts/IBMPlexSansSC-Regular.ttf",
+            ":/qitest/resources/fonts/IBMPlexSansSC-Medium.ttf"
+        };
+        for (const auto &resource : resources) {
+            const int id = QFontDatabase::addApplicationFont(resource);
+            const auto families = id >= 0 ? QFontDatabase::applicationFontFamilies(id) : QStringList{};
+            if (selected.isEmpty() && !families.isEmpty()) selected = families.first();
+        }
+        if (!selected.isEmpty()) return selected;
+#ifdef Q_OS_WIN
+        return QStringLiteral("Microsoft YaHei");
+#else
+        return QStringLiteral("PingFang SC");
+#endif
+    }();
+    return family;
+}
+
+} // namespace
 
 QString Theme::buildStyleSheet(Density density) {
     const int controlHeight = density == Density::Compact ? 36 : 44;
     QString style = QString(R"QSS(
-        * { font-family: "PingFang SC"; color: %1; }
+        * { font-family: "__QITEST_UI_FONT__"; color: %1; }
         QWidget { background: transparent; font-size: 15px; }
         QMainWindow, QStackedWidget#rootStack { background: %2; }
         QDialog { background: %2; }
@@ -67,10 +93,9 @@ QString Theme::buildStyleSheet(Density density) {
         QLabel[sciTone="panelTitle"], QLabel[sciTone="contextTitle"], QLabel[sciTone="identityTitle"], QLabel[sciTone="bodyStrong"] { font-weight: 600; }
         QLabel[sciTone="technical"] { color: %10; font-size: 10px; font-weight: 600; letter-spacing: 1px; }
         QLabel[sciTone="secondary"], QLabel[sciTone="metadata"], QLabel[sciTone="user"] { color: #243331; font-size: 16px; font-weight: 600; }
-        QLabel[sciTone="readoutValue"] { font-family: "Menlo"; }
         QLabel[sciRole="reportDetail"] { font-size: 13px; font-weight: 400; color: #243331; }
         QWidget#monitorPanel QLabel#readoutName, QWidget#monitorPanel QLabel[sciTone="metadata"] { font-size: 13px; font-weight: 400; color: #52615f; }
-        QWidget#monitorPanel QLabel[sciTone="readoutValue"] { font-family: "Arial"; font-size: 16px; font-weight: 600; }
+        QWidget#monitorPanel QLabel[sciTone="readoutValue"] { font-size: 16px; font-weight: 600; }
         QWidget#monitorPanel QLabel#readoutUnit { font-size: 12px; font-weight: 400; }
         QLabel[sciTone="metricValue"] { font-size: 14px; font-weight: 600; color: %20; }
         QLabel[sciState="healthy"] { color: %12; }
@@ -198,9 +223,8 @@ QString Theme::buildStyleSheet(Density density) {
     };
     for (int index = values.size(); index >= 1; --index)
         style.replace("%" + QString::number(index), values.at(index - 1));
+    style.replace("__QITEST_UI_FONT__", workstationFontFamily());
 #ifdef Q_OS_WIN
-    style.replace("PingFang SC", "Microsoft YaHei");
-    style.replace("Menlo", "Consolas");
 #ifdef QITEST_WIN7
     // Win7/Fusion rasterizes a two-pixel focus border more heavily than macOS
     // and it appears to move the text inside compact controls. Keep a crisp,
@@ -228,7 +252,7 @@ void ThemeManager::apply(QApplication &app, Density density) {
     palette.setColor(QPalette::ButtonText, Colors::TextPrimary);
     app.setPalette(palette);
 #ifdef Q_OS_WIN
-    QFont font("Microsoft YaHei");
+    QFont font(workstationFontFamily());
     font.setHintingPreference(QFont::PreferFullHinting);
     // 低配 Windows 使用即时状态变化，避免菜单淡入和组合框动画占用绘制时间。
     QApplication::setEffectEnabled(Qt::UI_AnimateCombo, false);
@@ -237,7 +261,7 @@ void ThemeManager::apply(QApplication &app, Density density) {
     QApplication::setEffectEnabled(Qt::UI_AnimateTooltip, false);
     QApplication::setEffectEnabled(Qt::UI_FadeTooltip, false);
 #else
-    QFont font("PingFang SC");
+    QFont font(workstationFontFamily());
 #endif
     // Match the stylesheet's logical-pixel size on both preview and instrument.
     // Point sizes otherwise vary with the platform DPI in unstyled controls.

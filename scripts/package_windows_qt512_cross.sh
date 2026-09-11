@@ -82,6 +82,7 @@ for sample in openms_bsa.scan.csv README.md LICENSE-OpenMS.txt; do
   cp "$project_dir/tests/fixtures/public_ms/$sample" "$package/示例数据/"
 done
 cp "$project_dir/THIRD_PARTY_NOTICES.md" "$package/resources/notices/"
+cp "$project_dir/resources/fonts/IBM-Plex-Sans-SC-LICENSE.txt" "$package/resources/notices/"
 if [[ -d "$project_dir/third_party/notices" ]]; then
   cp "$project_dir/third_party/notices/"*.txt "$package/resources/notices/"
 fi

@@ -127,11 +127,7 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
         pdf.setCreator("飞秒质谱工作站 Qt/C++");
         QTextDocument document;
         document.documentLayout()->setPaintDevice(&pdf);
-#ifdef Q_OS_WIN
-        document.setDefaultFont(QFont("Microsoft YaHei", 10));
-#else
-        document.setDefaultFont(QFont("PingFang SC", 10));
-#endif
+        document.setDefaultFont(QFont("IBM Plex Sans SC", 10));
         QTextOption options = document.defaultTextOption();
         options.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         document.setDefaultTextOption(options);
