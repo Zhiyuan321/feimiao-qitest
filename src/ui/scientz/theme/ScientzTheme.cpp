@@ -149,7 +149,7 @@ QString Theme::buildStyleSheet(Density density) {
         QMenu::item { min-width: 150px; padding: 8px 24px 8px 10px; margin: 0; border-radius: 0; }
         QMenu::item:selected { background: %17; color: %20; }
         QMenu::separator { height: 1px; background: %5; margin: 5px 8px; }
-        QToolTip { background: %1; color: %4; border: 0; padding: 7px 9px; }
+        QToolTip { background: %4; color: %1; border: 1px solid %15; padding: 7px 9px; }
         QScrollArea { border: 0; }
         QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
         QScrollBar::handle:vertical { background: %5; min-height: 32px; border-radius: 4px; }

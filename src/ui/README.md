@@ -6,7 +6,7 @@
 - Rs485ConnectionPanel同时显示主控板状态与分子泵换算值（说明保留原始值），一组COM连接按钮，支持共享收发报文导出。
 - DeviceWaveformPanel：样品分析中的单包气压图、射频调谐启停；RF曲线编码/倍率仍待确认。
 - InstrumentWorkbench：质量轴等离线工作区。
-- MethodEditorDialog：管理员完整参数；普通角色仅扫描模式和进样时间（0～600 ms、0.01 ms）。保存新版本保留原方法其余参数，仍为离线草稿，不下发设备。当前沿用既有登录角色，未实现本地账户创建/密码管理。
+- MethodEditorDialog：所有会话均显示完整方法参数，连接或断开485/TCP时字段不缩减。保存新版本仍为离线草稿，不直接下发设备；真实设备的激活继续由权限、协议映射和回读校验。当前沿用既有登录角色，未实现本地账户创建/密码管理。
 - SpectrumPlot / ChromatogramDialog：谱图与提取积分。
 - CalibrationPage：定量曲线。
 - UserStandardsPage / StandardComparisonDialog：用户标准与比较。

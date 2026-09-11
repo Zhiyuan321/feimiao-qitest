@@ -115,6 +115,18 @@ private slots:
         AppController controller(std::make_unique<SimulatedInstrument>());
         std::unique_ptr<QWidget> pressure(createDeviceWaveformPanel(&controller,false));pressure->resize(720,480);pressure->show();
         QVERIFY(controller.startNetworkListening("127.0.0.1",0));QTcpSocket client;
+        QVERIFY(controller.fullMethodAccess());
+        auto *connectedEditor=new MethodEditorDialog("联网方法",MethodDraft::defaultParameters(),
+            [](const QString &,const QJsonObject &){return true;},nullptr,controller.fullMethodAccess());
+        connectedEditor->show();QTest::qWait(20);
+        for (const auto &field : MethodDraft::fields()) {
+            if (field.group != "基本" && field.group != "扫描") continue;
+            auto *edit=connectedEditor->findChild<QLineEdit *>("method_"+field.key);
+            QVERIFY2(edit && edit->isVisibleTo(connectedEditor),qPrintable(field.key));
+        }
+        QVERIFY(!visibleWidgetWithText<QLabel>(*connectedEditor,
+            "普通账号只可另存扫描模式和进样时间；其他参数沿用管理员方法。"));
+        connectedEditor->close();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
         client.connectToHost(QHostAddress::LocalHost,controller.networkStatus().value("port").toUInt());
         QTRY_VERIFY(controller.networkStatus().value("tcpConnected").toBool());
         client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
@@ -696,6 +708,9 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     QVERIFY(deviceState->text().contains("系统 · 未就绪"));
     QCOMPARE(detectionTime->text(), QString("检测用时 —"));
     QVERIFY(softwareTime->text().startsWith("软件运行 "));
+    QVERIFY(deviceState->toolTip().isEmpty());
+    QVERIFY(detectionTime->toolTip().isEmpty());
+    QVERIFY(softwareTime->toolTip().isEmpty());
     const QStringList keys{"rfOn", "ionHighVoltageOn", "diaphragmPumpOn",
         "molecularPumpOn", "pinchValveOn", "internalCarrierGasOn"};
     for (const auto &key : keys) {

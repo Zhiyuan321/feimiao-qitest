@@ -772,8 +772,10 @@ QWidget *MainWindow::createHomePage() {
         label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         runStatusLayout->addWidget(label, 1);
     }
-    detectionTime->setToolTip("从开始采集到分析结束的实际软件用时；停止后冻结。历史文件没有记录此用时则显示未知，不使用曲线时间跨度替代。");
-    softwareTime->setToolTip("本次软件启动后的运行时间，不代表仪器通电或预热时长。");
+    // Windows 7 上原生 tooltip 窗口可能在这一条每秒刷新时残留成深色块。
+    // 状态文字本身已经完整，补充说明放入无浮层的辅助功能描述。
+    detectionTime->setAccessibleDescription("从开始采集到分析结束的软件用时");
+    softwareTime->setAccessibleDescription("本次软件启动后的运行时间");
     const auto refreshRunStatus = [this, deviceState, detectionTime, softwareTime] {
         const auto health = controller_->health();
         const auto phase = controller_->phase();
@@ -782,7 +784,7 @@ QWidget *MainWindow::createHomePage() {
             : phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中" : "就绪";
         deviceState->setText((simulation ? QString("系统 · ") : QString("仪器 · ")) + state);
-        deviceState->setToolTip("显示当前连接与运行状态。");
+        deviceState->setAccessibleDescription("当前连接与运行状态");
         const qint64 elapsed = controller_->detectionElapsedMs();
         const QString suffix = phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中"

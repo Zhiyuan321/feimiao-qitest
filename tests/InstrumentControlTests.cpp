@@ -34,7 +34,7 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
-    void restrictedMethodChangesPreserveAdminFields() {
+    void completeMethodEditingSurvivesDeviceConnection() {
         QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("methods.sqlite").toUtf8());
         AppController controller(std::make_unique<SimulatedInstrument>());
         qputenv("QITEST_OPERATOR_ROLE","admin");controller.setSessionOperator("admin");
@@ -43,12 +43,16 @@ private slots:
         for(const auto &method:controller.methods()) if(method.name=="管理员方法") id=method.id;
         QVERIFY(!id.isEmpty());
         qputenv("QITEST_OPERATOR_ROLE","operator");controller.setSessionOperator("operator");
-        QVERIFY(!controller.fullMethodAccess());
+        QVERIFY(controller.fullMethodAccess());
         auto next=base;next.insert("scan_mode","SIM");next.insert("injection",600.0);
-        QVERIFY(controller.createMethodDraft("管理员方法",next,id));
-        next.insert("source",6.0);QVERIFY(!controller.createMethodDraft("管理员方法",next,id));
-        next=base;next.remove("td");QVERIFY(!controller.createMethodDraft("管理员方法",next,id));
-        QVERIFY(!controller.createMethodDraft("管理员方法",base,"missing"));
+        next.insert("source",6.0);
+        QVERIFY(controller.createMethodDraft("现场方法",next));
+        QVERIFY(controller.startNetworkListening("127.0.0.1",0));
+        QVERIFY(!controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.fullMethodAccess());
+        next.insert("source",7.0);
+        QVERIFY(controller.createMethodDraft("联网方法",next));
+        controller.stopNetworkListening();
         QVERIFY(!controller.requestRfTuning(true,true));
         QString error;next=base;next.insert("injection",600.01);QVERIFY(!MethodDraft::validate(next,&error));
         next.insert("injection",1.001);QVERIFY(!MethodDraft::validate(next,&error));

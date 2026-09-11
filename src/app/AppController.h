@@ -56,8 +56,9 @@ public:
     QVariantMap instrumentSettings() const { return instrumentSettings_; }
     QJsonObject confirmedMethodParameters() const { return instrument_->confirmedMethodParameters(); }
     QString sessionSummary() const;
-    bool fullMethodAccess() const { return sessionRole_ == SessionRole::Administrator
-        || (sessionRole_ == SessionRole::OfflineDemo && instrument_->descriptor().simulation); }
+    // 方法草稿的字段完整度不能随485/TCP适配器切换而变化。真实设备是否
+    // 允许激活仍由 activateMethod、协议映射和设备回读分别校验。
+    bool fullMethodAccess() const { return true; }
     QString librarySummary() const { return librarySummary_; }
     QString aiSummary() const;
     QString aiContextSummary() const;
