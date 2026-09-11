@@ -27,6 +27,7 @@ SpectrumPlot::SpectrumPlot(Mode mode, QWidget *parent) : QWidget(parent), mode_(
     repaintTimer_->setSingleShot(true);
     repaintTimer_->setInterval(16);
     setProperty("frameIntervalMs", 16);
+    setProperty("hoverRepaintCoalesced", true);
     connect(repaintTimer_, &QTimer::timeout, this, [this] { update(); });
     setMinimumHeight(mode == Mode::Line ? 145 : 210);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -217,7 +218,7 @@ void SpectrumPlot::mouseMoveEvent(QMouseEvent *event) {
         } else {
             setToolTip({});
         }
-        update();
+        if (!repaintTimer_->isActive()) repaintTimer_->start();
     }
     QWidget::mouseMoveEvent(event);
 }
@@ -235,7 +236,7 @@ void SpectrumPlot::leaveEvent(QEvent *event) {
     if (hoveredIndex_ >= 0) {
         hoveredIndex_ = -1;
         setToolTip({});
-        update();
+        if (!repaintTimer_->isActive()) repaintTimer_->start();
     }
     QWidget::leaveEvent(event);
 }

@@ -960,6 +960,7 @@ void UiSmokeTests::calibrationEditsPreservePrecisionAndRejectStaleWrites() {
 void UiSmokeTests::densePlotsKeepFullDataButBoundPaintingAndExportOffThread() {
     SpectrumPlot plot(SpectrumPlot::Mode::Line); plot.resize(600,300); plot.show();
     QCOMPARE(plot.property("frameIntervalMs").toInt(),16);
+    QVERIFY(plot.property("hoverRepaintCoalesced").toBool());
     QVector<SpectrumPoint> points;
     for(int i=0;i<100000;++i) points.append({i*0.001, i==43210 ? 10000.0:double(i%31)});
     plot.setPoints(points); QVERIFY(!plot.grab().isNull());
