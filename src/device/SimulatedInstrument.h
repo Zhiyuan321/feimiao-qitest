@@ -17,10 +17,14 @@ public:
     QVariantMap confirmedSettings() const override { return settings_; }
     CommandValidation validateSetting(const QString &key, const QVariant &value) const override;
     void requestSetting(const QString &requestId, const QString &key, const QVariant &value) override;
+    QJsonObject confirmedMethodParameters() const override { return methodParameters_; }
+    CommandValidation validateMethodParameters(const QJsonObject &parameters) const override;
+    void requestMethodParameters(const QString &requestId, const QJsonObject &parameters) override;
 
 private:
     std::atomic_bool cancelled_{false};
     QVariantMap settings_;
+    QJsonObject methodParameters_;
 };
 
 } // namespace qitest

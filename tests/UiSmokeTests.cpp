@@ -392,6 +392,28 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     editor->show();
     QCoreApplication::processEvents();
     QVERIFY(editor->findChildren<QScrollArea *>().isEmpty());
+    for (const QString key : {QString("carrier"), QString("extraction"), QString("inlet"), QString("td"),
+             QString("source"), QString("trap"), QString("period"), QString("speed"),
+             QString("rf_frequency"), QString("storage_mass"), QString("low_mass"),
+             QString("high_mass"), QString("cooling"), QString("ac_frequency"),
+             QString("injection"), QString("multiplier")}) {
+        auto *field = editor->findChild<QLineEdit *>("method_" + key);
+        QVERIFY2(field, qPrintable(key));
+        QVERIFY2(field->isVisibleTo(editor), qPrintable(key + " is hidden"));
+        QVERIFY2(editor->rect().contains(QRect(field->mapTo(editor, QPoint()), field->size())),
+                 qPrintable(key + " is outside the dialog"));
+    }
+    QCOMPARE(editor->findChild<QLineEdit *>("method_carrier")->text(), QString("1"));
+    QCOMPARE(editor->findChild<QLineEdit *>("method_speed")->text(), QString("8000"));
+    QCOMPARE(editor->findChild<QLineEdit *>("method_rf_frequency")->text(), QString("50"));
+    QCOMPARE(editor->findChild<QLineEdit *>("method_multiplier")->text(), QString("1000"));
+    for (auto *label : editor->findChildren<QLabel *>()) {
+        if (!label->isVisibleTo(editor)) continue;
+        QVERIFY(!label->text().contains("模拟"));
+        QVERIFY(!label->text().contains("测试版"));
+        QVERIFY(!label->text().contains("演示"));
+    }
+    QVERIFY(!editor->findChild<QPushButton *>("loadLegacyReference"));
     for (const QString text : {QString("打开文件"), QString("导出文件"), QString("保存新版本"), QString("取消")}) {
         auto *button = visibleWidgetWithText<QPushButton>(*editor, text);
         QVERIFY(button);
@@ -401,7 +423,7 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     QVERIFY(editorImage.pixelColor(editorImage.width() / 2, editorImage.height() / 2).lightness() > 100);
     const QString captureDirectory = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     if (!captureDirectory.isEmpty()) QVERIFY(editorImage.save(captureDirectory + "/method-editor-customer-review.png"));
-    editor->close();
+    editor->findChild<QPushButton *>("saveMethodDraft")->click();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
     AppController controller(std::make_unique<SimulatedInstrument>());
@@ -413,6 +435,15 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     QVERIFY(enter);
     enter->click();
     QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window), 5000);
+    auto *monitor = window.findChild<QScrollArea *>("monitorScroll");
+    QVERIFY(monitor && monitor->isVisibleTo(&window));
+    QVERIFY(monitor->width() >= 280);
+    for (auto *readout : monitor->findChildren<QLabel *>()) {
+        if (!readout->property("telemetryKey").isValid()) continue;
+        QVERIFY(!readout->text().contains('\n'));
+    }
+    if (!captureDirectory.isEmpty())
+        QVERIFY(window.grab().save(captureDirectory + "/workspace-monitor-customer-review.png"));
     for (auto *label : window.findChildren<QLabel *>()) {
         QVERIFY(!label->text().contains("当前使用模拟仪器"));
         QVERIFY(!label->text().contains("专业能力留在系统内部"));
@@ -1017,7 +1048,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     if (!monitorScroll->isVisibleTo(&window)) instrumentAction->trigger();
     QVERIFY(!assistantRail->isVisibleTo(&window));
     QVERIFY(monitorScroll->isVisibleTo(&window));
-    QCOMPARE(monitorScroll->width(), 220);
+    QCOMPARE(monitorScroll->width(), 300);
     auto *centralWorkspace = window.findChild<QWidget *>("centralWorkspace");
     QVERIFY(centralWorkspace);
     for (const int viewportWidth : {1152, 1280, 1366, 1440, 1600}) {
@@ -1072,30 +1103,9 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     auto *pressureValue = window.findChild<QLabel *>("carrierPressureValue");
     QVERIFY(pressureValue);
     QCOMPARE(pressureValue->text(), QString("801.0 Torr"));
-    auto *pressureFold = window.findChild<QToolButton *>("pressureDetailsToggle");
-    auto *pressureDetails = window.findChild<QLabel *>("pressureDetails");
-    QVERIFY(pressureFold && pressureDetails);
-    QVERIFY(pressureDetails->isHidden());
-    pressureFold->click();
-    QVERIFY(!pressureDetails->isHidden());
-    auto *dismissPressure = window.findChild<QToolButton *>("dismissPressureDetails");
-    QVERIFY(dismissPressure);
-    dismissPressure->click();
-    QVERIFY(!pressureFold->isChecked());
-    QVERIFY(pressureDetails->isHidden());
     QVERIFY(pressureValue->isVisibleTo(&window));
-    pressureFold->click();
-    auto *inspectPressure = window.findChild<QPushButton *>("inspectCarrierPressure");
-    QVERIFY(inspectPressure);
-    inspectPressure->click();
-    QVERIFY(visibleWidgetWithText<QLabel>(window, "运行状态"));
-    auto *explainPressure = window.findChild<QToolButton *>("explainCarrierPressure");
-    QVERIFY(explainPressure);
-    const int answerCount = localAnswers.count();
-    explainPressure->click();
-    QCOMPARE(localAnswers.count(), answerCount + 1);
-    QVERIFY(localAnswers.last().at(1).toString().contains("不能据此判断"));
-    QVERIFY(controller.deepAiEnabled());
+    QVERIFY(!window.findChild<QToolButton *>("pressureDetailsToggle"));
+    QVERIFY(!window.findChild<QLabel *>("pressureDetails"));
 
     // Exercise the real Qt step hit targets, including bounds and keyboard input.
     auto *transcript = window.findChild<ChatTranscript *>("assistantTranscript");

@@ -1,4 +1,5 @@
 #include "device/SimulatedInstrument.h"
+#include "core/MethodDraft.h"
 
 #include <QRandomGenerator>
 #include <cmath>
@@ -45,7 +46,7 @@ InstrumentTelemetry SimulatedInstrument::telemetry() const {
         gas ? "内载气" : "已关闭", 801.0, gas ? settings_.value("efcMlMin", 28.4).toDouble() : 0.0,
         settings_.value("trapTemperatureC", 85.0).toDouble(), settings_.value("tdTemperatureC", 245.0).toDouble(),
         ion ? settings_.value("ionSourceSetpointKv", 3.2).toDouble() * 1000.0 : 0.0,
-        settings_.value("rfOn").toBool() ? 1450.0 : 0.0,
+        settings_.value("rfOn").toBool() ? settings_.value("multiplierVoltageV", 1450.0).toDouble() : 0.0,
         settings_.value("diaphragmPumpOn").toBool() ? settings_.value("pumpFlowPercent", 20.0).toDouble() : 0.0, 76.0
     };
 }
@@ -61,20 +62,27 @@ CommandValidation SimulatedInstrument::validate(const InstrumentCommand &command
 QVector<SpectrumPoint> SimulatedInstrument::acquireSpectrum() {
     cancelled_ = false;
     QVector<SpectrumPoint> points;
-    points.reserve(901);
+    const double lowMass = methodParameters_.value("low_mass").toDouble(50.0);
+    const double highMass = methodParameters_.value("high_mass").toDouble(500.0);
+    const double boundedLow = qBound(0.0, lowMass, 1999.5);
+    const double boundedHigh = qBound(boundedLow + 0.5, highMass, 2000.0);
+    const int sampleCount = qBound(2, static_cast<int>((boundedHigh - boundedLow) / 0.5) + 1, 4001);
+    const double multiplierScale = qBound(0.1,
+        methodParameters_.value("multiplier").toDouble(1000.0) / 1000.0, 5.0);
+    points.reserve(sampleCount);
     const QVector<QPair<double, double>> peaks{
         {121.0, 28.0}, {182.0, 48.0}, {189.0, 22.0}, {276.0, 33.0},
         {284.0, 58.0}, {310.0, 100.0}, {410.0, 70.0}
     };
-    for (int i = 0; i <= 900; ++i) {
+    for (int i = 0; i < sampleCount; ++i) {
         if (cancelled_) return {};
-        const double mz = 50.0 + i * 0.5;
+        const double mz = boundedLow + i * 0.5;
         double intensity = 8.0 + QRandomGenerator::global()->generateDouble() * 4.0;
         for (const auto &peak : peaks) {
             const double delta = (mz - peak.first) / 0.34;
             intensity += peak.second * std::exp(-0.5 * delta * delta);
         }
-        points.push_back({mz, intensity});
+        points.push_back({mz, intensity * multiplierScale});
     }
     return points;
 }
@@ -102,6 +110,35 @@ void SimulatedInstrument::requestSetting(const QString &requestId, const QString
         }
     }
     emit settingFinished(requestId, key, true, value, {});
+}
+
+CommandValidation SimulatedInstrument::validateMethodParameters(const QJsonObject &parameters) const {
+    QString error;
+    if (!MethodDraft::validate(parameters, &error)) return {false, error};
+    return {true, "方法参数已通过校验"};
+}
+
+void SimulatedInstrument::requestMethodParameters(const QString &requestId,
+                                                  const QJsonObject &parameters) {
+    const auto validation = validateMethodParameters(parameters);
+    if (!validation.allowed) {
+        emit methodParametersFinished(requestId, false, {}, validation.reason);
+        return;
+    }
+    methodParameters_ = parameters;
+    // 模拟端把与现有仪器状态面板同义的参数同步为可见回读；这不是厂家协议映射。
+    const auto copyNumber = [this, &parameters](const char *source, const char *target, double scale = 1.0) {
+        if (parameters.contains(source)) settings_[target] = parameters.value(source).toDouble() * scale;
+    };
+    copyNumber("carrier", "efcMlMin");
+    copyNumber("td", "tdTemperatureC");
+    copyNumber("extraction", "pumpFlowPercent");
+    copyNumber("inlet", "inletFlowPercent");
+    copyNumber("source", "ionSourceSetpointKv", 0.001);
+    copyNumber("trap", "trapTemperatureC");
+    copyNumber("multiplier", "multiplierVoltageV");
+    emit stateChanged();
+    emit methodParametersFinished(requestId, true, methodParameters_, {});
 }
 
 } // namespace qitest

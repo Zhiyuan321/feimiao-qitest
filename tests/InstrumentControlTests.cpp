@@ -257,6 +257,42 @@ private slots:
         qunsetenv("QITEST_WORKSPACE_DB");
         qunsetenv("QITEST_OPERATOR_ROLE");
     }
+    void simulatorAcceptsAndUsesCompleteMethodParameters() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB", dir.filePath("method-simulator.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        const QJsonObject parameters{{"scan_mode","Fullscan"},{"carrier",1.0},{"extraction",0.0},
+            {"inlet",50.0},{"td",0.0},{"source",0.0},{"trap",85.0},{"period",10000.0},
+            {"speed",8000.0},{"rf_frequency",50.0},{"storage_mass",30.0},{"low_mass",100.0},
+            {"high_mass",102.0},{"cooling",5000.0},{"ac_frequency",590.0},
+            {"injection",380.0},{"multiplier",1000.0}};
+        QVERIFY(controller.createMethodDraft("旧版字段模拟方法", parameters));
+        MethodDefinition created;
+        for (const auto &method : controller.methods())
+            if (method.name == "旧版字段模拟方法") created = method;
+        QVERIFY(!created.id.isEmpty());
+        QCOMPARE(created.parameters.value("data_scope").toString(), QString("DEMO_SIMULATION"));
+        controller.activateMethod(created.id);
+        QCOMPARE(controller.activeMethod().id, created.id);
+        QCOMPARE(controller.confirmedMethodParameters(), parameters);
+        QCOMPARE(controller.telemetry().carrierGasFlowMlMin, 1.0);
+        QCOMPARE(controller.telemetry().extractionFlowPercent, 0.0);
+        QCOMPARE(controller.telemetry().ionTrapTemperatureC, 85.0);
+        QCOMPARE(controller.telemetry().tdTemperatureC, 0.0);
+        QCOMPARE(controller.telemetry().ionSourceVoltageV, 0.0);
+        QCOMPARE(controller.telemetry().multiplierVoltageV, 1000.0);
+        SimulatedInstrument directSimulator;
+        directSimulator.requestMethodParameters("direct-test", parameters);
+        const auto spectrum = directSimulator.acquireSpectrum();
+        QCOMPARE(spectrum.size(), 5);
+        QCOMPARE(spectrum.first().mz, 100.0);
+        QCOMPARE(spectrum.last().mz, 102.0);
+        controller.startDetection();
+        QCOMPARE(controller.phase(), AppController::Phase::Acquiring);
+        QCOMPARE(controller.liveSpectrum().size(), 0);
+        controller.cancelDetection();
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
 };
 QTEST_GUILESS_MAIN(InstrumentControlTests)
 #include "InstrumentControlTests.moc"

@@ -2,6 +2,7 @@
 
 #include "domain/Models.h"
 #include <QObject>
+#include <QJsonObject>
 
 namespace qitest {
 
@@ -35,6 +36,15 @@ public:
     // 超时表示“未知”，不是“关闭”。取消等待也不等于物理动作已经撤销。
     // 禁止盲目重发高压、泵或电源命令。
     virtual void cancelSetting(const QString &) {}
+    // 方法参数与单项面板控制分开建模。厂家适配器应逐字段完成单位、范围、
+    // 报文和回读映射；未接入前默认拒绝，不能把本地保存冒充设备下发。
+    virtual QJsonObject confirmedMethodParameters() const { return {}; }
+    virtual CommandValidation validateMethodParameters(const QJsonObject &) const {
+        return {false, "厂家尚未接入方法参数接口"};
+    }
+    virtual void requestMethodParameters(const QString &requestId, const QJsonObject &) {
+        emit methodParametersFinished(requestId, false, {}, "厂家尚未接入方法参数接口");
+    }
 signals:
     // Cached telemetry/settings changed, including loss of connection/freshness.
     void stateChanged();
@@ -42,6 +52,9 @@ signals:
     // 仅“写入串口成功”或“命令已收到”不能冒充物理状态确认。
     void settingFinished(const QString &requestId, const QString &key,
                          bool success, const QVariant &readback, const QString &error);
+    // success=true 必须附带设备确认或模拟端确认的完整参数回读。
+    void methodParametersFinished(const QString &requestId, bool success,
+                                  const QJsonObject &readback, const QString &error);
 };
 
 } // namespace qitest

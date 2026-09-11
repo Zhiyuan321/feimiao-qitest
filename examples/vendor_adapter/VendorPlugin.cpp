@@ -1,4 +1,5 @@
 #include "device/IInstrumentPlugin.h"
+#include "core/MethodDraft.h"
 
 // 厂家接入模板：故意拒绝操作，不是可用硬件驱动。
 // 在自己的适配器中补充缓存回读、校验、工作线程和带请求号的异步回执。
@@ -15,13 +16,27 @@ public:
     }
     QVector<qitest::SpectrumPoint> acquireSpectrum() override { return {}; }
     void cancel() override {}
+    QJsonObject confirmedMethodParameters() const override { return confirmedMethodParameters_; }
+    qitest::CommandValidation validateMethodParameters(const QJsonObject &parameters) const override {
+        QString error;
+        if (!qitest::MethodDraft::validate(parameters, &error)) return {false, error};
+        return {false, "请在厂家适配器中完成字段与新协议的映射"};
+    }
+    void requestMethodParameters(const QString &requestId, const QJsonObject &) override {
+        emit methodParametersFinished(requestId, false, {},
+            "方法参数协议映射尚未配置");
+    }
     // Implement validateSetting, requestSetting, confirmedSettings and
-    // cancelSetting using the documented SDK. Never block the GUI thread.
+    // cancelSetting using the documented SDK. Method transport must preserve
+    // every JSON field and emit the complete readback after the device confirms.
+    // Never block the GUI thread.
+private:
+    QJsonObject confirmedMethodParameters_;
 };
 
 class VendorPlugin final : public QObject, public qitest::IInstrumentPlugin {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID "cn.feimiao.InstrumentPlugin/1.1")
+    Q_PLUGIN_METADATA(IID "cn.feimiao.InstrumentPlugin/1.2")
     Q_INTERFACES(qitest::IInstrumentPlugin)
 public:
     qitest::IInstrumentAdapter *createAdapter() override { return new VendorAdapter; }

@@ -48,6 +48,7 @@
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QScreen>
 #include <QSpinBox>
 #include "ui/ChatTranscript.h"
@@ -1031,63 +1032,8 @@ QWidget *MainWindow::createMonitorPanel() {
     header->addWidget(close);
     layout->addLayout(header);
 
-    auto *alarm = new QFrame;
-    alarm->setObjectName("carrierPressureCard");
-    alarm->setProperty("sciRole", "monitorGroup");
-    auto *alarmLayout = new QVBoxLayout(alarm);
-    alarmLayout->setContentsMargins(10, 8, 10, 8);
-    alarmLayout->setSpacing(2);
-    auto *alarmHeader = new QHBoxLayout;
-    alarmHeader->addWidget(makeLabel("载气压力说明", "panelTitle"));
-    alarmHeader->addStretch();
-    auto *fold = new QToolButton;
-    fold->setObjectName("pressureDetailsToggle");
-    fold->setText("?");
-    fold->setToolTip("查看载气压力说明；收起不会改变设备状态");
-    fold->setCheckable(true);
-    fold->setFixedSize(28, 28);
-    fold->setProperty("sciRole", "utility");
-    auto *dismiss = new QToolButton;
-    dismiss->setObjectName("dismissPressureDetails");
-    dismiss->setText("×");
-    dismiss->setToolTip("收起说明，不消除报警或改变设备状态");
-    dismiss->setFixedSize(28, 28);
-    dismiss->setProperty("sciRole", "utility");
-    alarmHeader->addWidget(dismiss);
-    alarmLayout->addLayout(alarmHeader);
     auto *alarmDetail = makeLabel("—", "readoutValue");
     alarmDetail->setObjectName("carrierPressureValue");
-    auto *explanation = makeLabel("阈值未配置，需按厂家规范核验。", "metadata");
-    explanation->setObjectName("pressureDetails");
-    explanation->setWordWrap(true);
-    explanation->hide();
-    alarmLayout->addWidget(explanation);
-    auto *alarmActions = new QHBoxLayout;
-    auto *inspect = new QPushButton("查看状态");
-    inspect->setObjectName("inspectCarrierPressure");
-    inspect->setProperty("sciRole", "quietAction");
-    inspect->setToolTip("直接打开仪器运行状态，不改变设备开关");
-    auto *explain = new QToolButton;
-    explain->setObjectName("explainCarrierPressure");
-    explain->setText("?");
-    explain->setToolTip("解释载气压力与下一步，不加载大模型");
-    explain->setAccessibleName("载气压力操作说明");
-    explain->setProperty("sciRole", "utility");
-    explain->setFixedSize(28, 28);
-    alarmActions->addWidget(inspect, 1);
-    alarmActions->addWidget(explain);
-    alarmLayout->addLayout(alarmActions);
-    connect(fold, &QToolButton::toggled, explanation, [explanation, alarm](bool expanded) {
-        alarm->setVisible(expanded);
-        explanation->setVisible(expanded);
-    });
-    connect(dismiss, &QToolButton::clicked, fold, [fold] { fold->setChecked(false); });
-    connect(inspect, &QPushButton::clicked, this, [this] { openSettingsModule("仪器配置", "运行状态"); });
-    connect(explain, &QToolButton::clicked, this, [this] {
-        setAssistantVisible(true);
-        controller_->explainFeature("载气压力");
-    });
-    alarm->hide();
 
     auto group = [](const QString &title, const QList<QWidget *> &rows) {
         auto *frame = new QFrame;
@@ -1102,11 +1048,12 @@ QWidget *MainWindow::createMonitorPanel() {
     QMap<QString, QLabel *> readings;
     const auto reading = [&readings](const QString &key, const QString &name, const QString &unit) {
         auto *row = new QWidget;
-        auto *line = new QHBoxLayout(row); line->setContentsMargins(0,0,0,0); line->setSpacing(4);
+        auto *line = new QHBoxLayout(row); line->setContentsMargins(0,0,0,0); line->setSpacing(8);
         line->addWidget(makeLabel(name, "metadata")); line->addStretch();
         auto *value = makeLabel("—", "readoutValue"); value->setStyleSheet("font-size:18px;");
+        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        value->setProperty("displayUnit", unit);
         line->addWidget(value);
-        if(!unit.isEmpty()) {auto *unitLabel=makeLabel(unit,"metadata");unitLabel->setObjectName("readoutUnit");line->addWidget(unitLabel);}
         row->setMinimumHeight(28);
         readings[key] = value;
         readings[key]->setProperty("telemetryKey", key);
@@ -1122,7 +1069,6 @@ QWidget *MainWindow::createMonitorPanel() {
     pressureLayout->addStretch();
     alarmDetail->setStyleSheet("font-size:18px;");
     pressureMeasurement->addWidget(alarmDetail);
-    pressureMeasurement->addWidget(fold);
     pressureLayout->addLayout(pressureMeasurement);
     layout->addWidget(group("分子泵", {
         reading("pump", "转速", "RPM"),
@@ -1138,7 +1084,6 @@ QWidget *MainWindow::createMonitorPanel() {
         reading("ion", "离子源电压", "V"), reading("multiplier", "倍增器", "V"),
         reading("extraction", "抽气流速", "%"), reading("syringe", "注射泵剩余", "%")
     }));
-    layout->addWidget(alarm);
     // Read cached adapter state only while visible. No disk reads, model calls,
     // widget reconstruction, or repaint when values have not changed.
     const auto refreshReadings = [this, readings, alarmDetail] {
@@ -1160,7 +1105,9 @@ QWidget *MainWindow::createMonitorPanel() {
             {"carrier", telemetry.carrierGasMode}};
         for (auto it = readings.begin(); it != readings.end(); ++it) {
             const QString value = health.connected ? values.value(it.key()) : "—";
-            if (it.value()->text() != value) it.value()->setText(value);
+            const QString unit = it.value()->property("displayUnit").toString();
+            const QString display = value == "—" || unit.isEmpty() ? value : value + " " + unit;
+            if (it.value()->text() != display) it.value()->setText(display);
         }
         const QString pressure = health.connected
             ? measurementText(telemetry.carrierGasPressureTorr, 'f', 1) + " Torr" : "未连接";
@@ -1183,8 +1130,10 @@ QWidget *MainWindow::createMonitorPanel() {
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scroll->verticalScrollBar()->setSingleStep(24);
     scroll->setMinimumWidth(0);
-    scroll->setMaximumWidth(290);
+    scroll->setMinimumWidth(280);
+    scroll->setMaximumWidth(330);
     scroll->setWidget(panel);
     return scroll;
 }
@@ -2578,7 +2527,7 @@ void MainWindow::updateWorkspaceLayout() {
     // At narrow widths both tools share one vertical column. Neither overlays nor
     // squeezes the chart; reflow only at a breakpoint, without width animations.
     const int assistantWidth = 260;
-    const int monitorWidth = 220;
+    const int monitorWidth = 300;
     const bool compact = false;
     if (compact != compactRails_) {
         compactRails_ = compact;

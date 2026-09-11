@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="${0:A:h}"
 QT_DIR="$PROJECT_DIR/.tools/qt512-host/5.12.12/clang_64"
 DELIVERY_DIR="${QITEST_MAC_DELIVERY_DIR:-$PROJECT_DIR/../05-交付/Mac}"
-APP_SOURCE="$PROJECT_DIR/build-macos-qt512/飞秒质谱工作站.app"
+APP_SOURCE="${QITEST_MAC_APP_SOURCE:-$PROJECT_DIR/build-macos-qt512/飞秒质谱工作站.app}"
 APP_TARGET="$DELIVERY_DIR/飞秒质谱工作站.app"
 
 if [[ "${QITEST_SKIP_BUILD:-0}" != 1 ]]; then

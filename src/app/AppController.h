@@ -54,6 +54,7 @@ public:
     bool canTune() const { return sessionRole_ == SessionRole::Administrator || sessionRole_ == SessionRole::Engineer; }
     QVariantMap pumpStatus() const;
     QVariantMap instrumentSettings() const { return instrumentSettings_; }
+    QJsonObject confirmedMethodParameters() const { return instrument_->confirmedMethodParameters(); }
     QString sessionSummary() const;
     bool fullMethodAccess() const { return sessionRole_ == SessionRole::Administrator
         || (sessionRole_ == SessionRole::OfflineDemo && instrument_->descriptor().simulation); }
@@ -185,6 +186,9 @@ private:
     QString pendingSettingKey_;
     QVariant pendingSettingValue_;
     QTimer settingTimeout_;
+    QString pendingMethodRequestId_;
+    QString pendingMethodId_;
+    QJsonObject pendingMethodParameters_;
     // 默认自动：简单问题本地处理，复杂问题按需加载模型。
     AiMode aiMode_ = AiMode::Automatic;
     ArchiveImportWorker *importWorker_ = nullptr;

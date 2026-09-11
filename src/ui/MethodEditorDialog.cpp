@@ -6,13 +6,14 @@
 #include <QFile>
 #include <QSaveFile>
 #include <QJsonDocument>
-#include <QFormLayout>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QScrollArea>
-#include <QTabWidget>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QMap>
 #include <QGuiApplication>
@@ -23,48 +24,66 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
         std::function<bool(const QString &,const QJsonObject &)> persist,QWidget *parent,bool fullAccess):QDialog(parent) {
     setObjectName("methodParameterEditor"); setAttribute(Qt::WA_DeleteOnClose); setWindowTitle("方法参数");
     const auto available = QGuiApplication::primaryScreen()->availableGeometry();
-    resize(qMin(720, available.width() - 24), qMin(650, available.height() - 48));
-    // 显式绘制页签和内容底色，避免旧 Windows 原生样式出现黑色背景。
+    resize(qMin(940, available.width() - 24), qMin(690, available.height() - 48));
+    setMinimumSize(qMin(760, available.width() - 24), qMin(620, available.height() - 48));
     setStyleSheet("QDialog#methodParameterEditor { background: #e8efed; }"
-                  "QTabWidget::pane { background: #e8efed; border: 0; }"
-                  "QWidget#methodFields { background: #e8efed; }"
-                  "QTabBar::tab { background: #eff5f3; color: #1d2422; padding: 8px 14px; }"
-                  "QTabBar::tab:selected { background: #d9efea; color: #007f80; }");
+                  "QGroupBox { color: #1d2422; font-weight: 600; border: 1px solid #c8d8d4;"
+                  " border-radius: 10px; margin-top: 12px; padding-top: 10px; background: #f4f8f7; }"
+                  "QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 5px; }"
+                  "QLabel#methodDraftHint { color: #52615e; }"
+                  "QLabel#methodDraftFeedback { color: #9a4e18; }");
     auto *layout=new QVBoxLayout(this);
-    auto *name=new QLineEdit(initialName); name->setMaxLength(16); name->setObjectName("draftMethodName"); name->setPlaceholderText("方法名称（2–16 字）"); layout->addWidget(name);
+    auto *titleRow=new QHBoxLayout;
+    auto *name=new QLineEdit(initialName); name->setMaxLength(16); name->setObjectName("draftMethodName"); name->setPlaceholderText("方法名称（2–16 字）");
     name->setReadOnly(!fullAccess);
-    auto *notice=new QLabel("扫描模式"); notice->setToolTip("空白表示未指定；保存参数不会直接下发仪器。"); layout->addWidget(notice);
-    auto *mode=new RoundedComboBox; mode->setObjectName("methodScanMode"); mode->addItems({"Fullscan","SIM","MS/MS"}); mode->setCurrentText(initial.value("scan_mode").toString("Fullscan")); layout->addWidget(mode);
-    auto *tabs=new QTabWidget(this); tabs->setObjectName("methodParameterTabs");
-    if(fullAccess) layout->addWidget(tabs,1); else tabs->hide();
-    QMap<QString,QLineEdit *> edits;
-    for(const QString &group:{"基本","扫描","SIM","MS/MS"}) {
-        // 每页最多五项，底部操作始终在页签之外，不依赖拖动滚动条。
-        QWidget *body=nullptr; QFormLayout *form=nullptr; int fieldIndex=0;
-        for(const auto &field:MethodDraft::fields()) if(field.group==group && (fullAccess || field.key=="injection")) {
-            if(fieldIndex % 5 == 0) {
-                body=new QWidget; body->setObjectName("methodFields"); form=new QFormLayout(body);
-                form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-                form->setRowWrapPolicy(QFormLayout::DontWrapRows);
-                form->setVerticalSpacing(6);
-                if(fullAccess) tabs->addTab(body, group + (fieldIndex ? QString::number(fieldIndex / 5 + 1) : QString{}));
-                else layout->addWidget(body);
-            }
-            ++fieldIndex;
-            auto *edit=new QLineEdit; edit->setObjectName("method_"+field.key); edit->setFixedHeight(38); edit->setMaxLength(32);
-            edit->setPlaceholderText("未指定");
-            if(initial.contains(field.key)) edit->setText(QString::number(initial.value(field.key).toDouble(),'g',17));
-            form->addRow(field.label+"（"+(field.unit.isEmpty()?QString("单位待确认"):field.unit)+"）",edit); edits.insert(field.key,edit);
-            connect(edit,&QLineEdit::textChanged,this,[this]{dirty_=true;});
-        }
+    titleRow->addWidget(name,1); layout->addLayout(titleRow);
+    if (!fullAccess) {
+        auto *notice=new QLabel("普通账号只可另存扫描模式和进样时间；其他参数沿用管理员方法。");
+        notice->setObjectName("methodDraftHint"); notice->setWordWrap(true); layout->addWidget(notice);
     }
+    QJsonObject displayed=fullAccess ? MethodDraft::defaultParameters() : initial;
+    for(auto it=initial.begin();it!=initial.end();++it) displayed.insert(it.key(),it.value());
+    auto *mode=new RoundedComboBox; mode->setObjectName("methodScanMode"); mode->addItems({"Fullscan","SIM","MS/MS"});
+    mode->setCurrentText(displayed.value("scan_mode").toString("Fullscan"));
+    QMap<QString,QLineEdit *> edits;
+    const auto createGroup=[&](const QString &title,const QString &fieldGroup,int columns,bool includeMode=false) {
+        auto *box=new QGroupBox(title); auto *grid=new QGridLayout(box);
+        grid->setHorizontalSpacing(12); grid->setVerticalSpacing(7);
+        int fieldIndex=includeMode ? 1 : 0;
+        if(includeMode) {
+            grid->addWidget(new QLabel("扫描模式"),0,0); grid->addWidget(mode,0,1);
+            grid->setColumnStretch(1,1);
+        }
+        for(const auto &field:MethodDraft::fields()) if(field.group==fieldGroup && (fullAccess || field.key=="injection")) {
+            const int row=fieldIndex/columns; const int column=(fieldIndex%columns)*2; ++fieldIndex;
+            auto *label=new QLabel(field.unit.isEmpty() ? field.label : field.label+"（"+field.unit+"）");
+            auto *edit=new QLineEdit; edit->setObjectName("method_"+field.key); edit->setMinimumHeight(44); edit->setMaxLength(32);
+            if(displayed.contains(field.key)) edit->setText(QString::number(displayed.value(field.key).toDouble(),'g',17));
+            grid->addWidget(label,row,column); grid->addWidget(edit,row,column+1); grid->setColumnStretch(column+1,1);
+            edits.insert(field.key,edit); connect(edit,&QLineEdit::textChanged,this,[this]{dirty_=true;});
+        }
+        return box;
+    };
+    if(fullAccess) layout->addWidget(createGroup("基本设置","基本",2));
+    layout->addWidget(createGroup(fullAccess ? "质谱设置" : "可调整参数","扫描",fullAccess ? 3 : 1,true),1);
+    auto *extensions=new QStackedWidget; extensions->setObjectName("methodModeParameters");
+    auto *fullscanPlaceholder=new QWidget;
+    extensions->addWidget(fullscanPlaceholder);
+    extensions->addWidget(createGroup("SIM 参数","SIM",2));
+    extensions->addWidget(createGroup("MS/MS 参数","MS/MS",3));
+    layout->addWidget(extensions); extensions->setVisible(false);
+    const auto updateMode=[=](const QString &value){
+        extensions->setCurrentIndex(value=="SIM" ? 1 : value=="MS/MS" ? 2 : 0);
+        extensions->setVisible(fullAccess && value!="Fullscan");
+    };
+    updateMode(mode->currentText());
+    connect(mode,&QComboBox::currentTextChanged,this,[=](const QString &value){dirty_=true;updateMode(value);});
     auto *feedback=new QLabel; feedback->setWordWrap(true); feedback->setObjectName("methodDraftFeedback"); layout->addWidget(feedback);
     auto *row=new QHBoxLayout; layout->addLayout(row);
     auto *load=new QPushButton("打开文件"); load->setObjectName("loadMethodDraft"); auto *exportButton=new QPushButton("导出文件"); exportButton->setObjectName("exportMethodDraft"); auto *save=new QPushButton("保存新版本"); auto *cancel=new QPushButton("取消");
     save->setObjectName("saveMethodDraft"); save->setProperty("sciRole","primary");
     for(auto *b:{load,exportButton,save,cancel}) { b->setMinimumHeight(44); row->addWidget(b); }
     connect(name,&QLineEdit::textChanged,this,[this]{dirty_=true;});
-    connect(mode,&QComboBox::currentTextChanged,this,[this]{dirty_=true;});
     const auto collect=[=](QJsonObject *values) {
         if(name->text().trimmed().size()<2) {feedback->setText("请填写 2–16 字的方法名称");return false;}
         QJsonObject result=fullAccess ? QJsonObject{} : initial;

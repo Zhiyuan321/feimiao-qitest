@@ -206,6 +206,12 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
             "system-bootstrap", &workspaceError);
         if (!method.id.isEmpty()) workspace_->activateMethod(method.id, "system-bootstrap", &workspaceError);
     }
+    // 仅恢复模拟器自己的活动方法。真实设备仍须经过显式协议映射、确认和审计。
+    if (workspace_ && instrument_->descriptor().simulation) {
+        const QJsonObject parameters = workspace_->activeMethod().parameters.value("method_parameters").toObject();
+        if (!parameters.isEmpty() && instrument_->validateMethodParameters(parameters).allowed)
+            instrument_->requestMethodParameters("startup-simulation-restore", parameters);
+    }
     QStringList databaseCandidates;
     const QString configured = qEnvironmentVariable("QITEST_LIBRARY_DB");
     if (!configured.isEmpty()) databaseCandidates << configured;
@@ -316,6 +322,23 @@ void AppController::bindInstrumentSignals() {
             emit instrumentCommandPending(key, false);
             emit notice(acknowledged ? "操作已确认"
                 : "操作未确认：" + (error.isEmpty() ? QString("设备回读与设定不一致") : error));
+        });
+    connect(instrument_.get(), &IInstrumentAdapter::methodParametersFinished, this,
+        [this](const QString &id, bool success, const QJsonObject &readback, const QString &error) {
+            if (id != pendingMethodRequestId_ || id.isEmpty()) return;
+            const QString methodId = pendingMethodId_;
+            const QJsonObject expected = pendingMethodParameters_;
+            pendingMethodRequestId_.clear(); pendingMethodId_.clear(); pendingMethodParameters_ = {};
+            const bool acknowledged = success && readback == expected;
+            QString storageError;
+            const bool activated = acknowledged && workspace_
+                && workspace_->activateMethod(methodId, sessionOperator_, &storageError);
+            if (workspace_) workspace_->appendAudit(sessionOperator_,
+                activated ? "SIM_METHOD_CONFIRMED" : "SIM_METHOD_FAILED", methodId,
+                id + "; " + (error.isEmpty() ? storageError : error).left(300));
+            if (activated) emit methodsChanged();
+            emit notice(activated ? "方法参数已确认，当前方法已更新"
+                : "方法未激活：" + (error.isEmpty() ? QString("参数回读不一致") : error));
         });
 }
 
@@ -790,17 +813,36 @@ bool AppController::createMethodDraft(const QString &name, const QJsonObject &pa
     }
     QString error;
     if (!MethodDraft::validate(parameters,&error)) {emit notice(error);return false;}
-    const auto method=workspace_->createMethodVersion(name,{{"data_scope","OFFLINE_DRAFT"},{"method_parameters",parameters}},sessionOperator_,&error);
+    const bool simulation = instrument_->descriptor().simulation;
+    const auto method=workspace_->createMethodVersion(name,
+        {{"data_scope", simulation ? "DEMO_SIMULATION" : "OFFLINE_DRAFT"},
+         {"instrument_contract", simulation ? "sim-contract-1" : "UNMAPPED"},
+         {"method_parameters",parameters}},sessionOperator_,&error);
     if(method.id.isEmpty()){emit notice("保存失败："+error);return false;}
-    emit methodsChanged();emit notice("方法参数已保存，尚未下发仪器");return true;
+    emit methodsChanged();emit notice(simulation
+        ? "方法参数已保存；选择“设为当前方法”后应用"
+        : "方法参数已保存，尚未映射或下发真实仪器");return true;
 }
 void AppController::activateMethod(const QString &methodId) {
     if (!AuthorizationPolicy::allows(sessionRole_, Permission::ManageMethods)) {
         emit notice("当前角色无权激活方法版本"); return;
     }
     QString error;
-    for(const auto &method:methods()) if(method.id==methodId && method.parameters.value("data_scope")=="OFFLINE_DRAFT") {
-        emit notice("此方法尚未验证；扫描参数与仪器协议映射未确认，不能用于采集");return;
+    for(const auto &method:methods()) if(method.id==methodId) {
+        if(method.parameters.value("data_scope")=="OFFLINE_DRAFT") {
+            emit notice("此方法尚未验证；扫描参数与仪器协议映射未确认，不能用于采集");return;
+        }
+        const QJsonObject parameters = method.parameters.value("method_parameters").toObject();
+        if (instrument_->descriptor().simulation && !parameters.isEmpty()) {
+            if (!pendingMethodRequestId_.isEmpty()) { emit notice("请等待上一套方法参数确认完成"); return; }
+            const auto validation = instrument_->validateMethodParameters(parameters);
+            if (!validation.allowed) { emit notice("方法参数校验未通过：" + validation.reason); return; }
+            pendingMethodRequestId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            pendingMethodId_ = methodId; pendingMethodParameters_ = parameters;
+            instrument_->requestMethodParameters(pendingMethodRequestId_, parameters);
+            return;
+        }
+        break;
     }
     if (!workspace_ || !workspace_->activateMethod(methodId, sessionOperator_, &error)) {
         emit notice("方法激活失败：" + error); return;

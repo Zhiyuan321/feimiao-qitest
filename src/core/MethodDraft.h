@@ -6,8 +6,6 @@
 
 namespace qitest {
 struct MethodField { QString key, label, unit, group; };
-// Document-backed names. Empty units are deliberately not inferred from sample
-// numbers. These are editable records, not validated instrument settings.
 class MethodDraft {
 public:
     static const QVector<MethodField> &fields() {
@@ -15,8 +13,9 @@ public:
             {"carrier","载气流速","mL/min","基本"},{"td","TD 温度","℃","基本"},
             {"extraction","抽气流速","%","基本"},{"inlet","进气流速","%","基本"},
             {"source","离子源电压","V","基本"},{"trap","离子阱温度","℃","基本"},
-            {"period","周期","","扫描"},{"speed","扫描速度","","扫描"},
-            {"sampling","采样频率","","扫描"},{"storage_mass","存储质量数","m/z","扫描"},
+            {"period","周期","","扫描"},{"speed","扫描频率","","扫描"},
+            {"rf_frequency","RF 频率","","扫描"},
+            {"storage_mass","存储质量数","m/z","扫描"},
             {"low_mass","低质量数","m/z","扫描"},{"high_mass","高质量数","m/z","扫描"},
             {"cooling","冷却时间","","扫描"},{"ac_frequency","AC 频率","","扫描"},
             {"injection","进样时间","ms","扫描"},{"multiplier","倍增器电压","V","扫描"},
@@ -28,6 +27,12 @@ public:
             {"msms_rf","隔离 RF 质量数","m/z","MS/MS"},{"fragment_factor","碎裂系数","","MS/MS"},
             {"msms_width","隔离范围","","MS/MS"}};
         return values;
+    }
+    static QJsonObject defaultParameters() {
+        return {{"scan_mode","Fullscan"},{"carrier",1.0},{"extraction",0.0},{"inlet",50.0},
+            {"td",0.0},{"source",0.0},{"trap",85.0},{"period",10000.0},{"speed",8000.0},
+            {"rf_frequency",50.0},{"storage_mass",30.0},{"low_mass",40.0},{"high_mass",300.0},
+            {"cooling",5000.0},{"ac_frequency",590.0},{"injection",380.0},{"multiplier",1000.0}};
     }
     static bool validate(const QJsonObject &values, QString *error) {
         const auto fail=[error](const QString &s){ if(error)*error=s; return false; };

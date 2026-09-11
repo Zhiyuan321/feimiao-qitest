@@ -11,4 +11,4 @@ public:
     virtual IInstrumentAdapter *createAdapter() = 0;
 };
 }
-Q_DECLARE_INTERFACE(qitest::IInstrumentPlugin, "cn.feimiao.InstrumentPlugin/1.1")
+Q_DECLARE_INTERFACE(qitest::IInstrumentPlugin, "cn.feimiao.InstrumentPlugin/1.2")

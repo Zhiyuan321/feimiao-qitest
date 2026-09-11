@@ -29,8 +29,9 @@
 3. health / telemetry / confirmedSettings 返回工作线程维护的实际回读缓存；不要阻塞 GUI。
 4. validateSetting 检查能力、连接、单位、互锁及厂家安全范围。
 5. requestSetting 保存请求号，异步发送；收到实际状态后发 settingFinished。
-6. 控制器要求 requestId、key、readback 对应原请求；超时不自动重发。
-7. 最后才联调高压、泵等危险动作，台架与设备互锁必不可少。
+6. 方法参数走 validateMethodParameters / requestMethodParameters；逐字段确认单位、范围、报文和实际回读后，再发 methodParametersFinished。不要直接照搬模拟器数值。
+7. 控制器要求 requestId、key、readback 对应原请求；超时不自动重发。
+8. 最后才联调高压、泵等危险动作，台架与设备互锁必不可少。
 
 ## 建议断点与日志
 
@@ -52,4 +53,4 @@ $env:QITEST_INSTRUMENT_PLUGIN = "C:\Dev\driver\QITestVendorAdapter.dll"
 详细契约见 ../../docs/integration/VENDOR_INSTRUMENT_INTEGRATION.md。
 对应 tests/InstrumentControlTests.cpp；这组测试通过不代表实机通过。
 
-插件ABI已升级为1.1；接口新增readOnly、connectionSummary、stateChanged，宿主与插件必须同步重编译。
+插件 ABI 已升级为 1.2；接口新增方法参数校验、异步请求和完整回读，宿主与插件必须同步重编译。
