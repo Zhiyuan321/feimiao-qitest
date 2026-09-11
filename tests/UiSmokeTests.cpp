@@ -209,14 +209,23 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto *tcpPort = window.findChild<QSpinBox *>("networkPort");
     auto *listen = window.findChild<QPushButton *>("networkListen");
     auto *stop = window.findChild<QPushButton *>("networkStop");
-    QVERIFY(panel && table && address && tcpPort && listen && stop); QVERIFY(panel->isVisibleTo(&window));
+    auto *exportButton = window.findChild<QPushButton *>("networkExport");
+    QVERIFY(panel && table && address && tcpPort && listen && stop && exportButton); QVERIFY(panel->isVisibleTo(&window));
     QCOMPARE(tcpPort->buttonSymbols(), QAbstractSpinBox::NoButtons);
     QCOMPARE(address->lineEdit()->cursorPosition(), 0);
     QVERIFY(address->lineEdit()->fontMetrics().horizontalAdvance(address->currentText()) < address->lineEdit()->width());
+    for (auto *button : {listen, stop, exportButton}) {
+        QVERIFY2(button->width() >= button->fontMetrics().horizontalAdvance(button->text()) + 24,
+            qPrintable(button->text() + "按钮宽度不足"));
+        QVERIFY(window.rect().contains(QRect(button->mapTo(&window, QPoint()), button->size())));
+    }
     QVERIFY(!table->showGrid());
     QTcpServer reservation; QVERIFY(reservation.listen(QHostAddress::LocalHost));
     const auto portNumber = reservation.serverPort(); reservation.close();
     address->setCurrentText("127.0.0.1"); tcpPort->setValue(portNumber); listen->click();
+    auto *portEditor = tcpPort->findChild<QLineEdit *>(); QVERIFY(portEditor);
+    QVERIFY2(portEditor->fontMetrics().horizontalAdvance(QString::number(portNumber)) < portEditor->width(),
+        "TCP端口数字未被完整容纳");
     QVERIFY(controller.networkStatus().value("listening").toBool());
     QVERIFY(controller.rs485Status().value("connected").toBool());
     QVERIFY(controller.instrumentReadOnly()); QVERIFY(!controller.instrumentDescriptor().simulation);

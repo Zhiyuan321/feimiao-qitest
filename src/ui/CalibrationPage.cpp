@@ -103,7 +103,9 @@ CalibrationPage::CalibrationPage(QWidget *parent) : QWidget(parent) {
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers); table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->horizontalHeader()->setMinimumSectionSize(34);
     table_->horizontalHeader()->setSectionResizeMode(0,QHeaderView::ResizeToContents);
-    for (int i=1;i<4;++i) table_->horizontalHeader()->setSectionResizeMode(i,QHeaderView::Stretch);
+    table_->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
+    table_->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Stretch);
+    table_->horizontalHeader()->setSectionResizeMode(3,QHeaderView::ResizeToContents);
     table_->setToolTip("勾选参与拟合；双击数值编辑原始点。取消勾选不会删除数据。");
     body->addWidget(table_);
     auto *curve = new QFrame;
@@ -182,7 +184,7 @@ void CalibrationPage::refreshFit() {
         const double x=internal && usable ? r.concentration/r.internalConcentration:r.concentration;
         const double y=internal && usable ? r.response/r.internalResponse:r.response;
         const QStringList values{usable ? QString::number(x,'g',7):"—", usable ? QString::number(y,'g',7):"—",
-            evaluated.fit.valid && r.included && usable ? QString::number(y-evaluated.fit.slope*x-evaluated.fit.intercept,'g',6):"—"};
+            evaluated.fit.valid && r.included && usable ? QString::number(y-evaluated.fit.slope*x-evaluated.fit.intercept,'g',4):"—"};
         for(int c=1;c<4;++c) {
             auto *item=table_->item(i,c); if(!item) { item=new QTableWidgetItem; table_->setItem(i,c,item); }
             item->setText(values[c-1]); item->setTextAlignment(Qt::AlignRight|Qt::AlignVCenter);

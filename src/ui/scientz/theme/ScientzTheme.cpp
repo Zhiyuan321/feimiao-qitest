@@ -66,6 +66,7 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#networkConnectionPanel QComboBox, QWidget#networkConnectionPanel QSpinBox,
         QWidget#networkConnectionPanel QPushButton, QTableWidget#networkReadings { font-size: 13px; }
         QSpinBox#networkPort { padding: 0 6px; }
+        QSpinBox#networkPort::up-button, QSpinBox#networkPort::down-button { width: 0; height: 0; border: 0; }
         QTableWidget#rs485Readings QHeaderView::section { font-size: 13px; padding: 6px; }
         QTableWidget#networkReadings QHeaderView::section { font-size: 13px; padding: 6px; }
         QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; border-radius: 8px; margin-right: 4px; padding: 8px 10px; min-width: 210px; min-height: 24px; }

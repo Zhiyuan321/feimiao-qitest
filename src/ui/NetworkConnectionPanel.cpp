@@ -19,6 +19,7 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     auto *layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(6);
     QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     auto *row = new QHBoxLayout;
+    row->setSpacing(6);
     auto *addresses = new QComboBox; addresses->setObjectName("networkAddress"); addresses->setEditable(true);
     addresses->addItem("0.0.0.0");
     for (const auto &address : QNetworkInterface::allAddresses())
@@ -30,12 +31,14 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     addresses->lineEdit()->setCursorPosition(0); addresses->lineEdit()->deselect();
     auto *port = new QSpinBox; port->setObjectName("networkPort"); port->setRange(1, 65535);
     port->setValue(preferences.value("network/port", 11000).toInt());
-    port->setButtonSymbols(QAbstractSpinBox::NoButtons); port->setAlignment(Qt::AlignCenter); port->setFixedWidth(72); port->setFixedHeight(36);
+    port->setButtonSymbols(QAbstractSpinBox::NoButtons); port->setAlignment(Qt::AlignCenter); port->setFixedWidth(64); port->setFixedHeight(36);
     auto *start = new QPushButton("监听"); start->setObjectName("networkListen");
     auto *stop = new QPushButton("停止"); stop->setObjectName("networkStop");
     auto *save = new QPushButton("导出报文"); save->setObjectName("networkExport");
-    start->setFixedSize(54, 36); stop->setFixedSize(48, 36); save->setFixedSize(68, 36);
-    row->addWidget(new QLabel("本机IP")); row->addWidget(addresses, 1);
+    start->setFixedSize(52, 36); stop->setFixedSize(54, 36); save->setFixedSize(80, 36);
+    auto *addressLabel = new QLabel("IP");
+    addressLabel->setToolTip("本机监听地址");
+    row->addWidget(addressLabel); row->addWidget(addresses);
     row->addWidget(new QLabel("端口")); row->addWidget(port); row->addWidget(start); row->addWidget(stop); row->addWidget(save);
     layout->addLayout(row);
     auto *stale = new QSpinBox; stale->setObjectName("networkStaleSeconds"); stale->setRange(1, 3600);
