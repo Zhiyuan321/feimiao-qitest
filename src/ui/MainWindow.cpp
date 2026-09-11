@@ -1433,12 +1433,12 @@ QWidget *MainWindow::createSettingsPage() {
         button->setText(controls[i] + (enabled ? " 已开启" : " 已关闭"));
         button->setCheckable(true);
         button->setIcon(commandIcon(controlIcons[i]));
-        button->setIconSize(QSize(28, 28));
+        button->setIconSize(QSize(26, 26));
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setProperty("sciRole", "controlTile");
         button->setChecked(enabled);
-        button->setMinimumSize(110, 78);
-        button->setMaximumHeight(84);
+        button->setMinimumSize(110, 88);
+        button->setMaximumHeight(94);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         manualGrid->addWidget(button, i / 3, i % 3);
         button->setProperty("instrumentControl", true);
@@ -1876,9 +1876,8 @@ QWidget *MainWindow::createReportPage() {
     reportCandidateTable_ = new QTableWidget(0, 4);
     reportCandidateTable_->setObjectName("reportScreeningResults");
     polishDataTable(reportCandidateTable_);
-    reportCandidateTable_->setHorizontalHeaderLabels({"物质名称", "浓度\nμg/mL", "证据", "筛查结果"});
-    // Two text lines plus the shared header's 8px top/bottom padding.
-    reportCandidateTable_->horizontalHeader()->setFixedHeight(58);
+    reportCandidateTable_->setHorizontalHeaderLabels({"物质名称", "浓度 (μg/mL)", "证据", "筛查结果"});
+    reportCandidateTable_->horizontalHeader()->setFixedHeight(44);
     reportCandidateTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     reportCandidateTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     reportCandidateTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -3069,13 +3068,13 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
     } else if (module == "视图") {
         description = "采集与分析保留 TIC、质谱图、EIC 三张曲线；候选结果统一在生成报告中复核。";
         rows = {
-            {"TIC 总离子流", "显示", "时间序列", "无扫描序列时保持空图"},
-            {"质谱图", "显示", "矢量绘制", "自动适应窗口"},
-            {"EIC 提取离子流", "显示", "目标 m/z 与质量窗口", "点选谱峰提取"},
-            {"仪器工具", instrumentTargetVisible_ ? "显示" : "收起", "关键状态", "随窗口重排"},
-            {"智能台", assistantTargetVisible_ ? "显示" : "收起", "对话与操作", "按需开启"}
+            {"TIC", "显示", "扫描序列", "无数据时为空"},
+            {"质谱图", "显示", "自动适配", "矢量绘制"},
+            {"EIC", "显示", "点选谱峰", "按质量窗口提取"},
+            {"仪器工具", instrumentTargetVisible_ ? "显示" : "收起", "关键状态", "按需打开"},
+            {"智能台", assistantTargetVisible_ ? "显示" : "收起", "操作助手", "按需打开"}
         };
-        rows.prepend({"屏幕模式", isFullScreen() ? "全屏" : "窗口", "F11 切换", "Windows 启动全屏"});
+        rows.prepend({"屏幕模式", isFullScreen() ? "全屏" : "窗口", "F11", "可随时切换"});
         actionText = "恢复默认布局"; target = "restoreLayout";
     } else if (module == "帮助") {
         description = "主流程保持为准备、采集、分析、复核与报告。";

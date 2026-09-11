@@ -69,6 +69,7 @@ QString Theme::buildStyleSheet(Density density) {
         QSpinBox#networkPort::up-button, QSpinBox#networkPort::down-button { width: 0; height: 0; border: 0; }
         QTableWidget#rs485Readings QHeaderView::section { font-size: 13px; padding: 6px; }
         QTableWidget#networkReadings QHeaderView::section { font-size: 13px; padding: 6px; }
+        QTableWidget#settingsStatusTable, QTableWidget#settingsStatusTable QHeaderView::section { font-size: 14px; }
         QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; border-radius: 8px; margin-right: 4px; padding: 8px 10px; min-width: 210px; min-height: 24px; }
         QTabWidget#communicationTabs QTabBar::tab:selected { background: %17; color: %20; font-weight: 600; }
         QTabWidget#communicationTabs QTabBar::tab:hover { background: %19; }
@@ -159,7 +160,7 @@ QString Theme::buildStyleSheet(Density density) {
         QToolButton[sciRole="moduleTile"]:pressed { background: %7; border-color: %15; }
         QPushButton[sciRole="moduleTile"] { background: %4; border: 1px solid %5; border-radius: 8px; padding: 8px 12px; text-align: left; font-weight: 500; }
         QPushButton[sciRole="moduleTile"]:hover { border-color: %18; background: %19; }
-        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 12px; padding: 6px 8px; font-size: 12px; font-weight: 500; }
+        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 12px; padding: 8px 8px; font-size: 12px; font-weight: 500; }
         QToolButton[sciRole="controlTile"]:hover { background: %19; border-color: %5; }
         QToolButton[sciRole="controlTile"]:pressed { background: %7; border-color: %15; }
         QToolButton[sciRole="controlTile"]:checked { background: %17; border-color: %18; color: %20; }

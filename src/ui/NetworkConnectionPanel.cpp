@@ -3,6 +3,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QNetworkInterface>
@@ -11,6 +12,7 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace qitest {
@@ -18,8 +20,8 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     setObjectName("networkConnectionPanel");
     auto *layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(6);
     QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
-    auto *row = new QHBoxLayout;
-    row->setSpacing(6);
+    auto *endpointRow = new QHBoxLayout;
+    endpointRow->setSpacing(6);
     auto *addresses = new QComboBox; addresses->setObjectName("networkAddress"); addresses->setEditable(true);
     addresses->addItem("0.0.0.0");
     for (const auto &address : QNetworkInterface::allAddresses())
@@ -27,20 +29,33 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
             if (addresses->findText(address.toString()) < 0) addresses->addItem(address.toString());
     addresses->setCurrentText(preferences.value("network/address", "0.0.0.0").toString());
     addresses->setToolTip("0.0.0.0监听所有IPv4网卡；仪器目标IP请填写下拉列表中的实际网卡IP。");
-    addresses->setFixedWidth(128); addresses->setMinimumHeight(36);
+    addresses->setMinimumWidth(220); addresses->setMinimumHeight(36);
+    addresses->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     addresses->lineEdit()->setCursorPosition(0); addresses->lineEdit()->deselect();
+    connect(addresses, QOverload<int>::of(&QComboBox::activated), addresses, [addresses] {
+        QTimer::singleShot(0, addresses, [addresses] {
+            addresses->lineEdit()->setCursorPosition(0);
+            addresses->lineEdit()->deselect();
+        });
+    });
     auto *port = new QSpinBox; port->setObjectName("networkPort"); port->setRange(1, 65535);
     port->setValue(preferences.value("network/port", 11000).toInt());
-    port->setButtonSymbols(QAbstractSpinBox::NoButtons); port->setAlignment(Qt::AlignCenter); port->setFixedWidth(64); port->setFixedHeight(36);
+    port->setButtonSymbols(QAbstractSpinBox::NoButtons); port->setAlignment(Qt::AlignCenter); port->setFixedWidth(76); port->setFixedHeight(36);
     auto *start = new QPushButton("监听"); start->setObjectName("networkListen");
     auto *stop = new QPushButton("停止"); stop->setObjectName("networkStop");
     auto *save = new QPushButton("导出报文"); save->setObjectName("networkExport");
-    start->setFixedSize(52, 36); stop->setFixedSize(54, 36); save->setFixedSize(80, 36);
+    start->setFixedSize(72, 36); stop->setFixedSize(72, 36); save->setFixedSize(96, 36);
+    stop->setToolTip("开始监听后可停止");
+    save->setToolTip("收到有效网口报文后可导出");
     auto *addressLabel = new QLabel("IP");
     addressLabel->setToolTip("本机监听地址");
-    row->addWidget(addressLabel); row->addWidget(addresses);
-    row->addWidget(new QLabel("端口")); row->addWidget(port); row->addWidget(start); row->addWidget(stop); row->addWidget(save);
-    layout->addLayout(row);
+    endpointRow->addWidget(addressLabel); endpointRow->addWidget(addresses, 1);
+    endpointRow->addWidget(new QLabel("端口")); endpointRow->addWidget(port);
+    layout->addLayout(endpointRow);
+    auto *actionRow = new QHBoxLayout;
+    actionRow->setSpacing(6);
+    actionRow->addWidget(start); actionRow->addWidget(stop); actionRow->addWidget(save); actionRow->addStretch();
+    layout->addLayout(actionRow);
     auto *stale = new QSpinBox; stale->setObjectName("networkStaleSeconds"); stale->setRange(1, 3600);
     stale->setValue(preferences.value("network/staleMs", 5000).toInt() / 1000); stale->setSuffix(" 秒");
     stale->setToolTip("上位机读数失效时间，可按实际状态上传周期调整；不是固件协议参数。");
@@ -48,7 +63,9 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     auto *status = new QLabel(this); status->setObjectName("networkConnectionStatus"); status->hide();
     auto *table = new QTableWidget(4, 3); table->setObjectName("networkReadings");
     table->setHorizontalHeaderLabels({"网口回读项目", "当前值", "说明"});
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers); table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    table->setSelectionBehavior(QAbstractItemView::SelectItems);
     table->setShowGrid(false); table->setAlternatingRowColors(true); table->setWordWrap(false);
     table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     table->verticalHeader()->hide();

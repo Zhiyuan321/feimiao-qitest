@@ -21,9 +21,13 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     row->setSpacing(6);
     auto *ports = new QComboBox;
     ports->setObjectName("rs485Port");
-    ports->setEditable(true); // Supports custom Linux/macOS serial paths too.
+    // Windows 7 is the delivery target.  A serial port must come from the
+    // system enumeration; an editable empty box looks like an unexplained
+    // text field and lets users submit a path that cannot be opened.
+    ports->setEditable(false);
     ports->setMinimumHeight(36);
-    ports->setFixedWidth(148);
+    ports->setMinimumWidth(154);
+    ports->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *refresh = new QPushButton("刷新");
     refresh->setObjectName("rs485Refresh");
     auto *connectButton = new QPushButton("连接");
@@ -36,9 +40,11 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     disconnectButton->setMinimumWidth(54);
     refresh->setToolTip("重新扫描可用串口");
     connectButton->setToolTip("连接串口并读取设备状态");
+    disconnectButton->setToolTip("连接串口后可断开");
     auto *save = new QPushButton("导出报文"); save->setObjectName("pumpExport");
     save->setFixedHeight(36);
     save->setMinimumWidth(72);
+    save->setToolTip("收到有效485或分子泵报文后可导出");
     row->addWidget(ports); row->addWidget(refresh); row->addWidget(connectButton);
     row->addWidget(disconnectButton); row->addWidget(save); row->addStretch();
     layout->addLayout(row);
@@ -50,7 +56,8 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     table->setObjectName("rs485Readings");
     table->setHorizontalHeaderLabels({"485回读项目", "当前值", "说明"});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    table->setSelectionBehavior(QAbstractItemView::SelectItems);
     // Wine/Windows 7 may ignore a transparent gridline color while the native
     // grid is still enabled, producing the black blocks seen on the target UI.
     table->setShowGrid(false);
@@ -67,9 +74,21 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     layout->addWidget(table, 1);
     const auto refreshPorts = [controller, ports] {
         const QString selected = ports->currentText();
-        ports->clear(); ports->addItems(controller->rs485Ports());
-        if (!selected.isEmpty()) ports->setCurrentText(selected);
-        else ports->setCurrentText(QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").value("rs485/port").toString());
+        const QStringList available = controller->rs485Ports();
+        ports->clear();
+        ports->addItems(available);
+        ports->setProperty("hasAvailablePort", !available.isEmpty());
+        if (available.isEmpty()) {
+            ports->addItem("未发现串口");
+            ports->setCurrentIndex(0);
+            ports->setToolTip("未检测到串口，请连接设备后刷新");
+            return;
+        }
+        const QString saved = QSettings(QSettings::defaultFormat(), QSettings::UserScope,
+            "SCIENTZ", "QITest01").value("rs485/port").toString();
+        const QString preferred = available.contains(selected) ? selected : saved;
+        const int index = available.indexOf(preferred);
+        ports->setCurrentIndex(index >= 0 ? index : 0);
     };
     refreshPorts();
     connect(refresh, &QPushButton::clicked, this, refreshPorts);
@@ -86,12 +105,21 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         const bool active = !data.isEmpty(), connected = data.value("connected").toBool();
         const bool busy = controller->phase() == AppController::Phase::Acquiring
             || controller->phase() == AppController::Phase::Analyzing;
-        connectButton->setEnabled(!busy);
+        const bool open = data.value("open").toBool();
+        if (open) {
+            const QString activePort = data.value("port").toString();
+            if (!activePort.isEmpty() && ports->findText(activePort) < 0) ports->addItem(activePort);
+            if (!activePort.isEmpty()) ports->setCurrentText(activePort);
+            ports->setProperty("hasAvailablePort", true);
+        }
+        const bool hasPort = ports->property("hasAvailablePort").toBool();
+        connectButton->setEnabled(hasPort && !open && !busy);
+        refresh->setEnabled(!open && !busy);
+        ports->setEnabled(hasPort && !open && !busy);
         const auto pump = controller->pumpStatus();
         save->setEnabled(pump.value("retainedRecords").toInt() > 0);
         pumpStatus->setText(pump.value("message", "勾选后，连接一次即可依次读取主控板和分子泵。").toString());
-        disconnectButton->setEnabled(data.value("open").toBool());
-        if (active && data.value("open").toBool()) ports->setCurrentText(data.value("port").toString());
+        disconnectButton->setEnabled(open);
         status->setText(active ? data.value("message").toString()
             + (connected ? " · 更新于" + data.value("lastReadback").toString() : QString())
             : "选择连接仪器的串口。仅查询状态，不发送加热、电源或泵控制命令。");

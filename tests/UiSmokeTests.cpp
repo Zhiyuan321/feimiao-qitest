@@ -200,7 +200,8 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto *sharedConnect = window.findChild<QPushButton *>("rs485Connect");
     QVERIFY(sharedPort && sharedConnect);
     QVERIFY(!window.findChild<QCheckBox *>("rs485IncludePump"));
-    sharedPort->setCurrentText("TEST_ONLY"); sharedConnect->click();
+    QVERIFY(!sharedPort->isEditable());
+    QVERIFY(controller.connectRs485("TEST_ONLY", true));
     QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
     auto *tabs = window.findChild<QTabWidget *>("communicationTabs"); QVERIFY(tabs); tabs->setCurrentIndex(1);
     auto *panel = window.findChild<QWidget *>("networkConnectionPanel");
@@ -214,12 +215,16 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QCOMPARE(tcpPort->buttonSymbols(), QAbstractSpinBox::NoButtons);
     QCOMPARE(address->lineEdit()->cursorPosition(), 0);
     QVERIFY(address->lineEdit()->fontMetrics().horizontalAdvance(address->currentText()) < address->lineEdit()->width());
+    address->setCurrentText("192.168.31.59");
+    QVERIFY(address->lineEdit()->fontMetrics().horizontalAdvance(address->currentText()) + 16 < address->lineEdit()->width());
+    QVERIFY(listen->y() > address->y());
     for (auto *button : {listen, stop, exportButton}) {
         QVERIFY2(button->width() >= button->fontMetrics().horizontalAdvance(button->text()) + 24,
             qPrintable(button->text() + "按钮宽度不足"));
         QVERIFY(window.rect().contains(QRect(button->mapTo(&window, QPoint()), button->size())));
     }
     QVERIFY(!table->showGrid());
+    QCOMPARE(table->selectionMode(), QAbstractItemView::ExtendedSelection);
     QTcpServer reservation; QVERIFY(reservation.listen(QHostAddress::LocalHost));
     const auto portNumber = reservation.serverPort(); reservation.close();
     address->setCurrentText("127.0.0.1"); tcpPort->setValue(portNumber); listen->click();
@@ -1456,6 +1461,18 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     }
     QVERIFY(openModule("视图"));
     QCOMPARE(settingsPrimary->text(), QString("恢复默认布局"));
+    auto *settingsTable = window.findChild<QTableWidget *>("settingsStatusTable");
+    auto *fullScreen = window.findChild<QPushButton *>("fullScreenAction");
+    QVERIFY(settingsTable && fullScreen && fullScreen->isVisibleTo(&window));
+    QCOMPARE(settingsTable->rowCount(), 6);
+    QCOMPARE(settingsTable->item(0, 2)->text(), QString("F11"));
+    QCOMPARE(settingsTable->item(1, 0)->text(), QString("TIC"));
+    QVERIFY(settingsTable->font().pointSize() <= 14);
+    if (const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR"); !capture.isEmpty()) {
+        window.resize(1024, 768);
+        QTest::qWait(100);
+        QVERIFY(window.grab().save(capture + "/view-layout.png"));
+    }
     settingsPrimary->click();
     QVERIFY(!assistantRail->isVisibleTo(&window));
     QVERIFY(monitorScroll->isVisibleTo(&window));
@@ -1524,6 +1541,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
              "molecularPumpOn", "pinchValveOn", "internalCarrierGasOn"}) {
         auto *button = window.findChild<QToolButton *>("instrumentControl_" + key);
         QVERIFY(button && button->isVisibleTo(&window));
+        QVERIFY(button->height() >= 88);
         QVERIFY(!button->text().contains("  "));
         QVERIFY(commonControlPanel->rect().contains(
             QRect(button->mapTo(commonControlPanel, QPoint()), button->size())));
@@ -1657,7 +1675,8 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QVERIFY(reportAction);
     reportAction->trigger();
     QVERIFY(screeningResults->isVisibleTo(&window));
-    QCOMPARE(screeningResults->horizontalHeaderItem(1)->text(), QString("浓度\nμg/mL"));
+    QCOMPARE(screeningResults->horizontalHeaderItem(1)->text(), QString("浓度 (μg/mL)"));
+    QVERIFY(!screeningResults->horizontalHeaderItem(1)->text().contains('\n'));
     auto *reportSummary = window.findChild<QWidget *>("reportSummaryStrip");
     QVERIFY(reportSummary);
     QVERIFY(reportSummary->isVisibleTo(&window));
