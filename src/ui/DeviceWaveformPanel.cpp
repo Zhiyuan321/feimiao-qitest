@@ -43,7 +43,7 @@ protected:
         }
         p.drawText(QRectF(2,2,60,22),Qt::AlignCenter,tuning_?"mV":"V");
         p.drawText(QRectF(a.left(),a.bottom()+25,a.width(),36),Qt::AlignCenter,
-            tuning_?"序列":"单包采样点序号（时间参数待确认）");
+            tuning_?"序列":"采样点");
         if(values_.isEmpty()) {
             p.drawText(a.adjusted(8,8,-8,-8),Qt::AlignCenter|Qt::TextWordWrap,
                 tuning_?"等待确认RF数据换算":"等待网口气压数据");return;
@@ -71,7 +71,7 @@ private:
 QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget *parent) {
     auto *page=new QWidget(parent);page->setObjectName(tuning?"rfTuningPanel":"pressureWaveformPanel");
     auto *layout=new QVBoxLayout(page);
-    auto *status=new QLabel;status->setWordWrap(true);status->setObjectName(tuning?"rfTuningStatus":"pressureWaveformStatus");
+    auto *status=new QLabel(page);status->setWordWrap(true);status->setObjectName(tuning?"rfTuningStatus":"pressureWaveformStatus");
     QPushButton *start=nullptr,*stop=nullptr;
     if(tuning) {
         auto *buttons=new QHBoxLayout;start=new QPushButton("检测");stop=new QPushButton("结束");
@@ -85,7 +85,9 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
         QObject::connect(stop,&QPushButton::clicked,page,[=]{controller->requestRfTuning(false);});
     }
     auto *plot=new VoltagePlot(tuning);plot->setObjectName(tuning?"rfVoltagePlot":"pressureVoltagePlot");
-    layout->addWidget(plot,1);layout->addWidget(status);
+    layout->addWidget(plot,1);
+    if(tuning) layout->addWidget(status);
+    else status->hide();
     const auto refresh=[=] {
         const auto data=controller->networkStatus();
         if(tuning) {
@@ -102,6 +104,7 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
                 text+=QString(" 单包峰值 %1 V，纵轴已自动适配。").arg(high,0,'f',2);
             }
             status->setText(text);
+            plot->setToolTip(text);
         }
     };
     QObject::connect(controller,&AppController::instrumentSettingsChanged,page,refresh);

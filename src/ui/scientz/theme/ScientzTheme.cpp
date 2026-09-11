@@ -61,6 +61,9 @@ QString Theme::buildStyleSheet(Density density) {
         QTabWidget#communicationTabs::pane { background: %2; border: 0; }
         QTabWidget#communicationTabs QStackedWidget,
         QWidget#networkConnectionPanel, QWidget#rs485ConnectionPanel { background: %2; }
+        QWidget#rs485ConnectionPanel QComboBox, QWidget#rs485ConnectionPanel QPushButton,
+        QWidget#rs485ConnectionPanel QCheckBox, QTableWidget#rs485Readings { font-size: 13px; }
+        QTableWidget#rs485Readings QHeaderView::section { font-size: 13px; padding: 6px; }
         QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; border-radius: 8px; margin-right: 4px; padding: 8px 10px; min-height: 24px; }
         QTabWidget#communicationTabs QTabBar::tab:selected { background: %17; color: %20; font-weight: 600; }
         QTabWidget#communicationTabs QTabBar::tab:hover { background: %19; }

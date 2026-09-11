@@ -135,7 +135,10 @@ private slots:
         QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
         QCOMPARE(plot->property("yMaximum").toDouble(),15.0);
         QCOMPARE(plot->property("frameIntervalMs").toInt(),16);
-        QVERIFY(pressure->findChild<QLabel *>("pressureWaveformStatus")->text().contains("14.25"));
+        auto *pressureStatus = pressure->findChild<QLabel *>("pressureWaveformStatus");
+        QVERIFY(pressureStatus);
+        QVERIFY(pressureStatus->text().contains("14.25"));
+        QVERIFY(!pressureStatus->isVisibleTo(pressure.get()));
         const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
         if(!capture.isEmpty()) {
             QVERIFY(QDir().mkpath(capture));
@@ -226,6 +229,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto *pressurePlot=window.findChild<QWidget *>("pressureVoltagePlot");QVERIFY(pressurePlot);
     QTRY_COMPARE(pressurePlot->property("sampleCount").toInt(),5);
     QCOMPARE(pressurePlot->property("yMaximum").toDouble(),15.0);
+    QVERIFY(!window.statusBar()->isVisibleTo(&window));
     const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     if(!capture.isEmpty()) {
         QVERIFY(QDir().mkpath(capture));
@@ -281,15 +285,17 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QVERIFY(window.rect().contains(QRect(pumpTable->mapTo(&window, QPoint()), pumpTable->size())));
     QVERIFY(pumpTable->viewport()->rect().contains(pumpTable->visualItemRect(pumpTable->item(7, 1))));
     if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/shared-485-readback.png"));
-    auto *pageScroll = window.findChild<QScrollArea *>("rs485PageScroll");
-    auto *note = window.findChild<QLabel *>("rs485ReadbackNote");
-    QVERIFY(pageScroll && note);
-    // Less available height must scroll, never paint the note over table rows.
-    pageScroll->setFixedHeight(250);
+    auto *rs485Panel = window.findChild<QWidget *>("rs485ConnectionPanel");
+    auto *disconnect485 = window.findChild<QPushButton *>("rs485Disconnect");
+    auto *refresh485 = window.findChild<QPushButton *>("rs485Refresh");
+    QVERIFY(rs485Panel && disconnect485 && refresh485);
+    // The compact controls remain reachable; the table owns vertical scrolling.
+    rs485Panel->setFixedHeight(250);
     QCoreApplication::processEvents();
-    QVERIFY(pageScroll->verticalScrollBar()->maximum() > 0);
-    QVERIFY(note->geometry().top() > pumpTable->geometry().bottom());
-    pageScroll->setMinimumHeight(0); pageScroll->setMaximumHeight(QWIDGETSIZE_MAX);
+    QVERIFY(pumpTable->verticalScrollBar()->maximum() > 0);
+    for (auto *button : {sharedConnect, disconnect485, refresh485})
+        QVERIFY(rs485Panel->rect().contains(QRect(button->mapTo(rs485Panel, QPoint()), button->size())));
+    rs485Panel->setMinimumHeight(0); rs485Panel->setMaximumHeight(QWIDGETSIZE_MAX);
     tabs->setCurrentIndex(1);
     stop->click(); QCOMPARE(table->item(0, 1)->text(), QString("—"));
     QCOMPARE(table->item(3, 1)->text(), QString("—"));
@@ -357,6 +363,7 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QVERIFY(ionReading); QCOMPARE(ionReading->text(), QString("4.9 V"));
     QCOMPARE(controller.telemetry().ionSourceVoltageV, 4.9);
     QCOMPARE(table->item(12, 1)->text(), QString("内载气"));
+    QVERIFY(!window.statusBar()->isVisibleTo(&window));
     for (auto *widget : window.findChildren<QWidget *>())
         if (widget->property("instrumentControl").toBool()) QVERIFY(!widget->isEnabled());
     QCoreApplication::processEvents();

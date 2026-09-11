@@ -238,6 +238,11 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
     setCentralWidget(rootStack_);
     applyDesignSystem();
 
+    auto *applicationStatus = statusBar();
+    applicationStatus->hide();
+    connect(applicationStatus, &QStatusBar::messageChanged, applicationStatus,
+        [applicationStatus](const QString &message) { applicationStatus->setVisible(!message.isEmpty()); });
+
     connect(controller_, &AppController::phaseChanged, this, &MainWindow::updatePhase);
     connect(controller_, &AppController::spectrumChanged, this, [this](const auto &points) {
         spectrumPlot_->setPoints(points);
@@ -269,6 +274,12 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
         refreshRunEic();
     });
     connect(controller_, &AppController::notice, this, [this](const QString &text) {
+        const bool backgroundDetail = text.startsWith("正在监听")
+            || text.contains("485回读正常")
+            || text.contains("TEST_ONLY")
+            || text.contains("等待485状态回读")
+            || text.startsWith("真实采集需完成厂家");
+        if (backgroundDetail) return;
         statusBar()->showMessage(text, 4000);
     });
     connect(controller_, &AppController::instrumentConfirmationRequired, this,
@@ -1291,7 +1302,7 @@ QWidget *MainWindow::createSettingsPage() {
     communicationTabs->addTab(new NetworkConnectionPanel(controller_), "网口TCP");
     communicationTabs->addTab(createDeviceWaveformPanel(controller_, false), "气压曲线");
     communicationTabs->hide();
-    placeholderLayout->addWidget(communicationTabs);
+    placeholderLayout->addWidget(communicationTabs, 1);
     placeholderLayout->addWidget(settingsStatusTable_);
     settingsDetailAction_ = new QPushButton;
     settingsDetailAction_->setObjectName("settingsPrimaryAction");

@@ -8,48 +8,47 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
-#include <QScrollArea>
+#include <QSizePolicy>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
 namespace qitest {
 Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *parent) : QWidget(parent) {
     setObjectName("rs485ConnectionPanel");
-    auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    auto *scroll = new QScrollArea;
-    scroll->setObjectName("rs485PageScroll");
-    scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
-    auto *content = new QWidget;
-    auto *layout = new QVBoxLayout(content);
+    auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSizeConstraint(QLayout::SetMinimumSize);
-    scroll->setWidget(content); outer->addWidget(scroll);
-    auto *title = new QLabel("主控板与分子泵共用485 · 9600 / 8N1 / 无流控");
-    title->setWordWrap(true);
-    layout->addWidget(title);
+    layout->setSpacing(6);
     auto *row = new QHBoxLayout;
+    row->setSpacing(6);
     auto *ports = new QComboBox;
     ports->setObjectName("rs485Port");
     ports->setEditable(true); // Supports custom Linux/macOS serial paths too.
-    auto *refresh = new QPushButton("刷新串口");
-    auto *connectButton = new QPushButton("连接并读取");
+    ports->setMinimumHeight(36);
+    auto *refresh = new QPushButton("刷新");
+    refresh->setObjectName("rs485Refresh");
+    auto *connectButton = new QPushButton("连接");
     connectButton->setObjectName("rs485Connect");
     auto *disconnectButton = new QPushButton("断开");
     disconnectButton->setObjectName("rs485Disconnect");
+    for (auto *button : {refresh, connectButton, disconnectButton}) button->setFixedHeight(36);
+    refresh->setMinimumWidth(62);
+    connectButton->setMinimumWidth(62);
+    disconnectButton->setMinimumWidth(54);
+    refresh->setToolTip("重新扫描可用串口");
+    connectButton->setToolTip("连接串口并读取设备状态");
     row->addWidget(ports, 1); row->addWidget(refresh); row->addWidget(connectButton); row->addWidget(disconnectButton);
     layout->addLayout(row);
     auto *options = new QHBoxLayout;
-    auto *includePump = new QCheckBox("同时读取分子泵"); includePump->setObjectName("rs485IncludePump");
+    options->setSpacing(6);
+    auto *includePump = new QCheckBox("读取分子泵"); includePump->setObjectName("rs485IncludePump");
     includePump->setChecked(QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").value("rs485/includePump", true).toBool());
-    auto *save = new QPushButton("导出485报文"); save->setObjectName("pumpExport");
+    auto *save = new QPushButton("导出报文"); save->setObjectName("pumpExport");
+    save->setFixedHeight(34);
     options->addWidget(includePump); options->addStretch(); options->addWidget(save); layout->addLayout(options);
-    auto *status = new QLabel;
+    auto *status = new QLabel(this);
     status->setObjectName("rs485ConnectionStatus");
-    status->setWordWrap(true);
-    layout->addWidget(status);
-    auto *pumpStatus = new QLabel; pumpStatus->setObjectName("pumpStatus"); pumpStatus->setWordWrap(true);
-    layout->addWidget(pumpStatus);
+    status->hide();
+    auto *pumpStatus = new QLabel(this); pumpStatus->setObjectName("pumpStatus"); pumpStatus->hide();
     auto *table = new QTableWidget(0, 3);
     table->setObjectName("rs485Readings");
     table->setHorizontalHeaderLabels({"485回读项目", "当前值", "说明"});
@@ -62,13 +61,13 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     table->setWordWrap(false);
     table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     table->verticalHeader()->hide();
-    table->verticalHeader()->setDefaultSectionSize(32);
-    table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    table->setMinimumHeight(300); table->setMaximumHeight(360);
-    layout->addWidget(table);
-    auto *note = new QLabel("泵体温度即控制器温度。原始值保留在说明中；回复校验待确认。更多参数向下滚动查看。");
-    note->setObjectName("rs485ReadbackNote");
-    note->setWordWrap(true); layout->addWidget(note);
+    table->verticalHeader()->setDefaultSectionSize(30);
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table->setMinimumHeight(260);
+    table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    layout->addWidget(table, 1);
     const auto refreshPorts = [controller, ports] {
         const QString selected = ports->currentText();
         ports->clear(); ports->addItems(controller->rs485Ports());
@@ -101,6 +100,8 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         status->setText(active ? data.value("message").toString()
             + (connected ? " · 更新于" + data.value("lastReadback").toString() : QString())
             : "选择连接仪器的串口。仅查询状态，不发送加热、电源或泵控制命令。");
+        ports->setToolTip(status->text());
+        table->setToolTip(status->text());
         table->setVisible(true);
         const auto telemetry = controller->telemetry();
         const auto numeric = [connected](double v, const QString &unit) {
