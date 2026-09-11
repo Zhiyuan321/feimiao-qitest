@@ -95,7 +95,7 @@ QString Theme::buildStyleSheet(Density density) {
         QLabel[sciTone="secondary"], QLabel[sciTone="metadata"], QLabel[sciTone="user"] { color: #243331; font-size: 16px; font-weight: 600; }
         QLabel[sciRole="reportDetail"] { font-size: 13px; font-weight: 400; color: #243331; }
         QWidget#monitorPanel QLabel#readoutName, QWidget#monitorPanel QLabel[sciTone="metadata"] { font-size: 13px; font-weight: 400; color: #52615f; }
-        QWidget#monitorPanel QLabel[sciTone="readoutValue"] { font-size: 16px; font-weight: 600; }
+        QWidget#monitorPanel QLabel[sciTone="readoutValue"] { font-size: 15px; font-weight: 500; }
         QWidget#monitorPanel QLabel#readoutUnit { font-size: 12px; font-weight: 400; }
         QLabel[sciTone="metricValue"] { font-size: 14px; font-weight: 600; color: %20; }
         QLabel[sciState="healthy"] { color: %12; }
@@ -150,7 +150,7 @@ QString Theme::buildStyleSheet(Density density) {
         QToolButton[sciRole="moduleTile"]:pressed { background: %7; border-color: %15; }
         QPushButton[sciRole="moduleTile"] { background: %4; border: 1px solid %5; border-radius: 8px; padding: 8px 12px; text-align: left; font-weight: 500; }
         QPushButton[sciRole="moduleTile"]:hover { border-color: %18; background: %19; }
-        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 10px; padding: 10px; font-weight: 600; }
+        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 10px; padding: 8px 10px 10px 10px; font-size: 14px; font-weight: 500; }
         QToolButton[sciRole="controlTile"]:hover { background: %19; border-color: %5; }
         QToolButton[sciRole="controlTile"]:pressed { background: %7; border-color: %15; }
         QToolButton[sciRole="controlTile"]:checked { background: %17; border-color: %18; color: %20; }

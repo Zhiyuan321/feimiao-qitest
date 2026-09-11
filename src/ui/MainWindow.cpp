@@ -1060,7 +1060,7 @@ QWidget *MainWindow::createMonitorPanel() {
         auto *row = new QWidget;
         auto *line = new QHBoxLayout(row); line->setContentsMargins(0,0,0,0); line->setSpacing(8);
         line->addWidget(makeLabel(name, "metadata")); line->addStretch();
-        auto *value = makeLabel("—", "readoutValue"); value->setStyleSheet("font-size:18px;");
+        auto *value = makeLabel("—", "readoutValue");
         value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         value->setProperty("displayUnit", unit);
         line->addWidget(value);
@@ -1077,7 +1077,6 @@ QWidget *MainWindow::createMonitorPanel() {
     auto *pressureMeasurement = new QHBoxLayout;
     pressureMeasurement->setContentsMargins(0, 0, 0, 0);
     pressureLayout->addStretch();
-    alarmDetail->setStyleSheet("font-size:18px;");
     pressureMeasurement->addWidget(alarmDetail);
     pressureLayout->addLayout(pressureMeasurement);
     layout->addWidget(group("分子泵", {
@@ -1399,6 +1398,7 @@ QWidget *MainWindow::createSettingsPage() {
     auto *commonControls = new QWidget;
     auto *manualGrid = new QGridLayout;
     manualGrid->setSpacing(8);
+    manualGrid->setAlignment(Qt::AlignTop);
     const QStringList controls{"RF", "离子源高压", "隔膜泵", "分子泵", "夹管阀", "内载气"};
     const QStringList controlKeys{"rfOn", "ionHighVoltageOn", "diaphragmPumpOn",
         "molecularPumpOn", "pinchValveOn", "internalCarrierGasOn"};
@@ -1415,8 +1415,8 @@ QWidget *MainWindow::createSettingsPage() {
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setProperty("sciRole", "controlTile");
         button->setChecked(enabled);
-        button->setMinimumSize(110, 92);
-        button->setMaximumHeight(104);
+        button->setMinimumSize(110, 100);
+        button->setMaximumHeight(112);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         manualGrid->addWidget(button, i / 3, i % 3);
         button->setProperty("instrumentControl", true);

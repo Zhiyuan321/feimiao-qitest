@@ -737,6 +737,8 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
         auto *button = window.findChild<QToolButton *>("instrumentControl_" + key);
         QVERIFY(button); QVERIFY(!button->isChecked());
         QVERIFY(!button->icon().isNull());
+        QCOMPARE(button->font().pixelSize(), 14);
+        QVERIFY(button->minimumHeight() >= 100);
         QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonTextUnderIcon);
         QVERIFY(!button->icon().pixmap(72, 72).isNull());
         QVERIFY(button->text().endsWith("已关闭"));
