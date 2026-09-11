@@ -2,7 +2,6 @@
 #include "app/AppController.h"
 #include "domain/DisplayLabels.h"
 #include <QComboBox>
-#include <QCheckBox>
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QLabel>
@@ -24,6 +23,7 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     ports->setObjectName("rs485Port");
     ports->setEditable(true); // Supports custom Linux/macOS serial paths too.
     ports->setMinimumHeight(36);
+    ports->setFixedWidth(148);
     auto *refresh = new QPushButton("刷新");
     refresh->setObjectName("rs485Refresh");
     auto *connectButton = new QPushButton("连接");
@@ -36,15 +36,12 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     disconnectButton->setMinimumWidth(54);
     refresh->setToolTip("重新扫描可用串口");
     connectButton->setToolTip("连接串口并读取设备状态");
-    row->addWidget(ports, 1); row->addWidget(refresh); row->addWidget(connectButton); row->addWidget(disconnectButton);
-    layout->addLayout(row);
-    auto *options = new QHBoxLayout;
-    options->setSpacing(6);
-    auto *includePump = new QCheckBox("读取分子泵"); includePump->setObjectName("rs485IncludePump");
-    includePump->setChecked(QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").value("rs485/includePump", true).toBool());
     auto *save = new QPushButton("导出报文"); save->setObjectName("pumpExport");
-    save->setFixedHeight(34);
-    options->addWidget(includePump); options->addStretch(); options->addWidget(save); layout->addLayout(options);
+    save->setFixedHeight(36);
+    save->setMinimumWidth(72);
+    row->addWidget(ports); row->addWidget(refresh); row->addWidget(connectButton);
+    row->addWidget(disconnectButton); row->addWidget(save); row->addStretch();
+    layout->addLayout(row);
     auto *status = new QLabel(this);
     status->setObjectName("rs485ConnectionStatus");
     status->hide();
@@ -76,9 +73,8 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     };
     refreshPorts();
     connect(refresh, &QPushButton::clicked, this, refreshPorts);
-    connect(connectButton, &QPushButton::clicked, this, [controller, ports, includePump] {
-        if (controller->connectRs485(ports->currentText(), includePump->isChecked()))
-            QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").setValue("rs485/includePump", includePump->isChecked());
+    connect(connectButton, &QPushButton::clicked, this, [controller, ports] {
+        controller->connectRs485(ports->currentText(), true);
     });
     connect(disconnectButton, &QPushButton::clicked, controller, &AppController::disconnectRs485);
     connect(save, &QPushButton::clicked, this, [=] {
@@ -92,7 +88,6 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
             || controller->phase() == AppController::Phase::Analyzing;
         connectButton->setEnabled(!busy);
         const auto pump = controller->pumpStatus();
-        includePump->setEnabled(!data.value("open").toBool() && !busy);
         save->setEnabled(pump.value("retainedRecords").toInt() > 0);
         pumpStatus->setText(pump.value("message", "勾选后，连接一次即可依次读取主控板和分子泵。").toString());
         disconnectButton->setEnabled(data.value("open").toBool());

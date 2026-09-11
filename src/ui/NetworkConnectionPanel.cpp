@@ -4,9 +4,11 @@
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QNetworkInterface>
 #include <QPushButton>
 #include <QSettings>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QVBoxLayout>
@@ -14,9 +16,7 @@
 namespace qitest {
 NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidget *parent) : QWidget(parent) {
     setObjectName("networkConnectionPanel");
-    auto *layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0);
-    auto *hint = new QLabel("电脑监听TCP，仪器主动连接。请将仪器目标IP设为电脑对应网卡IP，端口默认11000。");
-    hint->setWordWrap(true); layout->addWidget(hint);
+    auto *layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(6);
     QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     auto *row = new QHBoxLayout;
     auto *addresses = new QComboBox; addresses->setObjectName("networkAddress"); addresses->setEditable(true);
@@ -26,31 +26,35 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
             if (addresses->findText(address.toString()) < 0) addresses->addItem(address.toString());
     addresses->setCurrentText(preferences.value("network/address", "0.0.0.0").toString());
     addresses->setToolTip("0.0.0.0监听所有IPv4网卡；仪器目标IP请填写下拉列表中的实际网卡IP。");
+    addresses->setFixedWidth(128); addresses->setMinimumHeight(36);
+    addresses->lineEdit()->setCursorPosition(0); addresses->lineEdit()->deselect();
     auto *port = new QSpinBox; port->setObjectName("networkPort"); port->setRange(1, 65535);
     port->setValue(preferences.value("network/port", 11000).toInt());
-    auto *start = new QPushButton("开始监听"); start->setObjectName("networkListen");
+    port->setButtonSymbols(QAbstractSpinBox::NoButtons); port->setAlignment(Qt::AlignCenter); port->setFixedWidth(72); port->setFixedHeight(36);
+    auto *start = new QPushButton("监听"); start->setObjectName("networkListen");
     auto *stop = new QPushButton("停止"); stop->setObjectName("networkStop");
+    auto *save = new QPushButton("导出报文"); save->setObjectName("networkExport");
+    start->setFixedSize(54, 36); stop->setFixedSize(48, 36); save->setFixedSize(68, 36);
     row->addWidget(new QLabel("本机IP")); row->addWidget(addresses, 1);
-    row->addWidget(new QLabel("端口")); row->addWidget(port); row->addWidget(start); row->addWidget(stop);
+    row->addWidget(new QLabel("端口")); row->addWidget(port); row->addWidget(start); row->addWidget(stop); row->addWidget(save);
     layout->addLayout(row);
-    auto *options = new QHBoxLayout;
     auto *stale = new QSpinBox; stale->setObjectName("networkStaleSeconds"); stale->setRange(1, 3600);
     stale->setValue(preferences.value("network/staleMs", 5000).toInt() / 1000); stale->setSuffix(" 秒");
     stale->setToolTip("上位机读数失效时间，可按实际状态上传周期调整；不是固件协议参数。");
-    auto *save = new QPushButton("导出最近报文"); save->setObjectName("networkExport");
-    options->addWidget(new QLabel("状态超时")); options->addWidget(stale); options->addStretch(); options->addWidget(save);
-    layout->addLayout(options);
-    auto *status = new QLabel; status->setObjectName("networkConnectionStatus"); status->setWordWrap(true);
-    layout->addWidget(status);
+    stale->hide();
+    auto *status = new QLabel(this); status->setObjectName("networkConnectionStatus"); status->hide();
     auto *table = new QTableWidget(4, 3); table->setObjectName("networkReadings");
     table->setHorizontalHeaderLabels({"网口回读项目", "当前值", "说明"});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers); table->setSelectionMode(QAbstractItemView::NoSelection);
     table->setShowGrid(false); table->setAlternatingRowColors(true); table->setWordWrap(false);
     table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    table->verticalHeader()->hide(); table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    table->verticalHeader()->setDefaultSectionSize(32);
-    table->setMinimumHeight(165); table->setMaximumHeight(185); layout->addWidget(table);
-    auto *counts = new QLabel; counts->setObjectName("networkFrameCounts"); counts->setWordWrap(true); layout->addWidget(counts);
+    table->verticalHeader()->hide();
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table->verticalHeader()->setDefaultSectionSize(30);
+    table->setMinimumHeight(165); table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding); layout->addWidget(table, 1);
+    auto *counts = new QLabel(this); counts->setObjectName("networkFrameCounts"); counts->hide();
     connect(start, &QPushButton::clicked, this, [=] {
         controller->startNetworkListening(addresses->currentText(), quint16(port->value()), stale->value() * 1000);
     });
@@ -68,6 +72,8 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
         save->setEnabled(data.value("retainedFrames").toInt() > 0);
         status->setText(data.isEmpty() ? "尚未监听。可与485同时回读，调谐启停在射频页操作。" : data.value("message").toString()
             + (data.value("connected").toBool() ? " · 更新于" + data.value("lastReadback").toString() : QString()));
+        addresses->setToolTip(status->text());
+        table->setToolTip(status->text());
         const auto raw = [&data](const QString &key) { return data.contains(key) ? data.value(key).toString() : QString("—"); };
         const QList<QStringList> rows{
             {"倍增管高压", data.contains("multiplierVoltageV") ? raw("multiplierVoltageV") + " V" : "—", "网口实际回读"},

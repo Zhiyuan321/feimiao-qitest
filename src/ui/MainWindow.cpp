@@ -59,6 +59,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QTabBar>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTimer>
@@ -278,6 +279,7 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
             || text.contains("485回读正常")
             || text.contains("TEST_ONLY")
             || text.contains("等待485状态回读")
+            || text.startsWith("当前设备仅提供状态读取")
             || text.startsWith("真实采集需完成厂家");
         if (backgroundDetail) return;
         statusBar()->showMessage(text, 4000);
@@ -1300,7 +1302,9 @@ QWidget *MainWindow::createSettingsPage() {
     communicationTabs->setObjectName("communicationTabs");
     communicationTabs->addTab(new Rs485ConnectionPanel(controller_), "485串口");
     communicationTabs->addTab(new NetworkConnectionPanel(controller_), "网口TCP");
-    communicationTabs->addTab(createDeviceWaveformPanel(controller_, false), "气压曲线");
+    communicationTabs->tabBar()->setExpanding(true);
+    communicationTabs->tabBar()->setUsesScrollButtons(false);
+    communicationTabs->tabBar()->setElideMode(Qt::ElideNone);
     communicationTabs->hide();
     placeholderLayout->addWidget(communicationTabs, 1);
     placeholderLayout->addWidget(settingsStatusTable_);

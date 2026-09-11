@@ -63,8 +63,12 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#networkConnectionPanel, QWidget#rs485ConnectionPanel { background: %2; }
         QWidget#rs485ConnectionPanel QComboBox, QWidget#rs485ConnectionPanel QPushButton,
         QWidget#rs485ConnectionPanel QCheckBox, QTableWidget#rs485Readings { font-size: 13px; }
+        QWidget#networkConnectionPanel QComboBox, QWidget#networkConnectionPanel QSpinBox,
+        QWidget#networkConnectionPanel QPushButton, QTableWidget#networkReadings { font-size: 13px; }
+        QSpinBox#networkPort { padding: 0 6px; }
         QTableWidget#rs485Readings QHeaderView::section { font-size: 13px; padding: 6px; }
-        QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; border-radius: 8px; margin-right: 4px; padding: 8px 10px; min-height: 24px; }
+        QTableWidget#networkReadings QHeaderView::section { font-size: 13px; padding: 6px; }
+        QTabWidget#communicationTabs QTabBar::tab { background: %6; color: %1; border: 0; border-radius: 8px; margin-right: 4px; padding: 8px 10px; min-width: 210px; min-height: 24px; }
         QTabWidget#communicationTabs QTabBar::tab:selected { background: %17; color: %20; font-weight: 600; }
         QTabWidget#communicationTabs QTabBar::tab:hover { background: %19; }
         QPushButton[sciRole="librarySelector"] { min-height: 30px; background: %6; border: 0; padding: 0 14px; }

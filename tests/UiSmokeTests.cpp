@@ -198,8 +198,8 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QVERIFY(opened);
     auto *sharedPort = window.findChild<QComboBox *>("rs485Port");
     auto *sharedConnect = window.findChild<QPushButton *>("rs485Connect");
-    auto *includePump = window.findChild<QCheckBox *>("rs485IncludePump");
-    QVERIFY(sharedPort && sharedConnect && includePump); includePump->setChecked(true);
+    QVERIFY(sharedPort && sharedConnect);
+    QVERIFY(!window.findChild<QCheckBox *>("rs485IncludePump"));
     sharedPort->setCurrentText("TEST_ONLY"); sharedConnect->click();
     QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
     auto *tabs = window.findChild<QTabWidget *>("communicationTabs"); QVERIFY(tabs); tabs->setCurrentIndex(1);
@@ -210,6 +210,9 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto *listen = window.findChild<QPushButton *>("networkListen");
     auto *stop = window.findChild<QPushButton *>("networkStop");
     QVERIFY(panel && table && address && tcpPort && listen && stop); QVERIFY(panel->isVisibleTo(&window));
+    QCOMPARE(tcpPort->buttonSymbols(), QAbstractSpinBox::NoButtons);
+    QCOMPARE(address->lineEdit()->cursorPosition(), 0);
+    QVERIFY(address->lineEdit()->fontMetrics().horizontalAdvance(address->currentText()) < address->lineEdit()->width());
     QVERIFY(!table->showGrid());
     QTcpServer reservation; QVERIFY(reservation.listen(QHostAddress::LocalHost));
     const auto portNumber = reservation.serverPort(); reservation.close();
@@ -225,16 +228,12 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QCOMPARE(table->item(1, 1)->text(), QString("1234"));
     QCOMPARE(table->item(2, 1)->text(), QString("开启"));
     client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
-    tabs->setCurrentIndex(2);
-    auto *pressurePlot=window.findChild<QWidget *>("pressureVoltagePlot");QVERIFY(pressurePlot);
-    QTRY_COMPARE(pressurePlot->property("sampleCount").toInt(),5);
-    QCOMPARE(pressurePlot->property("yMaximum").toDouble(),15.0);
+    // Keep accepting the voltage samples internally, but do not expose a
+    // duplicate pressure chart until the vendor confirms its time semantics.
+    QTRY_COMPARE(controller.pressureVolts().size(), 5);
+    QVERIFY(!window.findChild<QWidget *>("pressureWaveformPanel"));
     QVERIFY(!window.statusBar()->isVisibleTo(&window));
     const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
-    if(!capture.isEmpty()) {
-        QVERIFY(QDir().mkpath(capture));
-        QVERIFY(window.grab().save(capture+"/pressure-in-instrument-status.png"));
-    }
     QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
     // The revised status uses byte 9 = 00 for OFF, regardless of the reserved tail.
     auto offPayload = test::networkStatusWire().mid(7, 21);
@@ -259,7 +258,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
     if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/network-readback.png"));
     QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp.json")));
-    QCOMPARE(tabs->count(), 3);
+    QCOMPARE(tabs->count(), 2);
     tabs->setCurrentIndex(0);
     auto *pumpTable = window.findChild<QTableWidget *>("rs485Readings");
     QVERIFY(pumpTable);
@@ -784,9 +783,13 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     QCOMPARE(runStatus->parentWidget()->objectName(),QString("contextHeader"));
     QVERIFY(!window.findChild<QTabWidget *>("analysisViewTabs"));
     auto *communicationTabs=window.findChild<QTabWidget *>("communicationTabs");QVERIFY(communicationTabs);
-    QCOMPARE(communicationTabs->count(),3);
-    QCOMPARE(communicationTabs->tabText(2),QString("气压曲线"));
-    QCOMPARE(communicationTabs->widget(2)->objectName(),QString("pressureWaveformPanel"));
+    QCOMPARE(communicationTabs->count(),2);
+    QVERIFY(!window.findChild<QWidget *>("pressureWaveformPanel"));
+    QVERIFY(communicationTabs->tabBar()->expanding());
+    QVERIFY(!communicationTabs->tabBar()->usesScrollButtons());
+    QCOMPARE(communicationTabs->tabBar()->elideMode(), Qt::ElideNone);
+    for (int index = 0; index < communicationTabs->count(); ++index)
+        QVERIFY(communicationTabs->tabBar()->tabRect(index).width() >= 210);
     auto *example=window.findChild<QPushButton *>("loadPublicExample"); QVERIFY(example);
     QVERIFY(example->isVisibleTo(&window));
     example->click();
