@@ -1,5 +1,4 @@
 #include "app/AppController.h"
-#include "device/SimulatedInstrument.h"
 #include "device/Rs485Instrument.h"
 #include "device/IInstrumentPlugin.h"
 #include "ui/MainWindow.h"
@@ -37,8 +36,9 @@ int main(int argc, char *argv[]) {
     qRegisterMetaType<qitest::AppController::Phase>();
     qRegisterMetaType<qitest::RunSummary>();
 
-    // 厂家联调入口：环境变量指定插件绝对路径；没有指定才使用模拟器。
-    // 已指定的驱动加载失败必须报错退出，不能悄悄切回模拟让用户误以为接通。
+    // 厂家联调入口：环境变量可指定插件或预设485串口。
+    // 未指定时保持真实485适配器的未连接状态，不生成任何模拟回读。
+    // 已指定的驱动加载失败必须报错退出，不能悄悄切换设备来源。
     // driverLoader 的生命周期覆盖 controller，避免适配器使用期间插件被卸载。
     std::unique_ptr<qitest::IInstrumentAdapter> instrument;
     QPluginLoader driverLoader;
@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
         auto serial = std::make_unique<qitest::Rs485Instrument>();
         serial->openPort(serialPort); // Failed connections stay real/unknown, never simulation.
         instrument = std::move(serial);
-    } else if (pluginPath.isEmpty()) instrument = std::make_unique<qitest::SimulatedInstrument>();
+    } else if (pluginPath.isEmpty()) instrument = std::make_unique<qitest::Rs485Instrument>();
     else {
         driverLoader.setFileName(pluginPath);
         auto *factory = qobject_cast<qitest::IInstrumentPlugin *>(driverLoader.instance());
