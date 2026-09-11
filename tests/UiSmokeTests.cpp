@@ -9,6 +9,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTabWidget>
+#include <QTabBar>
 #include "ui/MainWindow.h"
 #include "ui/ChatTranscript.h"
 #include "ui/ChromatogramDialog.h"
@@ -750,6 +751,14 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     auto *home=commandButton(window,"OpenHome"); QVERIFY(home);
     QTRY_VERIFY_WITH_TIMEOUT(home->isVisibleTo(&window),5000);
     home->click();
+    auto *analysisTabs=window.findChild<QTabWidget *>("analysisViewTabs");QVERIFY(analysisTabs);
+    auto *analysisTabBar=analysisTabs->tabBar();QVERIFY(analysisTabBar);QVERIFY(analysisTabBar->isVisibleTo(&window));
+    const QImage tabImage=analysisTabBar->grab().toImage();QVERIFY(!tabImage.isNull());
+    for(int index=0;index<analysisTabBar->count();++index) {
+        const QRect rect=analysisTabBar->tabRect(index);
+        QVERIFY2(tabImage.pixelColor(rect.left()+4,rect.center().y()).lightness()>140,
+            qPrintable(analysisTabBar->tabText(index)));
+    }
     auto *example=window.findChild<QPushButton *>("loadPublicExample"); QVERIFY(example);
     QVERIFY(example->isVisibleTo(&window));
     example->click();
