@@ -15,10 +15,8 @@
 #include <memory>
 
 int main(int argc, char *argv[]) {
-#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
-#endif
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("宁波新芝生物科技股份有限公司");
     QCoreApplication::setOrganizationDomain("scientz.com");

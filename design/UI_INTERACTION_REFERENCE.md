@@ -15,7 +15,7 @@ Fusion Base Style
   -> QAbstractItemModel + View + Delegate
 ```
 
-- Qt 6.10.2 + C++17 + CMake，Qt Widgets-first。
+- Qt 5.12.12 + C++17 + CMake，Qt Widgets-first。
 - 颜色、字体、间距、圆角和状态语义由 `ScientzTheme` 统一管理。
 - 通用控件使用应用级 QSS；谱图、读数、报警和 AI 证据等专业组件使用 Custom QWidget/QPainter。
 - 全部用户命令注册到 `ActionRegistry`，同一命令可被顶部命令栏、菜单、右键和快捷键复用。

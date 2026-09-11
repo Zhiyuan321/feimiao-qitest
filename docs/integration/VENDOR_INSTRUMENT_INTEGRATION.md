@@ -59,14 +59,14 @@
 - `tests/Rs485Tests.cpp`：协议与虚拟串口传输测试。
 - `tests/InstrumentControlTests.cpp`、`tests/UiSmokeTests.cpp`：控制器与界面回归；测试使用内存串口，绝不枚举后自动连接实机。
 
-实机验收还需在实际COM口接设备，核对一帧原始应答与仪器显示，验证拔插和断电后的失效提示。本机Qt6/MSVC编译和测试不替代Qt5.12.12/Win7目标机器、安装包及设备验收。
+实机验收还需在实际COM口接设备，核对一帧原始应答与仪器显示，验证拔插和断电后的失效提示。开发机编译和测试不替代 Qt 5.12.12 / Win7 目标机器、安装包及设备验收。
 
 插件接口新增只读能力和缓存状态通知，ABI标识升级为 `cn.feimiao.InstrumentPlugin/1.1`，厂家插件须按新头文件同步重编译；旧1.0插件不会当作兼容接口加载。
 
 ## 接入步骤
 
 1. 提供协议/SDK、仪器型号、固件、USB/串口/TCP 信息、开关含义、硬件互锁、安全范围、单位、回执示例、断线恢复策略、原始谱图样本。
-2. 以 `examples/vendor_adapter` 为起点实现 `IInstrumentPlugin` 工厂及 `IInstrumentAdapter`。编译器、Qt 版本、架构与主程序一致：Win7 x64 Qt 5.12.12/MinGW 7.3；Mac 当前 Qt 6/Apple Clang。
+2. 以 `examples/vendor_adapter` 为起点实现 `IInstrumentPlugin` 工厂及 `IInstrumentAdapter`。所有平台的 Qt 版本统一为 5.12.12；Win7 x64 使用 MinGW 7.3，Mac x86_64 使用 Apple Clang。
 3. `descriptor()` 返回真实设备标识且 simulation=false；`health()`、`telemetry()` 和 `confirmedSettings()` 只返回缓存的实际回读，不能在 GUI 线程同步等待硬件。
 4. `validateSetting()` 核对厂家确认的安全范围、连接、实时互锁、能力及运行状态。主程序数值输入上限只是演示编辑器范围，**不是物理安全范围**。
 5. `requestSetting(requestId,key,value)` 立即返回，在自有工作线程调用 SDK；收到匹配设备回执和回读后发 `settingFinished`。Qt 会将信号转回控制器线程。
@@ -106,9 +106,5 @@
 设备操作耗时超过 5 秒时，现有契约会超时。不要用“已接受”加伪造目标回读来通过检查；应先设计“已接受/执行中/完成”的独立类型化状态契约及测试，再接入长流程。当前 settingFinished 不是长流程进度信号。
 
 ### 本次验证记录
-
-2026-09-08，本机 Qt 6.11.1 / MSVC Debug：主程序编译通过；485协议测试、设备控制器回归、AI证据回归通过；界面专项 `rs485StatusPanelReadsAndInvalidates`、`fixedLandscapeNavigation`、`instrumentPowerButtonsReflectPartialState`、`foreignSavedPathFallsBackToLocalDocuments` 通过，并检查1024×768截图（截图数据来自内存测试设备）。
-
-全量界面测试未通过：`bundledExampleLoadsThreePlotsWithoutAi` 的 `home->isVisibleTo(&window)` 检查失败，随后较长的导航测试被中止。本次不将整套UI回归、Win7安装包或实机联调标记为通过。
 
 2026-09-08补充：485适配器已在Qt5.15.2/MinGW8.1 Release下编译，协议、设备控制器及485界面专项测试通过；不代表Win7实机已通过。该记录仅为历史验证，不表示当前仍支持此版本；当前打包入口为scripts/build_win7_qt51212.ps1，详见根目录 WINDOWS7_BUILD_GUIDE.md。

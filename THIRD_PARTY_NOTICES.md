@@ -8,7 +8,7 @@
 |---|---|---|---|---|
 | Qwen3.5-0.8B Q4_0 GGUF | 当前轻量部署模型，ggml-org 量化 | Apache-2.0 | 保留 Apache-2.0 许可文本和模型校验值 | <https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF> |
 | llama.cpp | b10752 | MIT | 保留版权与 MIT 许可文本 | <https://github.com/ggml-org/llama.cpp/releases/tag/b10752> |
-| Qt | macOS 6.10.2 / Windows 5.12.12 | 商业或 LGPLv3/GPLv3，按实际模块复核 | 见下方决策；随包保留许可文本和实际使用模块的 SBOM | <https://www.qt.io/licensing/> |
+| Qt | macOS / Windows 统一为 5.12.12 | 商业或 LGPLv3/GPLv3，按实际模块复核 | 见下方决策；随包保留许可文本和实际使用模块记录 | <https://www.qt.io/licensing/> |
 
 模型许可位于运行资源 `ai/Qwen3.5-LICENSE`；其他组件许可位于 `notices`。Mac 运行资源在 `Contents/Resources`，Windows 在 `resources`。
 
