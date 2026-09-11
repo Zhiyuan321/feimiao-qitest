@@ -67,11 +67,10 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
     if(fullAccess) layout->addWidget(createGroup("基本设置","基本",2));
     layout->addWidget(createGroup(fullAccess ? "质谱设置" : "可调整参数","扫描",fullAccess ? 3 : 1,true),1);
     auto *extensions=new QStackedWidget; extensions->setObjectName("methodModeParameters");
-    auto *fullscanPlaceholder=new QWidget;
-    extensions->addWidget(fullscanPlaceholder);
-    extensions->addWidget(createGroup("SIM 参数","SIM",2));
+    extensions->addWidget(new QWidget);
+    extensions->addWidget(createGroup("SIM 参数","SIM",3));
     extensions->addWidget(createGroup("MS/MS 参数","MS/MS",3));
-    layout->addWidget(extensions); extensions->setVisible(false);
+    layout->addWidget(extensions);
     const auto updateMode=[=](const QString &value){
         extensions->setCurrentIndex(value=="SIM" ? 1 : value=="MS/MS" ? 2 : 0);
         extensions->setVisible(fullAccess && value!="Fullscan");
@@ -89,6 +88,9 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
         QJsonObject result=fullAccess ? QJsonObject{} : initial;
         result.insert("scan_mode",mode->currentText());
         for(auto i=edits.cbegin();i!=edits.cend();++i) {
+            QString group;
+            for (const auto &field : MethodDraft::fields()) if (field.key == i.key()) { group = field.group; break; }
+            if (fullAccess && group!="基本" && group!="扫描" && group!=mode->currentText()) continue;
             if(i.value()->text().trimmed().isEmpty()){result.remove(i.key());continue;}
             bool ok=false; const double value=i.value()->text().trimmed().toDouble(&ok);
             if(!ok || !std::isfinite(value)) {feedback->setText("参数不是有限数值："+i.key());return false;}

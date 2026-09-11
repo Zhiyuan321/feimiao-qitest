@@ -1174,8 +1174,8 @@ QWidget *MainWindow::createSettingsPage() {
     auto *sectionOptions = new QListView(section);
     sectionOptions->setObjectName("settingsSectionOptions");
     sectionOptions->setUniformItemSizes(true);
-    sectionOptions->setSpacing(2);
-    sectionOptions->setStyleSheet("QListView { background: #ffffff; color: #243331; border: 1px solid #b5c9c5; border-radius: 10px; padding: 4px; outline: 0; } QListView::item { min-height: 40px; padding: 0 10px; border: 0; border-radius: 8px; } QListView::item:selected, QListView::item:hover { background: #d9efea; color: #007f80; }");
+    sectionOptions->setSpacing(0);
+    sectionOptions->setStyleSheet("QListView { background: #ffffff; color: #243331; border: 1px solid #b5c9c5; border-radius: 0; padding: 0; outline: 0; } QListView::item { min-height: 40px; padding: 0 10px; margin: 0; border: 0; border-radius: 0; } QListView::item:selected, QListView::item:hover { background: #d9efea; color: #007f80; }");
     section->setView(sectionOptions);
     section->addItems({"仪器控制", "分析校准", "系统"});
     section->setMinimumHeight(44);
@@ -2240,7 +2240,8 @@ QWidget *MainWindow::createMethodPage() {
     methodName_->setToolTip("方法名称为 2–16 个字符");
     methodRevisionNote_ = new QLineEdit;
     methodRevisionNote_->setPlaceholderText("版本说明");
-    auto *create = new QPushButton("编辑参数 / 新版本");
+    auto *create = new QPushButton("编辑参数");
+    create->setObjectName("editMethodParameters");
     create->setProperty("sciRole", "primary");
     auto *activate = new QPushButton("激活所选版本");
     editorLayout->addWidget(methodName_, 1);
@@ -2297,6 +2298,11 @@ QWidget *MainWindow::createMethodPage() {
         const bool valid = item && !item->data(Qt::UserRole).toString().isEmpty();
         const bool alreadyActive = item && item->data(Qt::UserRole + 1).toBool();
         activate->setEnabled(valid && !alreadyActive);
+        if (valid && methodName_) {
+            const QString methodId = item->data(Qt::UserRole).toString();
+            for (const auto &method : controller_->methods())
+                if (method.id == methodId) { methodName_->setText(method.name); break; }
+        }
     });
     connect(activate, &QPushButton::clicked, this, [this, activate] {
         const int row = methodTable_->currentRow();
@@ -2811,22 +2817,34 @@ void MainWindow::performLibrarySearch() {
 
 void MainWindow::refreshMethods() {
     if (!methodTable_) return;
+    QString selectedId;
+    if (const auto *selected = methodTable_->item(methodTable_->currentRow(), 0))
+        selectedId = selected->data(Qt::UserRole).toString();
     const auto methods = controller_->methods();
     prepareTableRows(methodTable_, methods.size());
+    int rowToSelect = -1;
     for (int row = 0; row < methods.size(); ++row) {
         const auto &method = methods[row];
         QString displayName = method.name;
         displayName.replace(" · 开发方法", "");
+        const QString createdBy = (method.createdBy == "offline-demo" || method.createdBy == "system-bootstrap")
+            ? QString("系统") : method.createdBy;
         const QStringList values{method.active ? "● 活动" : "", displayName,
-            QString::number(method.version), method.checksum.left(12), method.createdBy,
+            QString::number(method.version), method.checksum.left(12), createdBy,
             method.createdAt.toLocalTime().toString("yyyy-MM-dd HH:mm:ss")};
         for (int column = 0; column < values.size(); ++column)
             setTableText(methodTable_, row, column, values[column]);
         auto *state = setTableText(methodTable_, row, 0, values[0]);
         state->setData(Qt::UserRole, method.id);
         state->setData(Qt::UserRole + 1, method.active);
+        if (method.id == selectedId || (rowToSelect < 0 && selectedId.isEmpty() && method.active)) rowToSelect = row;
         for (int column = 0; column < values.size(); ++column)
             if (auto *item = methodTable_->item(row, column)) item->setToolTip(values[column]);
+    }
+    if (rowToSelect < 0 && !methods.isEmpty()) rowToSelect = 0;
+    if (rowToSelect >= 0) {
+        methodTable_->selectRow(rowToSelect);
+        if (methodName_) methodName_->setText(methods[rowToSelect].name);
     }
 }
 

@@ -79,14 +79,14 @@ QString Theme::buildStyleSheet(Density density) {
         QComboBox::down-arrow { image: url(:/qitest/resources/icons/chevron-down.svg); width: 16px; height: 16px; }
         QComboBox:hover, QComboBox:focus { border-color: %18; background: %19; }
         QComboBox:on { border: 2px solid %18; background: %19; }
-        QComboBox::drop-down:hover { background: %17; border-radius: 6px; }
+        QComboBox::drop-down:hover { background: %17; border-radius: 0; }
         QComboBox:disabled { background: %6; color: %11; }
         QTabWidget#workbenchTabs::pane { border: 0; background: %2; }
         QTabWidget#workbenchTabs QTabBar::tab { background: %6; border: 0; border-radius: 8px; min-height: 44px; padding: 0 18px; margin-right: 6px; font-weight: 600; }
         QTabWidget#workbenchTabs QTabBar::tab:selected { background: %17; color: %20; }
         QTabWidget#workbenchTabs QTabBar::tab:hover { background: %19; }
-        QComboBox QAbstractItemView { background: %4; color: %1; border: 1px solid %15; border-radius: 10px; padding: 4px; outline: 0; selection-background-color: %17; selection-color: %20; }
-        QComboBox QAbstractItemView::item { min-height: 36px; padding: 0 10px; border: 0; border-radius: 7px; }
+        QComboBox QAbstractItemView { background: %4; color: %1; border: 1px solid %15; border-radius: 0; padding: 0; outline: 0; selection-background-color: %17; selection-color: %20; }
+        QComboBox QAbstractItemView::item { min-height: 36px; padding: 0 10px; margin: 0; border: 0; border-radius: 0; }
         QComboBox QAbstractItemView::item:hover { background: %19; color: %20; }
         QLineEdit:focus, QPlainTextEdit:focus { border: 2px solid %18; }
         QLineEdit[sciRole="assistantInput"] { background: transparent; border: 0; padding: 0 4px; min-height: 32px; }
@@ -130,11 +130,11 @@ QString Theme::buildStyleSheet(Density density) {
         QProgressBar { background: rgba(255,255,255,0.18); border: 0; border-radius: 4px; height: 8px; }
         QProgressBar::chunk { background: %4; border-radius: 4px; }
         QListWidget { background: transparent; border: 0; outline: 0; }
-        QListWidget::item { min-height: 38px; padding: 0 10px; border-radius: 8px; }
+        QListWidget::item { min-height: 38px; padding: 0 10px; border-radius: 0; }
         QListWidget::item:hover { background: %19; }
         QListWidget::item:selected { background: %17; color: %20; }
         QTreeWidget { background: transparent; border: 0; outline: 0; }
-        QTreeWidget::item { min-height: 36px; padding: 0 6px; border-radius: 8px; }
+        QTreeWidget::item { min-height: 36px; padding: 0 6px; border-radius: 0; }
         QTreeWidget::item:hover { background: %19; }
         QTreeWidget::item:selected { background: %17; color: %20; }
         QTreeWidget::branch { background: transparent; border: 0; image: none; }
@@ -145,8 +145,8 @@ QString Theme::buildStyleSheet(Density density) {
         QTableWidget::item:hover { background: %19; }
         QTableWidget::item:selected { background: %17; color: %20; }
         QHeaderView::section { background: %17; border: 0; padding: 8px; font-weight: 600; }
-        QMenu { background: %4; border: 1px solid %5; border-radius: 10px; padding: 6px; }
-        QMenu::item { min-width: 150px; padding: 8px 24px 8px 10px; border-radius: 6px; }
+        QMenu { background: %4; border: 1px solid %5; border-radius: 0; padding: 0; }
+        QMenu::item { min-width: 150px; padding: 8px 24px 8px 10px; margin: 0; border-radius: 0; }
         QMenu::item:selected { background: %17; color: %20; }
         QMenu::separator { height: 1px; background: %5; margin: 5px 8px; }
         QToolTip { background: %1; color: %4; border: 0; padding: 7px 9px; }

@@ -47,6 +47,7 @@
 #include <QStackedWidget>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QPushButton>
 #include <QLineEdit>
 #include <QListWidget>
@@ -602,6 +603,12 @@ void UiSmokeTests::fixedLandscapeNavigation() {
     auto *tree = window.findChild<QTreeWidget *>("settingsTree");
     auto *section = window.findChild<QComboBox *>("settingsSection");
     QVERIFY(tree); QVERIFY(section); QVERIFY(tree->isVisibleTo(&window));
+    section->setCurrentIndex(0);
+    QWheelEvent wheel(QPointF(section->rect().center()),
+        QPointF(section->mapToGlobal(section->rect().center())), QPoint(), QPoint(0, -120),
+        Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(section, &wheel);
+    QCOMPARE(section->currentIndex(), 0); // 页面滚动不得意外切换设置分类。
     // A windowed Win7 desktop may reserve title/taskbar pixels. Navigation must
     // preserve the established client area; full-screen switching is tested below.
     QTest::qWait(150);
@@ -1168,6 +1175,9 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
         if (edit->placeholderText() == "方法名称") methodName = edit;
     QVERIFY(methodName);
     QCOMPARE(methodName->maxLength(), 16);
+    auto *editMethodParameters = window.findChild<QPushButton *>("editMethodParameters");
+    QVERIFY(editMethodParameters);
+    QCOMPARE(editMethodParameters->text(), QString("编辑参数"));
     auto *activateMethod = visibleWidgetWithText<QPushButton>(window, "设为当前方法");
     QVERIFY(activateMethod);
     QVERIFY(!activateMethod->isEnabled());
@@ -1800,7 +1810,10 @@ void UiSmokeTests::professionalOfflineToolsValidateAndRemainUsable() {
     QVERIFY(repo.categories(&error).contains("测试类别"));QVERIFY(repo.addCategory("空类别",&error));QVERIFY(repo.removeCategory("空类别",&error));QVERIFY(!repo.removeCategory("测试类别",&error));
     QVERIFY(!repo.archive(id,standard.revision+1,&error));QVERIFY(repo.archive(id,standard.revision,&error));QCOMPARE(repo.count(&error),0);QVERIFY(repo.search("",0,&error).isEmpty());QVERIFY(repo.load(id,&roundtrip,&error));QCOMPARE(roundtrip.additionalQualifierMzs,standard.additionalQualifierMzs);QVERIFY(!repo.save(&standard,&error));
     bool saved=false;auto *editor=new MethodEditorDialog("离线方法",parameters,[&](const QString &,const QJsonObject &p){saved=MethodDraft::validate(p,&error);return saved;});editor->show();QTest::qWait(30);
+    auto *scanMode=editor->findChild<QComboBox *>("methodScanMode");QVERIFY(scanMode);QCOMPARE(scanMode->count(),3);QCOMPARE(scanMode->currentText(),QString("Fullscan"));
     QVERIFY(editor->findChild<QLineEdit *>("method_low_mass")->height()>=44);
+    QCOMPARE(editor->findChild<QLineEdit *>("method_high_mass")->text(),QString("500"));
+    QCOMPARE(editor->findChild<QLineEdit *>("method_multiplier")->text(),QString("1000"));
     editor->findChild<QPushButton *>("saveMethodDraft")->click();QVERIFY(saved);QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
     const QString capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     for(const QString &kind:{"射频调谐","质量轴校准","注射泵"}) {

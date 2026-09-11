@@ -19,20 +19,34 @@ public:
             {"low_mass","低质量数","m/z","扫描"},{"high_mass","高质量数","m/z","扫描"},
             {"cooling","冷却时间","","扫描"},{"ac_frequency","AC 频率","","扫描"},
             {"injection","进样时间","ms","扫描"},{"multiplier","倍增器电压","V","扫描"},
-            {"sim_start","隔离开始电压","","SIM"},{"sim_end","隔离结束电压","","SIM"},
-            {"sim_rf","RF 质量数","m/z","SIM"},{"sim_width","隔离范围","","SIM"},
-            {"fragment_period","碎裂周期","","MS/MS"},{"ac_interval","AC 震荡间隔","","MS/MS"},
-            {"fragment_start","碎裂开始电压","","MS/MS"},{"fragment_end","碎裂结束电压","","MS/MS"},
-            {"msms_start","隔离开始电压","","MS/MS"},{"msms_end","隔离结束电压","","MS/MS"},
-            {"msms_rf","隔离 RF 质量数","m/z","MS/MS"},{"fragment_factor","碎裂系数","","MS/MS"},
-            {"msms_width","隔离范围","","MS/MS"}};
+            {"sim_ac_voltage","SIM AC 电压","","SIM"},
+            {"sim_ac_voltage_high","SIM AC 上限","","SIM"},
+            {"isolate_rf","隔离 RF 质量数","m/z","SIM"},
+            {"isolate_Q","隔离 Q 值","","SIM"},
+            {"isolate_swift_retain_sim","SIM 保留段","","SIM"},
+            {"isolate_ac_voltage","隔离 AC 电压","","MS/MS"},
+            {"isolate_ac_voltage_high","隔离 AC 上限","","MS/MS"},
+            {"isolate_rf_ms","MS/MS 隔离 RF","m/z","MS/MS"},
+            {"isolate_swift_retain","隔离保留段","","MS/MS"},
+            {"lc_resonance_period","LC 共振周期","","MS/MS"},
+            {"ac_oscillation_amplitude_low","AC 振荡下限","","MS/MS"},
+            {"ac_oscillation_amplitude_high","AC 振荡上限","","MS/MS"},
+            {"ac_oscillation_amplitude_interval","AC 振荡间隔","","MS/MS"}};
         return values;
     }
     static QJsonObject defaultParameters() {
+        // 这些值逐项来自用户提供的旧软件 Fullscan 参考界面，不是协议推测值。
         return {{"scan_mode","Fullscan"},{"carrier",1.0},{"extraction",0.0},{"inlet",50.0},
             {"td",0.0},{"source",0.0},{"trap",85.0},{"period",10000.0},{"speed",8000.0},
             {"rf_frequency",50.0},{"storage_mass",30.0},{"low_mass",40.0},{"high_mass",300.0},
-            {"cooling",5000.0},{"ac_frequency",590.0},{"injection",380.0},{"multiplier",1000.0}};
+            {"cooling",5000.0},{"ac_frequency",590.0},{"injection",380.0},{"multiplier",1000.0},
+            // 扩展模式值来自 QitVenture 6.1.0.1 随包配置，仅作模拟驱动参考。
+            {"sim_ac_voltage",600.0},{"sim_ac_voltage_high",500.0},{"isolate_rf",100.0},
+            {"isolate_Q",0.4},{"isolate_swift_retain_sim",4.0},
+            {"isolate_ac_voltage",600.0},{"isolate_ac_voltage_high",500.0},{"isolate_rf_ms",100.0},
+            {"isolate_swift_retain",4.0},{"lc_resonance_period",1000.0},
+            {"ac_oscillation_amplitude_low",500.0},{"ac_oscillation_amplitude_high",550.0},
+            {"ac_oscillation_amplitude_interval",10.0}};
     }
     static bool validate(const QJsonObject &values, QString *error) {
         const auto fail=[error](const QString &s){ if(error)*error=s; return false; };
@@ -47,7 +61,7 @@ public:
                 return fail("进样时间：范围0～600 ms，分辨率0.01 ms");
             if(field.unit=="%" && number>100) return fail(field.label+"：百分比不能超过 100");
         }
-        for(const auto &pair:QVector<QPair<QString,QString>>{{"low_mass","high_mass"},{"sim_start","sim_end"},{"msms_start","msms_end"},{"fragment_start","fragment_end"}})
+        for(const auto &pair:QVector<QPair<QString,QString>>{{"low_mass","high_mass"}})
             if(values.contains(pair.first) && values.contains(pair.second) && values.value(pair.first).toDouble()>values.value(pair.second).toDouble())
                 return fail("起始值不能大于结束值："+pair.first);
         for(const QString &key:values.keys()) {
