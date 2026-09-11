@@ -1,12 +1,22 @@
 """Build a self-contained, per-user Win7 x64 installer from the verified runtime."""
+import argparse
 import hashlib
 from pathlib import Path
 import shutil
 import subprocess
 
 root = Path(__file__).resolve().parent.parent
-package = root.parent / "05-交付/Windows"
-output = root.parent / "05-交付/飞秒质谱工作站安装程序.exe"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--package", type=Path, default=root.parent / "05-交付/Windows",
+                    help="已通过校验的Windows运行目录")
+parser.add_argument("--output", type=Path, default=root.parent / "05-交付/飞秒质谱工作站安装程序.exe",
+                    help="安装程序输出路径")
+arguments = parser.parse_args()
+package = arguments.package.expanduser().resolve()
+output = arguments.output.expanduser().resolve()
+if not (package / "SHA256SUMS.txt").is_file():
+    raise SystemExit("未找到已校验运行目录: " + str(package))
+output.parent.mkdir(parents=True, exist_ok=True)
 stage = root / ".qa/installer-build"
 stage.mkdir(parents=True, exist_ok=True)
 
