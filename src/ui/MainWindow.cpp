@@ -750,6 +750,7 @@ QWidget *MainWindow::createHomePage() {
     auto *contextLayout = new QHBoxLayout(context);
     contextLayout->setContentsMargins(16, 0, 16, 0);
     phaseLabel_ = makeLabel("就绪", "contextTitle");
+    phaseLabel_->setObjectName("runPhaseLabel");
     contextLayout->addWidget(makeLabel("●", "healthy"));
     contextLayout->addWidget(phaseLabel_);
     contextLayout->addStretch();
@@ -771,6 +772,8 @@ QWidget *MainWindow::createHomePage() {
     auto *softwareTime = makeLabel({}, "metadata"); softwareTime->setObjectName("runSoftwareTime");
     for (auto *label : {deviceState, detectionTime}) {
         label->setWordWrap(false); label->setMinimumWidth(0);
+        label->setFixedHeight(36);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         runStatusLayout->addWidget(label);
     }
@@ -789,14 +792,11 @@ QWidget *MainWindow::createHomePage() {
         const QString state = !health.connected ? "未连接" : !health.ready ? "未就绪"
             : phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中" : "就绪";
-        deviceState->setText((simulation ? QString("系统 ") : QString("仪器 ")) + state);
+        deviceState->setText((simulation ? QString("系统") : QString("仪器")) + state);
         deviceState->setAccessibleDescription("当前连接与运行状态");
         const qint64 elapsed = controller_->detectionElapsedMs();
-        const QString suffix = phase == AppController::Phase::Acquiring ? "采集中"
-            : phase == AppController::Phase::Analyzing ? "分析中"
-            : phase == AppController::Phase::ResultReady ? "完成" : "已停止";
-        detectionTime->setText(elapsed < 0 ? QString("检测 —")
-            : QString("检测 %1 s · %2").arg(elapsed / 1000.0, 0, 'f', 1).arg(suffix));
+        detectionTime->setText(elapsed < 0 ? QString("检测待命")
+            : QString("检测 %1 s").arg(elapsed / 1000.0, 0, 'f', 1));
         const qint64 seconds = controller_->softwareElapsedMs() / 1000;
         softwareTime->setText(QString("运行 %1:%2:%3").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
             .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0')).arg(seconds % 60, 2, 10, QLatin1Char('0')));
@@ -3229,8 +3229,7 @@ void MainWindow::updatePhase(AppController::Phase phase, const QString &label) {
 void MainWindow::showResult(const AnalysisResult &result) {
     updateWorkspaceLayout();
     if (controller_->currentRun().dataScope == "PUBLIC_EXAMPLE") {
-        phaseLabel_->setText("公开示例 · OpenMS BSA");
-        if (resultSource_) resultSource_->setText("数据来源：公开示例数据");
+        phaseLabel_->setText("分析完成");
         eicMz_->setValue(391.284103);
         eicTolerance_->setValue(0.5);
         refreshRunEic();

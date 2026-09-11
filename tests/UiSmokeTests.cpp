@@ -46,6 +46,7 @@
 #include <QFontDatabase>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -706,8 +707,10 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     auto *detectionTime = window.findChild<QLabel *>("runDetectionTime");
     auto *softwareTime = window.findChild<QLabel *>("runSoftwareTime");
     QVERIFY(deviceState && detectionTime && softwareTime);
-    QVERIFY(deviceState->text().contains("系统 未就绪"));
-    QCOMPARE(detectionTime->text(), QString("检测 —"));
+    QVERIFY(deviceState->text().contains("系统未就绪"));
+    QCOMPARE(detectionTime->text(), QString("检测待命"));
+    QCOMPARE(deviceState->height(), detectionTime->height());
+    QCOMPARE(deviceState->geometry().center().y(), detectionTime->geometry().center().y());
     QVERIFY(softwareTime->text().startsWith("运行 "));
     QVERIFY(deviceState->toolTip().isEmpty());
     QVERIFY(detectionTime->toolTip().isEmpty());
@@ -767,6 +770,9 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     example->click();
     QTRY_COMPARE_WITH_TIMEOUT(controller.scans().size(),64,5000);
     QCOMPARE(controller.currentRun().dataScope,QString("PUBLIC_EXAMPLE"));
+    auto *phaseLabel=window.findChild<QLabel *>("runPhaseLabel");QVERIFY(phaseLabel);
+    QCOMPARE(phaseLabel->text(),QString("分析完成"));
+    QVERIFY(window.statusBar()->currentMessage().isEmpty());
     QVERIFY(controller.deepAiEnabled());
     auto *mode=window.findChild<QComboBox *>("aiModeSelector"); QVERIFY(mode);
     QCOMPARE(mode->count(),4);

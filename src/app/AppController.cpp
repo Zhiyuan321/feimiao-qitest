@@ -977,8 +977,8 @@ void AppController::importRunArchives(const QStringList &paths) {
         emit notice(summary);
         if (!exampleId.isEmpty()) {
             loadStoredRun(exampleId);
-            emit notice(wasExample ? "已载入公开 OpenMS BSA 示例；不是客户检测结果，不用于浓度验证"
-                                   : "已载入导入谱图，结果待复核");
+            if (wasExample) emit notice({});
+            else emit notice("已载入导入谱图，结果待复核");
         }
     });
     emit importProgress(0, paths.size(), "正在导入；可继续浏览页面，停止会保留已完成的记录");

@@ -26,7 +26,7 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#commandBar, QWidget#contextHeader, QWidget#statusRail { border-bottom: 1px solid %5; }
         QWidget#contextHeader { background: %6; }
         QWidget#runStatusStrip { background: transparent; border: 0; }
-        QWidget#runStatusStrip QLabel { font-size: 13px; font-weight: 500; }
+        QWidget#runStatusStrip QLabel { font-size: 14px; font-weight: 500; margin: 0; padding: 0; }
         QLabel[sciRole="compactRuntime"] { font-size: 14px; font-weight: 500; }
         QWidget#analysisCanvas { background: %2; }
         QWidget#standardLibraryTabs, QStackedWidget#standardLibraryPages { background: %2; border: 0; }
