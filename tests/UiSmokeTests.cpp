@@ -706,9 +706,9 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     auto *detectionTime = window.findChild<QLabel *>("runDetectionTime");
     auto *softwareTime = window.findChild<QLabel *>("runSoftwareTime");
     QVERIFY(deviceState && detectionTime && softwareTime);
-    QVERIFY(deviceState->text().contains("系统 · 未就绪"));
-    QCOMPARE(detectionTime->text(), QString("检测用时 —"));
-    QVERIFY(softwareTime->text().startsWith("软件运行 "));
+    QVERIFY(deviceState->text().contains("系统 未就绪"));
+    QCOMPARE(detectionTime->text(), QString("检测 —"));
+    QVERIFY(softwareTime->text().startsWith("运行 "));
     QVERIFY(deviceState->toolTip().isEmpty());
     QVERIFY(detectionTime->toolTip().isEmpty());
     QVERIFY(softwareTime->toolTip().isEmpty());
@@ -753,6 +753,9 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     home->click();
     auto *analysisTabs=window.findChild<QTabWidget *>("analysisViewTabs");QVERIFY(analysisTabs);
     auto *analysisTabBar=analysisTabs->tabBar();QVERIFY(analysisTabBar);QVERIFY(analysisTabBar->isVisibleTo(&window));
+    auto *runStatus=window.findChild<QWidget *>("runStatusStrip");QVERIFY(runStatus);
+    QCOMPARE(analysisTabs->cornerWidget(Qt::TopRightCorner),runStatus);
+    QVERIFY(runStatus->height()<=analysisTabBar->height());
     const QImage tabImage=analysisTabBar->grab().toImage();QVERIFY(!tabImage.isNull());
     for(int index=0;index<analysisTabBar->count();++index) {
         const QRect rect=analysisTabBar->tabRect(index);

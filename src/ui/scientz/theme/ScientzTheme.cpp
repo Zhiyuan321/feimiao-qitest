@@ -25,6 +25,9 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#identityBar, QWidget#commandBar, QWidget#brandIdentity, QWidget#statusRail, QWidget#panelHeader { background: %4; }
         QWidget#commandBar, QWidget#contextHeader, QWidget#statusRail { border-bottom: 1px solid %5; }
         QWidget#contextHeader { background: %6; }
+        QWidget#runStatusStrip { background: transparent; border: 0; }
+        QWidget#runStatusStrip QLabel { font-size: 13px; font-weight: 500; }
+        QLabel[sciRole="compactRuntime"] { font-size: 14px; font-weight: 500; }
         QWidget#analysisCanvas { background: %2; }
         QWidget#standardLibraryTabs, QStackedWidget#standardLibraryPages { background: %2; border: 0; }
         QWidget#calibrationPage, QWidget#userStandardsPage { background: %2; }

@@ -761,17 +761,23 @@ QWidget *MainWindow::createHomePage() {
     // clock measures this software session, never the physical device uptime.
     auto *runStatus = new QWidget;
     runStatus->setObjectName("runStatusStrip");
+    runStatus->setFixedHeight(36);
+    runStatus->setMinimumWidth(138);
     auto *runStatusLayout = new QHBoxLayout(runStatus);
-    runStatusLayout->setContentsMargins(16, 6, 16, 6);
-    runStatusLayout->setSpacing(12);
+    runStatusLayout->setContentsMargins(4, 0, 4, 0);
+    runStatusLayout->setSpacing(6);
     auto *deviceState = makeLabel({}, "metadata"); deviceState->setObjectName("runDeviceState");
     auto *detectionTime = makeLabel({}, "metadata"); detectionTime->setObjectName("runDetectionTime");
     auto *softwareTime = makeLabel({}, "metadata"); softwareTime->setObjectName("runSoftwareTime");
-    for (auto *label : {deviceState, detectionTime, softwareTime}) {
-        label->setWordWrap(true); label->setMinimumWidth(0);
-        label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-        runStatusLayout->addWidget(label, 1);
+    for (auto *label : {deviceState, detectionTime}) {
+        label->setWordWrap(false); label->setMinimumWidth(0);
+        label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        runStatusLayout->addWidget(label);
     }
+    softwareTime->setWordWrap(false);
+    softwareTime->setProperty("sciRole","compactRuntime");
+    softwareTime->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Fixed);
+    contextLayout->addWidget(softwareTime);
     // Windows 7 上原生 tooltip 窗口可能在这一条每秒刷新时残留成深色块。
     // 状态文字本身已经完整，补充说明放入无浮层的辅助功能描述。
     detectionTime->setAccessibleDescription("从开始采集到分析结束的软件用时");
@@ -783,16 +789,16 @@ QWidget *MainWindow::createHomePage() {
         const QString state = !health.connected ? "未连接" : !health.ready ? "未就绪"
             : phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中" : "就绪";
-        deviceState->setText((simulation ? QString("系统 · ") : QString("仪器 · ")) + state);
+        deviceState->setText((simulation ? QString("系统 ") : QString("仪器 ")) + state);
         deviceState->setAccessibleDescription("当前连接与运行状态");
         const qint64 elapsed = controller_->detectionElapsedMs();
         const QString suffix = phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中"
             : phase == AppController::Phase::ResultReady ? "完成" : "已停止";
-        detectionTime->setText(elapsed < 0 ? QString("检测用时 —")
-            : QString("检测用时 %1 s · %2").arg(elapsed / 1000.0, 0, 'f', 1).arg(suffix));
+        detectionTime->setText(elapsed < 0 ? QString("检测 —")
+            : QString("检测 %1 s · %2").arg(elapsed / 1000.0, 0, 'f', 1).arg(suffix));
         const qint64 seconds = controller_->softwareElapsedMs() / 1000;
-        softwareTime->setText(QString("软件运行 %1:%2:%3").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
+        softwareTime->setText(QString("运行 %1:%2:%3").arg(seconds / 3600, 2, 10, QLatin1Char('0'))
             .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0')).arg(seconds % 60, 2, 10, QLatin1Char('0')));
     };
     auto *runStatusTimer = new QTimer(runStatus);
@@ -803,7 +809,6 @@ QWidget *MainWindow::createHomePage() {
     connect(controller_, &AppController::phaseChanged, runStatus, refreshRunStatus);
     connect(controller_, &AppController::instrumentSettingsChanged, runStatus, refreshRunStatus);
     refreshRunStatus(); runStatusTimer->start();
-    layout->addWidget(runStatus);
 
     // Three bounded scientific views. Screening review has one home in the
     // report workspace, not a duplicate table below or beside these charts.
@@ -1009,6 +1014,8 @@ QWidget *MainWindow::createHomePage() {
     auto *views=new QTabWidget; views->setObjectName("analysisViewTabs"); views->setDocumentMode(true);
     views->addTab(canvas,"谱图分析");
     views->addTab(createDeviceWaveformPanel(controller_,false),"气压图");
+    // 状态与图页入口共用一行，把独立状态条的高度还给三张谱图。
+    views->setCornerWidget(runStatus,Qt::TopRightCorner);
     layout->addWidget(views,1);
     connect(startButton_, &QPushButton::clicked, actions_->action("StartRun"), &QAction::trigger);
     connect(importData, &QPushButton::clicked, this, &MainWindow::importRunArchiveFromDialog);
