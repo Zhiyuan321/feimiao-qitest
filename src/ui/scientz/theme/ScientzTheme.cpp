@@ -151,7 +151,7 @@ QString Theme::buildStyleSheet(Density density) {
         QToolButton[sciRole="moduleTile"]:pressed { background: %7; border-color: %15; }
         QPushButton[sciRole="moduleTile"] { background: %4; border: 1px solid %5; border-radius: 8px; padding: 8px 12px; text-align: left; font-weight: 500; }
         QPushButton[sciRole="moduleTile"]:hover { border-color: %18; background: %19; }
-        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 10px; padding: 8px 10px; font-size: 13px; font-weight: 500; }
+        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 12px; padding: 6px 8px; font-size: 12px; font-weight: 500; }
         QToolButton[sciRole="controlTile"]:hover { background: %19; border-color: %5; }
         QToolButton[sciRole="controlTile"]:pressed { background: %7; border-color: %15; }
         QToolButton[sciRole="controlTile"]:checked { background: %17; border-color: %18; color: %20; }
@@ -169,7 +169,7 @@ QString Theme::buildStyleSheet(Density density) {
         QTreeWidget::item:selected { background: %17; color: %20; }
         QTreeWidget::branch { background: transparent; border: 0; image: none; }
         QTreeWidget#settingsTree { padding: 4px; }
-        QTreeWidget#settingsTree::item { min-height: 30px; margin: 2px 4px; border-radius: 8px; }
+        QTreeWidget#settingsTree::item { min-height: 30px; margin: 2px 5px; border-radius: 11px; }
         QTreeWidget#settingsTree::item:selected { background: %18; color: %4; }
         QTableWidget { background: %4; alternate-background-color: %6; border: 0; gridline-color: transparent; border-radius: 10px; outline: 0; }
         QTableWidget::item { border: 0; padding: 6px; }

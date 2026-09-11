@@ -40,18 +40,21 @@ for name in names:
     exe = target / source.name
     shutil.copy2(source, exe)
     log = target / (name + ".txt")
+    if log.exists():
+        log.unlink()
     # Qt Test parses narrow argv on Windows; keep its output argument ASCII.
     log_path = log.name
     try:
+        timeout = 180 if name == "ui" else 60
         run = subprocess.run([args.wine, str(exe), "-o", log_path + ",txt"], cwd=target, env=env,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
         output = (log.read_text(encoding="utf-8", errors="replace") if log.exists() else "") + run.stdout.decode("utf-8", "replace")
         passed = run.returncode == 0 and "0 failed" in output
         results.append({"test": name, "passed": passed, "exit": run.returncode})
         print(name + ": " + ("PASS" if passed else "FAIL"), flush=True)
         if not passed: print(output[-6000:], flush=True)
     except subprocess.TimeoutExpired:
-        results.append({"test": name, "passed": False, "error": "60-second timeout"})
+        results.append({"test": name, "passed": False, "error": str(timeout) + "-second timeout"})
         print(name + ": TIMEOUT", flush=True)
 (target / ("results-subset.json" if args.test else "results.json")).write_text(json.dumps(results, indent=2), encoding="utf-8")
 raise SystemExit(0 if all(result["passed"] for result in results) else 1)

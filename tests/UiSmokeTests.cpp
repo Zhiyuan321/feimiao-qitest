@@ -737,8 +737,8 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
         auto *button = window.findChild<QToolButton *>("instrumentControl_" + key);
         QVERIFY(button); QVERIFY(!button->isChecked());
         QVERIFY(!button->icon().isNull());
-        QCOMPARE(button->font().pixelSize(), 13);
-        QVERIFY(button->minimumHeight() >= 86);
+        QCOMPARE(button->font().pixelSize(), 12);
+        QVERIFY(button->minimumHeight() >= 78);
         QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonTextUnderIcon);
         QVERIFY(!button->icon().pixmap(72, 72).isNull());
         QVERIFY(button->text().endsWith("已关闭"));
@@ -1491,6 +1491,25 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     }
     QCoreApplication::processEvents();
     QCOMPARE(window.findChildren<QWidget *>().size(), widgetCountBeforeNavigation);
+
+    // Returning after repeated workspace/settings navigation must restore the
+    // complete control page instead of leaving a stale or partially rebuilt UI.
+    settingsAction->trigger();
+    QVERIFY(openControlPage("常用部件"));
+    QTRY_VERIFY_WITH_TIMEOUT(controlPages->isVisibleTo(&window), 1000);
+    QCOMPARE(controlPages->currentIndex(), 0);
+    auto *commonControlPanel = window.findChild<QWidget *>("commonControlPanel");
+    QVERIFY(commonControlPanel && commonControlPanel->isVisibleTo(&window));
+    for (const auto &key : QStringList{"rfOn", "ionHighVoltageOn", "diaphragmPumpOn",
+             "molecularPumpOn", "pinchValveOn", "internalCarrierGasOn"}) {
+        auto *button = window.findChild<QToolButton *>("instrumentControl_" + key);
+        QVERIFY(button && button->isVisibleTo(&window));
+        QVERIFY(!button->text().contains("  "));
+        QVERIFY(commonControlPanel->rect().contains(
+            QRect(button->mapTo(commonControlPanel, QPoint()), button->size())));
+    }
+    if (const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR"); !capture.isEmpty())
+        QVERIFY(window.grab().save(capture + "/controls-after-navigation.png"));
 
     auto *runAction = window.findChild<QAction *>("StartRun");
     QVERIFY(runAction);

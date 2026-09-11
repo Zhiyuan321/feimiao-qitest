@@ -1399,10 +1399,12 @@ QWidget *MainWindow::createSettingsPage() {
     auto *commonLayout = new QVBoxLayout(commonControls);
     commonLayout->setContentsMargins(0, 0, 0, 0);
     auto *manualPanel = new QWidget;
+    manualPanel->setObjectName("commonControlPanel");
     manualPanel->setProperty("sciRole", "workspaceSection");
     auto *manualGrid = new QGridLayout;
-    manualGrid->setContentsMargins(12, 12, 12, 12);
-    manualGrid->setSpacing(8);
+    manualGrid->setContentsMargins(8, 8, 8, 8);
+    manualGrid->setHorizontalSpacing(6);
+    manualGrid->setVerticalSpacing(6);
     manualGrid->setAlignment(Qt::AlignTop);
     const QStringList controls{"RF", "离子源高压", "隔膜泵", "分子泵", "夹管阀", "内载气"};
     const QStringList controlKeys{"rfOn", "ionHighVoltageOn", "diaphragmPumpOn",
@@ -1413,15 +1415,15 @@ QWidget *MainWindow::createSettingsPage() {
         auto *button = new QToolButton;
         const bool enabled = initialSettings.value(controlKeys[i]).toBool();
         button->setObjectName("instrumentControl_" + controlKeys[i]);
-        button->setText(controls[i] + (enabled ? "·已开启" : "·已关闭"));
+        button->setText(controls[i] + (enabled ? " 已开启" : " 已关闭"));
         button->setCheckable(true);
         button->setIcon(commandIcon(controlIcons[i]));
-        button->setIconSize(QSize(32, 32));
+        button->setIconSize(QSize(28, 28));
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setProperty("sciRole", "controlTile");
         button->setChecked(enabled);
-        button->setMinimumSize(110, 86);
-        button->setMaximumHeight(94);
+        button->setMinimumSize(110, 78);
+        button->setMaximumHeight(84);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         manualGrid->addWidget(button, i / 3, i % 3);
         button->setProperty("instrumentControl", true);
@@ -1430,7 +1432,7 @@ QWidget *MainWindow::createSettingsPage() {
             const QSignalBlocker blocker(button);
             const QVariant value = settings.value(key);
             button->setChecked(value.isValid() && value.toBool());
-            button->setText(label + (!value.isValid() ? "·状态未知" : value.toBool() ? "·已开启" : "·已关闭"));
+            button->setText(label + (!value.isValid() ? " 状态未知" : value.toBool() ? " 已开启" : " 已关闭"));
         };
         refresh(initialSettings);
         connect(controller_, &AppController::instrumentSettingsChanged, button, refresh);
