@@ -1,7 +1,7 @@
 # 界面层
 
 先按页面定位，不必通读整个 MainWindow：
-- MainWindow：主窗口、导航、页面组装、状态连接。
+- MainWindow：主窗口、导航、页面组装、状态连接。样品分析统一“开始检测”；检测中禁用按钮与操作入口，完成弹窗点击“确认”后恢复。失败/取消不弹成功提示，打开历史记录不触发完成确认。
 - NetworkConnectionPanel / Rs485ConnectionPanel：运行状态页的网口TCP与485标签，可同时连接。
 - Rs485ConnectionPanel同时显示主控板状态与分子泵换算值（说明保留原始值），一组COM连接按钮，支持共享收发报文导出。
 - DeviceWaveformPanel：样品分析中的单包气压图、射频调谐启停；RF曲线编码/倍率仍待确认。

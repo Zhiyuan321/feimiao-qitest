@@ -581,11 +581,11 @@ QWidget *MainWindow::createWorkspacePage() {
 
     connect(actions_->action("OpenHome"), &QAction::triggered, this, [this] { setWorkspaceSection(0); });
     connect(actions_->action("StartRun"), &QAction::triggered, this, [this] {
-        setWorkspaceSection(0);
         const auto phase = controller_->phase();
-        if (phase == AppController::Phase::Acquiring || phase == AppController::Phase::Analyzing)
-            controller_->cancelDetection();
-        else {
+        if (phase == AppController::Phase::Acquiring || phase == AppController::Phase::Analyzing
+            || showReportAfterRunSaved_ || detectionAwaitingConfirmation_) return;
+        setWorkspaceSection(0);
+        {
             if (findChild<QDialog *>("sampleSaveDialog")) return;
             auto *dialog = new QDialog(this);
             dialog->setObjectName("sampleSaveDialog");
@@ -653,6 +653,11 @@ QWidget *MainWindow::createWorkspacePage() {
                 dialog->accept();
                 showReportAfterRunSaved_ = true;
                 controller_->startSampleDetection(info,path);
+                // Rejected starts do not emit a phase change or a completion.
+                if(controller_->phase()!=AppController::Phase::Acquiring
+                    && controller_->phase()!=AppController::Phase::Analyzing
+                    && !detectionAwaitingConfirmation_) showReportAfterRunSaved_=false;
+                updatePhase(controller_->phase(),phaseLabel_->text());
             });
             dialog->open(); sample->setFocus();
         }
@@ -682,7 +687,33 @@ QWidget *MainWindow::createWorkspacePage() {
         refreshReport(run);
         if (showReportAfterRunSaved_) {
             showReportAfterRunSaved_ = false;
+            detectionAwaitingConfirmation_ = true;
+            updatePhase(controller_->phase(),phaseLabel_->text());
             setWorkspaceSection(2);
+            // Explicit confirmation is required; Escape and the window close action
+            // must not silently re-enable acquisition.
+            class CompletionDialog final : public QDialog {
+            public:
+                explicit CompletionDialog(QWidget *parent):QDialog(parent){}
+                void reject() override {}
+            };
+            auto *complete=new CompletionDialog(this);
+            complete->setObjectName("detectionCompletedDialog");
+            complete->setWindowTitle("检测完成");
+            complete->setWindowFlags(Qt::Dialog|Qt::CustomizeWindowHint|Qt::WindowTitleHint);
+            complete->setWindowModality(Qt::WindowModal);
+            complete->setAttribute(Qt::WA_DeleteOnClose);
+            complete->setMinimumWidth(320);
+            auto *layout=new QVBoxLayout(complete);layout->setContentsMargins(28,24,28,24);layout->setSpacing(20);
+            auto *message=new QLabel("检测已完成");message->setAlignment(Qt::AlignCenter);layout->addWidget(message);
+            auto *confirm=new QPushButton("确认");confirm->setObjectName("confirmDetectionCompleted");
+            confirm->setMinimumHeight(44);confirm->setProperty("sciRole","primary");layout->addWidget(confirm);
+            connect(confirm,&QPushButton::clicked,complete,&QDialog::accept);
+            connect(complete,&QDialog::accepted,this,[this] {
+                detectionAwaitingConfirmation_=false;
+                updatePhase(controller_->phase(),phaseLabel_->text());
+            });
+            complete->open();confirm->setFocus();
         }
     });
     connect(controller_, &AppController::phaseChanged, this, [this](AppController::Phase phase) {
@@ -857,11 +888,11 @@ QWidget *MainWindow::createHomePage() {
         auto *dialog = new ChromatogramDialog(controller_->scans(), this);
         dialog->open();
     });
-    startButton_ = new QPushButton("▶  开始检测");
+    startButton_ = new QPushButton("开始检测");
     startButton_->setObjectName("runAcquisitionButton");
     startButton_->setProperty("sciRole", "quietAction");
     startButton_->setFixedSize(100, 30);
-    startButton_->setToolTip("按当前方法开始检测；采集中此处可停止检测");
+    startButton_->setToolTip("按当前方法开始检测；检测完成并确认后可再次开始");
     // Keep acquisition at the workspace level, not inside one scientific plot.
     contextLayout->addWidget(startButton_);
     ticLayout->addWidget(ticHeader);
@@ -3196,11 +3227,14 @@ void MainWindow::updatePhase(AppController::Phase phase, const QString &label) {
     phaseLabel_->setText(label.startsWith("已打开历史记录 ") ? "历史记录" : label);
     phaseLabel_->setToolTip(label);
     const bool busy = phase == AppController::Phase::Acquiring || phase == AppController::Phase::Analyzing;
-    actions_->action("StartRun")->setEnabled(true);
-    actions_->action("StartRun")->setText(busy ? "停止方法" : "运行方法");
-    startButton_->setEnabled(true);
-    startButton_->setText(phase == AppController::Phase::ResultReady
-        ? (controller_->currentRun().dataScope == "IMPORTED_UNVALIDATED" ? "↻  重新分析" : "↻  重新检测") : (busy ? "■  停止检测" : "▶  开始检测"));
+    if(phase==AppController::Phase::Failed || phase==AppController::Phase::Ready)
+        showReportAfterRunSaved_=false;
+    const bool locked=busy || showReportAfterRunSaved_ || detectionAwaitingConfirmation_;
+    const QString buttonText=locked ? "检测中" : "开始检测";
+    actions_->action("StartRun")->setEnabled(!locked);
+    actions_->action("StartRun")->setText(buttonText);
+    startButton_->setEnabled(!locked);
+    startButton_->setText(buttonText);
     if (emptyDataBanner_)
         emptyDataBanner_->setVisible(height() >= 620 && phase == AppController::Phase::Ready && controller_->liveSpectrum().isEmpty());
     if (workflowLabel_) {

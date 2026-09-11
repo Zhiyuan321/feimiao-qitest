@@ -88,6 +88,7 @@ private:
     bool smallScreen_ = false;
     bool aiRequestBusy_ = false;
     bool showReportAfterRunSaved_ = false;
+    bool detectionAwaitingConfirmation_ = false;
     QGridLayout *workspaceBodyLayout_ = nullptr;
     QToolButton *assistantButton_ = nullptr;
     QToolButton *instrumentToolsButton_ = nullptr;
