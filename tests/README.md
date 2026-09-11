@@ -4,7 +4,8 @@
 
 | 文件 | 关注点 |
 | --- | --- |
-| NetworkTests.cpp / NetworkTestFrames.h | TCP拆帧/CRC/状态/超时/断线重连、双通道独立、有限原始帧导出；本机回环不是实机 |
+| PumpTests.cpp / PumpTestDevice.h | 同COM主控板/泵顺序查询、仅打开一次、无重叠、原始字符取数、用户确认倍率及失效清空、错误回复拒绝、超时隔离、主控有效期、日志有界；合成帧不代表实机 |
+| NetworkTests.cpp / NetworkTestFrames.h | TCP拆帧/CRC/真空度mbar公式与失效/21字节状态（01/00）/可选实机报文回放/超时/断线重连/同IP未断开时接替、双通道独立、有限原始帧导出；本机回环不是实机 |
 | Rs485Tests.cpp / Rs485TestDevice.h | 只读查询、拆包、错误帧、状态倍率、超时清空；内存设备不接实机 |
 | InstrumentControlTests.cpp | 请求、回执、超时、模拟与手动状态一致性 |
 | CoreTests.cpp | 科学计算、方法与校准边界 |

@@ -336,7 +336,7 @@ QVariantMap AppController::rs485Status() const {
     return adapter ? adapter->statusDetails() : QVariantMap{};
 }
 
-bool AppController::connectRs485(const QString &portName) {
+bool AppController::connectRs485(const QString &portName, bool includePump) {
     if (portName.trimmed().isEmpty()) { emit notice("请选择485串口"); return false; }
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing || !pendingSettingId_.isEmpty()) {
         emit notice("请先结束采集或待确认操作，再更换设备连接"); return false;
@@ -355,7 +355,7 @@ bool AppController::connectRs485(const QString &portName) {
         bindInstrumentSignals();
         refreshInstrumentReadback();
     }
-    const bool opened = adapter->openPort(portName);
+    const bool opened = adapter->openPort(portName, includePump);
     if (opened) QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").setValue("rs485/port", portName.trimmed());
     // Opening a COM port is not proof of an instrument reply; stateChanged will
     // report connected only after a validated status frame.
@@ -371,6 +371,24 @@ void AppController::disconnectRs485() {
 QVariantMap AppController::networkStatus() const {
     auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get());
     return adapter ? adapter->statusDetails() : QVariantMap{};
+}
+QVector<double> AppController::pressureVolts() const {
+    const auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
+    return network ? network->pressureVolts() : QVector<double>{};
+}
+bool AppController::requestRfTuning(bool enabled, bool confirmed) {
+    if(!canTune()) {emit notice("调谐需管理员或工程师账号");return false;}
+    if(enabled && !confirmed) {emit notice("请先确认开始调谐");return false;}
+    if(phase_==Phase::Acquiring || phase_==Phase::Analyzing || !pendingSettingId_.isEmpty()) {
+        emit notice("请先结束当前采集或待确认操作");return false;
+    }
+    auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
+    if(!network) {emit notice("请先连接网口仪器");return false;}
+    if(!workspace_ || !workspace_->appendAudit(sessionOperator_,"TUNING_REQUESTED", "rf", enabled?"start":"stop")) {
+        emit notice("操作记录保存失败，调谐指令未发送");return false;
+    }
+    QString error; const bool result=network->requestTuning(enabled,&error);
+    emit notice(result ? "调谐指令已提交，等待设备应答" : error);return result;
 }
 bool AppController::startNetworkListening(const QString &address, quint16 port, int staleMs) {
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing || !pendingSettingId_.isEmpty()) {
@@ -408,6 +426,20 @@ bool AppController::exportNetworkFrames(const QString &path) {
     const bool saved = adapter->exportFrames(path, &error);
     emit notice(saved ? "已导出最近网口报文：" + path : "报文导出失败：" + error);
     return saved;
+}
+
+QVariantMap AppController::pumpStatus() const {
+    const auto *serial = qobject_cast<Rs485Instrument *>(instrument_.get());
+    if (const auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) serial = network->serial();
+    return serial ? serial->pumpStatusDetails() : QVariantMap{};
+}
+bool AppController::exportPumpFrames(const QString &path) {
+    const auto *serial = qobject_cast<Rs485Instrument *>(instrument_.get());
+    if (const auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) serial = network->serial();
+    if (!serial || path.isEmpty()) return false;
+    QString error;
+    const bool saved = serial->exportFrames(path, &error);
+    emit notice(saved ? "已导出485收发报文：" + path : "导出失败：" + error); return saved;
 }
 
 InstrumentHealth AppController::health() const { return instrument_->health(); }
@@ -740,9 +772,21 @@ void AppController::createDemoMethodVersion(const QString &name, const QString &
     emit notice(QString("已创建 %1 v%2；需明确激活后才用于新检测").arg(method.name).arg(method.version));
 }
 
-bool AppController::createMethodDraft(const QString &name, const QJsonObject &parameters) {
-    if (!AuthorizationPolicy::allows(sessionRole_, Permission::ManageMethods) || !workspace_) {
+bool AppController::createMethodDraft(const QString &name, const QJsonObject &parameters, const QString &baseMethodId) {
+    if (!workspace_) {
         emit notice("无方法编辑权限或仓库不可用"); return false;
+    }
+    if (!fullMethodAccess()) {
+        MethodDefinition base;
+        for(const auto &candidate: methods()) if(candidate.id == baseMethodId) {base=candidate;break;}
+        if(base.id.isEmpty() || !base.parameters.value("method_parameters").isObject() || name != base.name) {
+            emit notice("请先选择管理员建立的方法；普通账号仅能另存参数版本"); return false;
+        }
+        auto expected=base.parameters.value("method_parameters").toObject();
+        for(const auto &key: QStringList{"scan_mode","injection"}) {
+            if(parameters.contains(key)) expected.insert(key,parameters.value(key)); else expected.remove(key);
+        }
+        if(expected != parameters) {emit notice("普通账号只能修改扫描模式和进样时间");return false;}
     }
     QString error;
     if (!MethodDraft::validate(parameters,&error)) {emit notice(error);return false;}

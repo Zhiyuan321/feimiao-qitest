@@ -19,7 +19,7 @@ public:
             {"sampling","采样频率","","扫描"},{"storage_mass","存储质量数","m/z","扫描"},
             {"low_mass","低质量数","m/z","扫描"},{"high_mass","高质量数","m/z","扫描"},
             {"cooling","冷却时间","","扫描"},{"ac_frequency","AC 频率","","扫描"},
-            {"injection","进样时间","","扫描"},{"multiplier","倍增器电压","V","扫描"},
+            {"injection","进样时间","ms","扫描"},{"multiplier","倍增器电压","V","扫描"},
             {"sim_start","隔离开始电压","","SIM"},{"sim_end","隔离结束电压","","SIM"},
             {"sim_rf","RF 质量数","m/z","SIM"},{"sim_width","隔离范围","","SIM"},
             {"fragment_period","碎裂周期","","MS/MS"},{"ac_interval","AC 震荡间隔","","MS/MS"},
@@ -38,6 +38,8 @@ public:
             const auto v=values.value(field.key); const double number=v.toDouble();
             if(!v.isDouble() || !std::isfinite(number) || number<0 || number>1e9)
                 return fail(field.label+"：需有限非负数，不能超过软件记录上限 1e9");
+            if(field.key=="injection" && (number>600 || std::abs(number*100-std::round(number*100))>1e-6))
+                return fail("进样时间：范围0～600 ms，分辨率0.01 ms");
             if(field.unit=="%" && number>100) return fail(field.label+"：百分比不能超过 100");
         }
         for(const auto &pair:QVector<QPair<QString,QString>>{{"low_mass","high_mass"},{"sim_start","sim_end"},{"msms_start","msms_end"},{"fragment_start","fragment_end"}})

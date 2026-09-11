@@ -64,6 +64,8 @@ target_link_libraries(qitest_core PUBLIC Qt${QT_VERSION_MAJOR}::Core)
 add_library(qitest_rs485 STATIC
     src/device/Rs485Protocol.cpp
     src/device/Rs485Instrument.cpp
+    src/device/PumpProtocol.cpp
+    src/device/PumpReader.cpp
 )
 target_include_directories(qitest_rs485 PUBLIC src)
 target_link_libraries(qitest_rs485 PUBLIC qitest_core Qt${QT_VERSION_MAJOR}::SerialPort)
@@ -141,6 +143,7 @@ set(QITEST_APP_SOURCES
 # Sources for the production desktop application, not the automated test binaries.
     src/ui/Rs485ConnectionPanel.cpp
     src/ui/NetworkConnectionPanel.cpp
+    src/ui/DeviceWaveformPanel.cpp
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
     src/main.cpp
@@ -202,6 +205,9 @@ add_test(NAME qitest_network_tests COMMAND qitest_network_tests)
 add_executable(qitest_rs485_tests tests/Rs485Tests.cpp)
 target_link_libraries(qitest_rs485_tests PRIVATE qitest_rs485 Qt${QT_VERSION_MAJOR}::Test)
 add_test(NAME qitest_rs485_tests COMMAND qitest_rs485_tests)
+add_executable(qitest_pump_tests tests/PumpTests.cpp)
+target_link_libraries(qitest_pump_tests PRIVATE qitest_rs485 Qt${QT_VERSION_MAJOR}::Test)
+add_test(NAME qitest_pump_tests COMMAND qitest_pump_tests)
 add_executable(qitest_device_tests tests/InstrumentControlTests.cpp src/app/AppController.cpp src/ai/LocalAiBridge.cpp)
 target_include_directories(qitest_device_tests PRIVATE src)
 target_link_libraries(qitest_device_tests PRIVATE qitest_network qitest_rs485 qitest_core qitest_library qitest_workspace
@@ -241,6 +247,7 @@ add_test(NAME qitest_security_tests COMMAND qitest_security_tests)
 add_executable(qitest_ui_tests
     src/ui/NetworkConnectionPanel.cpp
     src/ui/Rs485ConnectionPanel.cpp
+    src/ui/DeviceWaveformPanel.cpp
     src/ui/InstrumentWorkbench.cpp
     src/ui/MethodEditorDialog.cpp
     tests/UiSmokeTests.cpp

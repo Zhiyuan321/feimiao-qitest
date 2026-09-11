@@ -12,7 +12,8 @@ struct Rs485Frame {
 };
 
 struct Rs485Status {
-    // Raw board readings stay distinct from ion-source / multiplier readings.
+    // Legacy field name: raw HV integer; user-corrected ion-source V = raw / 10 (2026-09-10).
+    // Keep wire data intact; physical conversion belongs to the adapter.
     quint16 highVoltageV = 0;
     quint16 highVoltageCurrentUa = 0;
     quint16 vacuumGaugeMv = 0;

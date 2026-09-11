@@ -3,6 +3,9 @@
 #include "device/Rs485Instrument.h"
 #include "Rs485TestDevice.h"
 #include "NetworkTestFrames.h"
+#include "PumpTestDevice.h"
+#include "device/NetworkInstrument.h"
+#include <cmath>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTabWidget>
@@ -14,6 +17,7 @@
 #include "ui/UserStandardsPage.h"
 #include "ui/MethodEditorDialog.h"
 #include "ui/InstrumentWorkbench.h"
+#include "ui/DeviceWaveformPanel.h"
 #include "core/MethodDraft.h"
 #include "core/MassAxisCalibration.h"
 #include <QMessageBox>
@@ -51,6 +55,7 @@
 #include <QTemporaryDir>
 #include <QStyleOptionSpinBox>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QStandardPaths>
 #include <QTableWidget>
 #include <QToolButton>
@@ -94,6 +99,36 @@ private slots:
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
         QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDirectory_.path());
     }
+    void restrictedMethodPageAndPressureView() {
+        const QJsonObject base{{"scan_mode","Fullscan"},{"injection",12.34},{"source",4.9}};QJsonObject saved;
+        auto *editor=new MethodEditorDialog("管理员方法",base,[&](const QString &,const QJsonObject &p){saved=p;return true;},nullptr,false);
+        editor->show();QTest::qWait(20);
+        QVERIFY(!editor->findChild<QLineEdit *>("method_source"));
+        auto *injection=editor->findChild<QLineEdit *>("method_injection");QVERIFY(injection);injection->setText("0.01");
+        QVERIFY(editor->findChild<QPushButton *>("loadMethodDraft")->isEnabled());
+        QVERIFY(editor->findChild<QPushButton *>("exportMethodDraft")->isEnabled());
+        editor->findChild<QPushButton *>("saveMethodDraft")->click();
+        QCOMPARE(saved.value("source").toDouble(),4.9);QCOMPARE(saved.value("injection").toDouble(),0.01);
+        QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("pressure.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        std::unique_ptr<QWidget> pressure(createDeviceWaveformPanel(&controller,false));pressure->resize(720,480);pressure->show();
+        QVERIFY(controller.startNetworkListening("127.0.0.1",0));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,controller.networkStatus().value("port").toUInt());
+        QTRY_VERIFY(controller.networkStatus().value("tcpConnected").toBool());
+        client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
+        auto *plot=pressure->findChild<QWidget *>("pressureVoltagePlot");QVERIFY(plot);
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
+        QVERIFY(pressure->findChild<QLabel *>("pressureWaveformStatus")->text().contains("14.25"));
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+        if(!capture.isEmpty())QVERIFY(pressure->grab().save(capture+"/pressure-waveform.png"));
+        std::unique_ptr<QWidget> rf(createDeviceWaveformPanel(&controller,true));rf->resize(720,480);rf->show();
+        QCOMPARE(rf->findChildren<QPushButton *>().size(),2);
+        QVERIFY(!rf->findChild<QPushButton *>("rfTuningStart")->isEnabled());
+        if(!capture.isEmpty())QVERIFY(rf->grab().save(capture+"/rf-panel.png"));
+        controller.stopNetworkListening();QTRY_COMPARE(plot->property("sampleCount").toInt(),0);
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void rs485StatusPanelReadsAndInvalidates();
     void networkPanelConnectsAlongside485();
     void bundledSamplesImportWithoutDuplicates();
@@ -118,11 +153,9 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir directory;
     qputenv("QITEST_WORKSPACE_DB", directory.filePath("network-ui.sqlite").toUtf8());
-    test::FakeSerial port; port.reply = test::frame(test::statusPayload());
+    test::FakeSharedBus port;
     auto instrument = std::make_unique<Rs485Instrument>(&port, nullptr);
-    QVERIFY(instrument->openPort("TEST_ONLY"));
     AppController controller(std::move(instrument));
-    QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
     MainWindow window(&controller); window.resize(1024, 768); window.show();
     auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站"); QVERIFY(enter); enter->click();
     auto *workspace = window.findChild<QStackedWidget *>("centralWorkspace"); QVERIFY(workspace);
@@ -140,6 +173,12 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
         ++it;
     }
     QVERIFY(opened);
+    auto *sharedPort = window.findChild<QComboBox *>("rs485Port");
+    auto *sharedConnect = window.findChild<QPushButton *>("rs485Connect");
+    auto *includePump = window.findChild<QCheckBox *>("rs485IncludePump");
+    QVERIFY(sharedPort && sharedConnect && includePump); includePump->setChecked(true);
+    sharedPort->setCurrentText("TEST_ONLY"); sharedConnect->click();
+    QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
     auto *tabs = window.findChild<QTabWidget *>("communicationTabs"); QVERIFY(tabs); tabs->setCurrentIndex(1);
     auto *panel = window.findChild<QWidget *>("networkConnectionPanel");
     auto *table = window.findChild<QTableWidget *>("networkReadings");
@@ -161,7 +200,23 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QTRY_COMPARE(table->item(0, 1)->text(), QString("3000 V"));
     QCOMPARE(table->item(1, 1)->text(), QString("1234"));
     QCOMPARE(table->item(2, 1)->text(), QString("开启"));
+    QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
+    // The revised status uses byte 9 = 00 for OFF, regardless of the reserved tail.
+    auto offPayload = test::networkStatusWire().mid(7, 21);
+    offPayload[9] = 0x00; offPayload[20] = 0x11;
+    client.write(test::networkFrame(offPayload));
+    QTRY_COMPARE(table->item(2, 1)->text(), QString("关闭"));
+    QCOMPARE(table->item(1, 1)->text(), QString("1234"));
+    QTcpSocket replacement;
+    replacement.connectToHost(QHostAddress::LocalHost, portNumber);
+    QTRY_COMPARE(controller.networkStatus().value("replacedConnections").toInt(), 1);
+    QTRY_COMPARE(table->item(1, 1)->text(), QString("—"));
+    QCOMPARE(table->item(3, 1)->text(), QString("—"));
+    replacement.write(test::networkFrame(offPayload));
+    QTRY_COMPARE(table->item(1, 1)->text(), QString("1234"));
+    QCOMPARE(table->item(2, 1)->text(), QString("关闭"));
     QCOMPARE(controller.telemetry().tdTemperatureC, 245.6);
+    QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
     QVERIFY(!controller.updateInstrumentSetting("powerOn", true, true));
     controller.startDetection(); QVERIFY(controller.phase() != AppController::Phase::Acquiring);
     QCoreApplication::processEvents();
@@ -170,7 +225,43 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/network-readback.png"));
     QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp.json")));
+    QCOMPARE(tabs->count(), 2);
+    tabs->setCurrentIndex(0);
+    auto *pumpTable = window.findChild<QTableWidget *>("rs485Readings");
+    QVERIFY(pumpTable);
+    QTRY_COMPARE_WITH_TIMEOUT(pumpTable->item(7, 1)->text(), QString("45.0 ℃"), 2500);
+    QCOMPARE(pumpTable->item(4, 1)->text(), QString("1200 RPM"));
+    QCOMPARE(pumpTable->item(5, 1)->text(), QString("0.80 A"));
+    QCOMPARE(pumpTable->item(6, 1)->text(), QString("2.20 V"));
+    QVERIFY(pumpTable->item(4, 2)->text().contains("001200"));
+    QCOMPARE(pumpTable->item(3, 1)->text(), QString("801.0 Torr"));
+    QCOMPARE(controller.telemetry().molecularPumpRpm, 1200.0);
+    QCOMPARE(controller.health().ionSourceKv, 0.32); // Preserved when TCP is also connected.
+    QCOMPARE(controller.telemetry().molecularPumpTemperatureC, 45.0);
+    bool rpmFound = false, tempFound = false;
+    for (auto *label : window.findChildren<QLabel *>()) {
+        if (label->property("telemetryKey") == "pump") { QCOMPARE(label->text(), QString("1200")); rpmFound = true; }
+        if (label->property("telemetryKey") == "pumpTemp") { QCOMPARE(label->text(), QString("45.0")); tempFound = true; }
+    }
+    QVERIFY(rpmFound && tempFound);
+    QVERIFY(controller.networkStatus().value("connected").toBool());
+    QCOMPARE(port.openCount, 1); QCOMPARE(port.closeCount, 0); QVERIFY(!port.overlap);
+    QVERIFY(controller.exportPumpFrames(directory.filePath("bus.json")));
+    QVERIFY(window.rect().contains(QRect(pumpTable->mapTo(&window, QPoint()), pumpTable->size())));
+    QVERIFY(pumpTable->viewport()->rect().contains(pumpTable->visualItemRect(pumpTable->item(7, 1))));
+    if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/shared-485-readback.png"));
+    auto *pageScroll = window.findChild<QScrollArea *>("rs485PageScroll");
+    auto *note = window.findChild<QLabel *>("rs485ReadbackNote");
+    QVERIFY(pageScroll && note);
+    // Less available height must scroll, never paint the note over table rows.
+    pageScroll->setFixedHeight(250);
+    QCoreApplication::processEvents();
+    QVERIFY(pageScroll->verticalScrollBar()->maximum() > 0);
+    QVERIFY(note->geometry().top() > pumpTable->geometry().bottom());
+    pageScroll->setMinimumHeight(0); pageScroll->setMaximumHeight(QWIDGETSIZE_MAX);
+    tabs->setCurrentIndex(1);
     stop->click(); QCOMPARE(table->item(0, 1)->text(), QString("—"));
+    QCOMPARE(table->item(3, 1)->text(), QString("—"));
     QVERIFY(controller.rs485Status().value("connected").toBool());
     QCOMPARE(controller.telemetry().tdTemperatureC, 245.6);
     controller.disconnectRs485(); QVERIFY(!controller.health().connected);
@@ -221,12 +312,20 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QVERIFY(panel && table && connectButton);
     QVERIFY(panel->isVisibleTo(&window));
     QCOMPARE(table->item(0, 1)->text(), QString("—"));
-    port.reply = test::frame(test::statusPayload());
+    auto ionPayload = test::statusPayload(); ionPayload[7] = 0; ionPayload[8] = 49;
+    port.reply = test::frame(ionPayload);
     QVERIFY(adapter->openPort("TEST_ONLY"));
     QTRY_COMPARE(table->item(0, 1)->text(), QString("245.6 ℃"));
     QCOMPARE(table->item(2, 1)->text(), QString("28.4 mL/min"));
-    QCOMPARE(table->item(5, 1)->text(), QString("3200 V"));
-    QCOMPARE(table->item(8, 1)->text(), QString("内载气"));
+    QCOMPARE(table->item(9, 1)->text(), QString("49"));
+    QLabel *ionReading = nullptr;
+    for (auto *label : window.findChildren<QLabel *>())
+        if (label->property("telemetryKey") == "ion") ionReading = label;
+    QVERIFY(ionReading); QCOMPARE(ionReading->text(), QString("4.9"));
+    auto *ionUnit = ionReading->parentWidget()->findChild<QLabel *>("readoutUnit");
+    QVERIFY(ionUnit); QCOMPARE(ionUnit->text(), QString("V"));
+    QCOMPARE(controller.telemetry().ionSourceVoltageV, 4.9);
+    QCOMPARE(table->item(12, 1)->text(), QString("内载气"));
     for (auto *widget : window.findChildren<QWidget *>())
         if (widget->property("instrumentControl").toBool()) QVERIFY(!widget->isEnabled());
     QCoreApplication::processEvents();
@@ -250,7 +349,8 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     controller.disconnectRs485();
     QVERIFY(controlPages->isVisibleTo(&window));
     QCOMPARE(table->item(0, 1)->text(), QString("—"));
-    QCOMPARE(table->item(5, 1)->text(), QString("—"));
+    QCOMPARE(table->item(9, 1)->text(), QString("—"));
+    QCOMPARE(ionReading->text(), QString("—"));
     qunsetenv("QITEST_WORKSPACE_DB");
 }
 
@@ -821,6 +921,12 @@ void UiSmokeTests::calibrationPageLoadsSavesAndCalculatesWithoutExtraNavigation(
 
 void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir workspaceDir;
+    struct RestoreWorkspaceEnv {
+        QByteArray before=qgetenv("QITEST_WORKSPACE_DB");
+        ~RestoreWorkspaceEnv(){if(before.isNull())qunsetenv("QITEST_WORKSPACE_DB");else qputenv("QITEST_WORKSPACE_DB",before);}
+    } restoreWorkspaceEnv;
+    qputenv("QITEST_WORKSPACE_DB",workspaceDir.filePath("navigation.sqlite").toUtf8());
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller);
     window.show();

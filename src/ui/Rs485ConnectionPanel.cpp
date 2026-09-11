@@ -2,19 +2,30 @@
 #include "app/AppController.h"
 #include "domain/DisplayLabels.h"
 #include <QComboBox>
+#include <QCheckBox>
+#include <QFileDialog>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QScrollArea>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
 namespace qitest {
 Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *parent) : QWidget(parent) {
     setObjectName("rs485ConnectionPanel");
-    auto *layout = new QVBoxLayout(this);
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    auto *scroll = new QScrollArea;
+    scroll->setObjectName("rs485PageScroll");
+    scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
+    auto *content = new QWidget;
+    auto *layout = new QVBoxLayout(content);
     layout->setContentsMargins(0, 0, 0, 0);
-    auto *title = new QLabel("485状态读取 · 9600 / 8N1 / 无流控");
+    layout->setSizeConstraint(QLayout::SetMinimumSize);
+    scroll->setWidget(content); outer->addWidget(scroll);
+    auto *title = new QLabel("主控板与分子泵共用485 · 9600 / 8N1 / 无流控");
     title->setWordWrap(true);
     layout->addWidget(title);
     auto *row = new QHBoxLayout;
@@ -28,10 +39,17 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     disconnectButton->setObjectName("rs485Disconnect");
     row->addWidget(ports, 1); row->addWidget(refresh); row->addWidget(connectButton); row->addWidget(disconnectButton);
     layout->addLayout(row);
+    auto *options = new QHBoxLayout;
+    auto *includePump = new QCheckBox("同时读取分子泵"); includePump->setObjectName("rs485IncludePump");
+    includePump->setChecked(QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").value("rs485/includePump", true).toBool());
+    auto *save = new QPushButton("导出485报文"); save->setObjectName("pumpExport");
+    options->addWidget(includePump); options->addStretch(); options->addWidget(save); layout->addLayout(options);
     auto *status = new QLabel;
     status->setObjectName("rs485ConnectionStatus");
     status->setWordWrap(true);
     layout->addWidget(status);
+    auto *pumpStatus = new QLabel; pumpStatus->setObjectName("pumpStatus"); pumpStatus->setWordWrap(true);
+    layout->addWidget(pumpStatus);
     auto *table = new QTableWidget(0, 3);
     table->setObjectName("rs485Readings");
     table->setHorizontalHeaderLabels({"485回读项目", "当前值", "说明"});
@@ -39,8 +57,11 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     table->setSelectionMode(QAbstractItemView::NoSelection);
     table->verticalHeader()->hide();
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    table->setMinimumHeight(160); table->setMaximumHeight(250);
+    table->setMinimumHeight(300); table->setMaximumHeight(360);
     layout->addWidget(table);
+    auto *note = new QLabel("泵体温度即控制器温度。原始值保留在说明中；回复校验待确认。更多参数向下滚动查看。");
+    note->setObjectName("rs485ReadbackNote");
+    note->setWordWrap(true); layout->addWidget(note);
     const auto refreshPorts = [controller, ports] {
         const QString selected = ports->currentText();
         ports->clear(); ports->addItems(controller->rs485Ports());
@@ -49,23 +70,31 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     };
     refreshPorts();
     connect(refresh, &QPushButton::clicked, this, refreshPorts);
-    connect(connectButton, &QPushButton::clicked, this, [controller, ports] {
-        controller->connectRs485(ports->currentText());
+    connect(connectButton, &QPushButton::clicked, this, [controller, ports, includePump] {
+        if (controller->connectRs485(ports->currentText(), includePump->isChecked()))
+            QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").setValue("rs485/includePump", includePump->isChecked());
     });
     connect(disconnectButton, &QPushButton::clicked, controller, &AppController::disconnectRs485);
-    const auto update = [controller, ports, connectButton, disconnectButton, status, table] {
+    connect(save, &QPushButton::clicked, this, [=] {
+        const auto path = QFileDialog::getSaveFileName(this, "导出主控板与分子泵收发报文", "485报文.json", "JSON (*.json)");
+        if (!path.isEmpty()) controller->exportPumpFrames(path);
+    });
+    const auto update = [=] {
         const auto data = controller->rs485Status();
         const bool active = !data.isEmpty(), connected = data.value("connected").toBool();
         const bool busy = controller->phase() == AppController::Phase::Acquiring
             || controller->phase() == AppController::Phase::Analyzing;
         connectButton->setEnabled(!busy);
+        const auto pump = controller->pumpStatus();
+        includePump->setEnabled(!data.value("open").toBool() && !busy);
+        save->setEnabled(pump.value("retainedRecords").toInt() > 0);
+        pumpStatus->setText(pump.value("message", "勾选后，连接一次即可依次读取主控板和分子泵。").toString());
         disconnectButton->setEnabled(data.value("open").toBool());
         if (active && data.value("open").toBool()) ports->setCurrentText(data.value("port").toString());
         status->setText(active ? data.value("message").toString()
             + (connected ? " · 更新于" + data.value("lastReadback").toString() : QString())
             : "选择连接仪器的串口。仅查询状态，不发送加热、电源或泵控制命令。");
-        table->setVisible(active);
-        if (!active) return;
+        table->setVisible(true);
         const auto telemetry = controller->telemetry();
         const auto numeric = [connected](double v, const QString &unit) {
             return connected ? measurementText(v, 'f', 1) + unit : QString("—");
@@ -76,13 +105,23 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         const auto flag = [&data](const QString &key) {
             return !data.contains(key) ? QString("—") : data.value(key).toBool() ? QString("开启") : QString("关闭");
         };
+        const auto pumpValue = [&pump](const QString &key, int decimals, const QString &unit) {
+            return pump.contains(key) ? measurementText(pump.value(key).toDouble(), 'f', decimals) + unit : QString("—");
+        };
+        const auto pumpSource = [&pump](const QString &parameter) {
+            return "原始 " + pump.value(parameter, "—").toString() + " · " + pump.value(parameter + "Time", "未更新").toString();
+        };
         const QList<QStringList> rows{
             {"TD温度", numeric(telemetry.tdTemperatureC, " ℃"), "回读值÷10"},
             {"离子阱温度", numeric(telemetry.ionTrapTemperatureC, " ℃"), "回读值÷10"},
             {"EFC流量", numeric(telemetry.carrierGasFlowMlMin, " mL/min"), "回读值÷200"},
             {"气压", numeric(telemetry.carrierGasPressureTorr, " Torr"), "485气压读数"},
+            {"分子泵转速（398）", pumpValue("molecularPumpRpm", 0, " RPM"), pumpSource("398")},
+            {"分子泵电流（310）", pumpValue("molecularPumpCurrentA", 2, " A"), pumpSource("310")},
+            {"分子泵电压（313）", pumpValue("molecularPumpVoltageV", 2, " V"), pumpSource("313")},
+            {"泵体温度（326）", pumpValue("molecularPumpTemperatureC", 1, " ℃"), pumpSource("326")},
             {"气泵PWM", raw("gasPumpPwmPercent", " %"), "气泵占空比"},
-            {"高压模块电压", raw("highVoltageV", " V"), "未映射为离子源或倍增器电压"},
+            {"高压模块原始值", raw("highVoltageV", ""), "原始值÷10＝离子源电压(V)"},
             {"高压模块电流", raw("highVoltageCurrentUa", " μA"), "高压模块回读"},
             {"真空规原始值", raw("vacuumGaugeMv", " mV"), "压力换算待确认"},
             {"载气选择", connected ? telemetry.carrierGasMode : "—", "内/外载气，不是供气开关"},

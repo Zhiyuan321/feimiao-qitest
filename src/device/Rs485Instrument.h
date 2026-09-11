@@ -2,6 +2,7 @@
 
 #include "device/IInstrumentAdapter.h"
 #include "device/Rs485Protocol.h"
+#include "device/PumpReader.h"
 #include <QDateTime>
 #include <QIODevice>
 #include <QTimer>
@@ -9,8 +10,7 @@
 class QSerialPort;
 
 namespace qitest {
-// First hardware integration is deliberately read-only: the only wire command
-// emitted by this adapter is 0x30. All IO is asynchronous, on its owning thread.
+// One serial owner schedules main-board status and optional pump queries sequentially.
 class Rs485Instrument final : public IInstrumentAdapter {
     Q_OBJECT
 public:
@@ -18,12 +18,12 @@ public:
     // Test seam: borrowed device must outlive this adapter; no physical port used.
     Rs485Instrument(QIODevice *transport, QObject *parent);
     ~Rs485Instrument() override;
-    bool openPort(const QString &name);
+    bool openPort(const QString &name, bool includePump = false);
     void closePort();
     static QStringList availablePorts();
     InstrumentDescriptor descriptor() const override;
     InstrumentHealth health() const override { return health_; }
-    InstrumentTelemetry telemetry() const override { return telemetry_; }
+    InstrumentTelemetry telemetry() const override;
     QVariantMap confirmedSettings() const override;
     CommandValidation validate(const InstrumentCommand &command) const override;
     CommandValidation validateSetting(const QString &, const QVariant &) const override;
@@ -33,6 +33,8 @@ public:
     bool readOnly() const override { return true; }
     QString connectionSummary() const override { return message_; }
     QVariantMap statusDetails() const;
+    QVariantMap pumpStatusDetails() const;
+    bool exportFrames(const QString &path, QString *error) const { return pump_.exportFrames(path, statusDetails(), error); }
     QString portName() const { return portName_; }
     bool portOpen() const { return transport_->isOpen(); }
 private:
@@ -40,9 +42,13 @@ private:
     void receive();
     void fail(const QString &message);
     void clearReadings();
+    void clearMainReadings();
     QIODevice *transport_;
     QSerialPort *serial_ = nullptr;
-    QTimer pollTimer_, timeout_;
+    QTimer pollTimer_, timeout_, mainFreshTimer_;
+    PumpReader pump_;
+    bool pumpEnabled_ = false;
+    int nextQuery_ = -1, activeQuery_ = -1; // -1 = main board; 0..3 = pump.
     Rs485Protocol decoder_;
     Rs485Status status_;
     InstrumentHealth health_ = unavailableRs485Health();

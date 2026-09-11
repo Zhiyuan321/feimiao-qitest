@@ -4,6 +4,7 @@
 #include <QTabWidget>
 #include "ui/MethodEditorDialog.h"
 #include "ui/InstrumentWorkbench.h"
+#include "ui/DeviceWaveformPanel.h"
 #include "device/VendorControlCatalog.h"
 #include "domain/DisplayLabels.h"
 #include "ui/CalibrationPage.h"
@@ -971,7 +972,10 @@ QWidget *MainWindow::createHomePage() {
             statusBar()->showMessage(message, 8000);
         });
 
-    layout->addWidget(canvas, 1);
+    auto *views=new QTabWidget; views->setObjectName("analysisViewTabs"); views->setDocumentMode(true);
+    views->addTab(canvas,"谱图分析");
+    views->addTab(createDeviceWaveformPanel(controller_,false),"气压图");
+    layout->addWidget(views,1);
     connect(startButton_, &QPushButton::clicked, actions_->action("StartRun"), &QAction::trigger);
     connect(importData, &QPushButton::clicked, this, &MainWindow::importRunArchiveFromDialog);
     return page;
@@ -1066,35 +1070,44 @@ QWidget *MainWindow::createMonitorPanel() {
     };
     QMap<QString, QLabel *> readings;
     const auto reading = [&readings](const QString &key, const QString &name, const QString &unit) {
-        auto *row = readoutRow(name, "—", unit);
-        readings[key] = row->findChild<QLabel *>("readoutValue");
+        auto *row = new QWidget;
+        auto *line = new QHBoxLayout(row); line->setContentsMargins(0,0,0,0); line->setSpacing(4);
+        line->addWidget(makeLabel(name, "metadata")); line->addStretch();
+        auto *value = makeLabel("—", "readoutValue"); value->setStyleSheet("font-size:18px;");
+        line->addWidget(value);
+        if(!unit.isEmpty()) {auto *unitLabel=makeLabel(unit,"metadata");unitLabel->setObjectName("readoutUnit");line->addWidget(unitLabel);}
+        row->setMinimumHeight(28);
+        readings[key] = value;
+        readings[key]->setProperty("telemetryKey", key);
         return row;
     };
     auto *pressureRow = new QWidget;
-    auto *pressureLayout = new QVBoxLayout(pressureRow);
+    auto *pressureLayout = new QHBoxLayout(pressureRow);
     pressureLayout->setContentsMargins(0, 0, 0, 0);
     pressureLayout->setSpacing(0);
-    pressureLayout->addWidget(makeLabel("载气压力", "metadata"));
+    pressureLayout->addWidget(makeLabel("气压", "metadata"));
     auto *pressureMeasurement = new QHBoxLayout;
     pressureMeasurement->setContentsMargins(0, 0, 0, 0);
+    pressureLayout->addStretch();
+    alarmDetail->setStyleSheet("font-size:18px;");
     pressureMeasurement->addWidget(alarmDetail);
-    pressureMeasurement->addStretch();
     pressureMeasurement->addWidget(fold);
     pressureLayout->addLayout(pressureMeasurement);
-    layout->addWidget(group("关键状态", {
-        pressureRow,
-        reading("vacuum", "真空度", "mbar"),
-        reading("td", "TD 温度", "℃"),
+    layout->addWidget(group("分子泵", {
+        reading("pump", "转速", "RPM"),
+        reading("pumpCurrent", "电流", "A"),
+        reading("pumpVoltage", "电压", "V"),
+        reading("pumpTemp", "温度", "℃"),
+        reading("vacuum", "真空度", "mbar")
+    }));
+    layout->addWidget(group("基本信息", {
+        reading("carrier", "载气模式", ""), pressureRow,
         reading("flow", "载气流速", "mL/min"),
-        reading("ion", "离子源电压", "kV")
+        reading("trap", "离子阱", "℃"), reading("td", "TD温度", "℃"),
+        reading("ion", "离子源电压", "V"), reading("multiplier", "倍增器", "V"),
+        reading("extraction", "抽气流速", "%"), reading("syringe", "注射泵剩余", "%")
     }));
     layout->addWidget(alarm);
-    layout->addWidget(group("运行与耗材", {
-        reading("pump", "分子泵", "RPM"),
-        reading("pumpTemp", "泵体温度", "℃"),
-        reading("syringe", "进样器余量", "%"),
-        reading("carrier", "载气模式", "")
-    }));
     // Read cached adapter state only while visible. No disk reads, model calls,
     // widget reconstruction, or repaint when values have not changed.
     const auto refreshReadings = [this, readings, alarmDetail] {
@@ -1104,8 +1117,13 @@ QWidget *MainWindow::createMonitorPanel() {
             {"vacuum", measurementText(health.vacuumMbar, 'E', 2)},
             {"td", measurementText(health.tdTemperatureC, 'f', 1)},
             {"flow", measurementText(health.carrierGasMlMin, 'f', 2)},
-            {"ion", measurementText(health.ionSourceKv, 'f', 1)},
+            {"ion", measurementText(health.ionSourceKv * 1000.0, 'f', 1)},
             {"pump", measurementText(telemetry.molecularPumpRpm, 'f', 0)},
+            {"pumpCurrent", measurementText(telemetry.molecularPumpCurrentA, 'f', 2)},
+            {"pumpVoltage", measurementText(telemetry.molecularPumpVoltageV, 'f', 2)},
+            {"trap", measurementText(telemetry.ionTrapTemperatureC, 'f', 1)},
+            {"multiplier", measurementText(telemetry.multiplierVoltageV, 'f', 1)},
+            {"extraction", measurementText(telemetry.extractionFlowPercent, 'f', 1)},
             {"pumpTemp", measurementText(telemetry.molecularPumpTemperatureC, 'f', 1)},
             {"syringe", measurementText(telemetry.syringeRemainingPercent, 'f', 0)},
             {"carrier", telemetry.carrierGasMode}};
@@ -1654,7 +1672,7 @@ QWidget *MainWindow::createSettingsPage() {
 
     settingsDetailStack_->addWidget(createLibraryPage());
     settingsDetailStack_->addWidget(createQuantitationPage());
-    settingsDetailStack_->addWidget(createInstrumentWorkbench("射频调谐"));
+    settingsDetailStack_->addWidget(createDeviceWaveformPanel(controller_,true));
     settingsDetailStack_->addWidget(createInstrumentWorkbench("质量轴校准"));
     settingsDetailStack_->addWidget(createInstrumentWorkbench("注射泵"));
     auto *gasPage = new QWidget;
@@ -2285,9 +2303,13 @@ QWidget *MainWindow::createMethodPage() {
         if(item) for(const auto &method:controller_->methods()) if(method.id==item->data(Qt::UserRole).toString()) {
             values=method.parameters.value("method_parameters").toObject(); name=method.name; break;
         }
-        auto *dialog=new MethodEditorDialog(name,values,[this](const QString &title,const QJsonObject &parameters){
-            return controller_->createMethodDraft(title,parameters);
-        },this); dialog->open();
+        const QString baseId=item?item->data(Qt::UserRole).toString():QString{};
+        if(!controller_->fullMethodAccess() && (baseId.isEmpty() || values.isEmpty())) {
+            statusBar()->showMessage("请先选择管理员建立的方法",5000); return;
+        }
+        auto *dialog=new MethodEditorDialog(name,values,[this,baseId](const QString &title,const QJsonObject &parameters){
+            return controller_->createMethodDraft(title,parameters,baseId);
+        },this,controller_->fullMethodAccess()); dialog->open();
     });
     connect(methodTable_, &QTableWidget::itemSelectionChanged, this, [this, activate] {
         const int row = methodTable_->currentRow();
@@ -2939,7 +2961,7 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         description = "显示仪器实测值与本地设定；所有操作以设备回执为准。";
         rows = {
             {"离子源", onOff(configured.value("ionSourceEnabled")),
-                measurementText(health.ionSourceKv, 'f', 1) + " kV",
+                measurementText(health.ionSourceKv * 1000.0, 'f', 1) + " V",
                 configured.value("ionSourceSetpointKv").isValid()
                     ? QString::number(configured.value("ionSourceSetpointKv").toDouble(), 'f', 1) + " kV"
                     : QString("设定值未确认")},
@@ -3053,7 +3075,7 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
                     QString("%1 ℃ / %2 ℃").arg(measurementText(telemetry.ionTrapTemperatureC, 'f', 1))
                         .arg(measurementText(telemetry.tdTemperatureC, 'f', 1)), "只读遥测"},
                 {"离子源 / 倍增器", "实时",
-                    QString("%1 V / %2 V").arg(measurementText(telemetry.ionSourceVoltageV, 'f', 0))
+                    QString("%1 V / %2 V").arg(measurementText(telemetry.ionSourceVoltageV, 'f', 1))
                         .arg(measurementText(telemetry.multiplierVoltageV, 'f', 0)), "受控参数"},
                 {"抽气 / 注射泵", "实时",
                     QString("%1 % / %2 %").arg(measurementText(telemetry.extractionFlowPercent, 'f', 1))

@@ -2,8 +2,8 @@
 #include "device/NetworkProtocol.h"
 namespace qitest { namespace test {
 inline QByteArray networkStatusWire() {
-    // Independent golden frame: action20/cmd01, length16, 3000V, raw1234, ON.
-    return QByteArray::fromHex("552001001001010bb804d200000000001100000000d096aa");
+    // Synthetic golden frame: action20/cmd01, length23, payload21, 3000V, raw1234, ON=01.
+    return QByteArray::fromHex("552001001701010bb804d200000000000100000000000000000000004cb2aa");
 }
 inline QByteArray networkFrame(const QByteArray &payload, quint8 action = 0x20,
                                quint8 command = 0x01, quint8 count = 1, quint8 index = 1) {

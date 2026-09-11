@@ -42,11 +42,11 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     layout->addLayout(options);
     auto *status = new QLabel; status->setObjectName("networkConnectionStatus"); status->setWordWrap(true);
     layout->addWidget(status);
-    auto *table = new QTableWidget(3, 3); table->setObjectName("networkReadings");
+    auto *table = new QTableWidget(4, 3); table->setObjectName("networkReadings");
     table->setHorizontalHeaderLabels({"网口回读项目", "当前值", "说明"});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers); table->setSelectionMode(QAbstractItemView::NoSelection);
     table->verticalHeader()->hide(); table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    table->setMinimumHeight(130); table->setMaximumHeight(150); layout->addWidget(table);
+    table->setMinimumHeight(165); table->setMaximumHeight(185); layout->addWidget(table);
     auto *counts = new QLabel; counts->setObjectName("networkFrameCounts"); counts->setWordWrap(true); layout->addWidget(counts);
     connect(start, &QPushButton::clicked, this, [=] {
         controller->startNetworkListening(addresses->currentText(), quint16(port->value()), stale->value() * 1000);
@@ -63,20 +63,21 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
         start->setEnabled(!listening && !busy); stop->setEnabled(listening);
         addresses->setEnabled(!listening); port->setEnabled(!listening); stale->setEnabled(!listening);
         save->setEnabled(data.value("retainedFrames").toInt() > 0);
-        status->setText(data.isEmpty() ? "尚未监听。只读接入，可与485同时使用。" : data.value("message").toString()
+        status->setText(data.isEmpty() ? "尚未监听。可与485同时回读，调谐启停在射频页操作。" : data.value("message").toString()
             + (data.value("connected").toBool() ? " · 更新于" + data.value("lastReadback").toString() : QString()));
         const auto raw = [&data](const QString &key) { return data.contains(key) ? data.value(key).toString() : QString("—"); };
         const QList<QStringList> rows{
             {"倍增管高压", data.contains("multiplierVoltageV") ? raw("multiplierVoltageV") + " V" : "—", "网口实际回读"},
-            {"真空规原始值", raw("vacuumRaw"), "压力换算待确认"},
-            {"实验状态", !data.contains("experimentRunning") ? "—" : data.value("experimentRunning").toBool() ? "开启" : "关闭", "设备上报状态"}
+            {"真空规原始值", raw("vacuumRaw"), "网口原始读数"},
+            {"实验状态", !data.contains("experimentRunning") ? "—" : data.value("experimentRunning").toBool() ? "开启" : "关闭", "设备上报状态"},
+            {"真空度", data.contains("vacuumMbar") ? QString::number(data.value("vacuumMbar").toDouble(), 'E', 2) + " mbar" : "—", "按已确认公式换算"}
         };
-        for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) {
+        for (int r = 0; r < rows.size(); ++r) for (int c = 0; c < 3; ++c) {
             auto *item = table->item(r, c);
             if (!item) { item = new QTableWidgetItem; table->setItem(r, c, item); }
             item->setText(rows[r][c]); item->setToolTip(rows[r][c]);
         }
-        counts->setText(QString("接收 %1 字节 · CRC有效 %2 帧 · 未解析 %3 帧 · 丢弃 %4 字节\n保留最近256条有效帧供导出，谱图与控制尚未开放。")
+        counts->setText(QString("接收 %1 字节 · CRC有效 %2 帧 · 未解析 %3 帧 · 丢弃 %4 字节\n保留最近256条收发帧供导出；气压图与调谐启停已接入，完整谱图采集未开放。")
             .arg(data.value("receivedBytes", 0).toString()).arg(data.value("validFrames", 0).toString())
             .arg(data.value("unparsedFrames", 0).toString()).arg(data.value("rejectedBytes", 0).toString()));
     };

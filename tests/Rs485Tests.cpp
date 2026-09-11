@@ -75,7 +75,8 @@ private slots:
         QCOMPARE(adapter.telemetry().carrierGasFlowMlMin, 28.4);
         QVERIFY(std::isnan(adapter.telemetry().molecularPumpRpm));
         QVERIFY(std::isnan(adapter.health().vacuumMbar));
-        QVERIFY(std::isnan(adapter.health().ionSourceKv));
+        QCOMPARE(adapter.health().ionSourceKv, 0.32);
+        QCOMPARE(adapter.telemetry().ionSourceVoltageV, 320.0);
         QCOMPARE(measurementText(adapter.telemetry().multiplierVoltageV), QString("未提供"));
         QVERIFY(!adapter.confirmedSettings().contains("trapTemperatureC"));
         QVERIFY(!adapter.confirmedSettings().contains("internalCarrierGasOn"));
@@ -93,6 +94,27 @@ private slots:
         QVERIFY(adapter.confirmedSettings().isEmpty());
         QVERIFY(!adapter.statusDetails().contains("highVoltageV"));
         QVERIFY(std::isnan(adapter.telemetry().tdTemperatureC));
+        QVERIFY(std::isnan(adapter.health().ionSourceKv));
+        QVERIFY(std::isnan(adapter.telemetry().ionSourceVoltageV));
+    }
+    void confirmedIonSourceVoltageAndZero() {
+        FakeSerial device;
+        auto payload = statusPayload(); payload[7] = 0; payload[8] = 49;
+        device.reply = frame(payload);
+        Rs485Instrument adapter(&device, nullptr);
+        QVERIFY(adapter.openPort("fixture"));
+        QVERIFY(std::isnan(adapter.health().ionSourceKv));
+        QTRY_COMPARE(adapter.health().ionSourceKv, 0.0049);
+        QCOMPARE(adapter.telemetry().ionSourceVoltageV, 4.9);
+        QCOMPARE(adapter.statusDetails().value("highVoltageV").toUInt(), 49u);
+        QCOMPARE(adapter.statusDetails().value("ionSourceKv").toDouble(), 0.0049);
+        QCOMPARE(adapter.statusDetails().value("ionSourceVoltageV").toDouble(), 4.9);
+        payload[8] = 0; device.reply = frame(payload);
+        QTRY_COMPARE_WITH_TIMEOUT(adapter.health().ionSourceKv, 0.0, 1500);
+        QCOMPARE(adapter.telemetry().ionSourceVoltageV, 0.0);
+        adapter.closePort();
+        QVERIFY(std::isnan(adapter.health().ionSourceKv));
+        QVERIFY(std::isnan(adapter.telemetry().ionSourceVoltageV));
     }
     void timeoutInvalidatesOldStateAndRejectsLateReply() {
         FakeSerial device; device.reply = frame(statusPayload());
@@ -103,6 +125,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!adapter.portOpen(), 3500);
         QVERIFY(!adapter.health().connected);
         QVERIFY(std::isnan(adapter.telemetry().tdTemperatureC));
+        QVERIFY(std::isnan(adapter.health().ionSourceKv));
+        QVERIFY(std::isnan(adapter.telemetry().ionSourceVoltageV));
         device.deliver(frame(statusPayload()));
         QVERIFY(!adapter.health().connected);
         QVERIFY(adapter.statusDetails().value("message").toString().contains("超时"));

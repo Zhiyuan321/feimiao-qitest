@@ -50,8 +50,13 @@ public:
     QVariantMap rs485Status() const;
     QStringList rs485Ports() const;
     QVariantMap networkStatus() const;
+    QVector<double> pressureVolts() const;
+    bool canTune() const { return sessionRole_ == SessionRole::Administrator || sessionRole_ == SessionRole::Engineer; }
+    QVariantMap pumpStatus() const;
     QVariantMap instrumentSettings() const { return instrumentSettings_; }
     QString sessionSummary() const;
+    bool fullMethodAccess() const { return sessionRole_ == SessionRole::Administrator
+        || (sessionRole_ == SessionRole::OfflineDemo && instrument_->descriptor().simulation); }
     QString librarySummary() const { return librarySummary_; }
     QString aiSummary() const;
     QString aiContextSummary() const;
@@ -72,11 +77,13 @@ public:
     const AnalysisResult &result() const { return result_; }
 
 public slots:
-    bool connectRs485(const QString &portName);
+    bool connectRs485(const QString &portName, bool includePump = false);
     void disconnectRs485();
     bool startNetworkListening(const QString &address, quint16 port = 11000, int staleMs = 5000);
     void stopNetworkListening();
     bool exportNetworkFrames(const QString &path);
+    bool requestRfTuning(bool enabled, bool confirmed=false);
+    bool exportPumpFrames(const QString &path);
     void startDetection();
     void startSampleDetection(const QJsonObject &sampleInfo, const QString &savePath);
     void cancelDetection();
@@ -89,7 +96,7 @@ public slots:
     void exportSelectedReport(const QVector<int> &candidateRows);
     void markCurrentRunReviewed();
     void createDemoMethodVersion(const QString &name, const QString &revisionNote);
-    bool createMethodDraft(const QString &name, const QJsonObject &parameters);
+    bool createMethodDraft(const QString &name, const QJsonObject &parameters, const QString &baseMethodId = {});
     void activateMethod(const QString &methodId);
     void loadStoredRun(const QString &runId);
     void exportCurrentArchive();

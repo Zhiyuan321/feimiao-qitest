@@ -8,6 +8,7 @@
 #include <limits>
 #include <QTemporaryDir>
 #include <QtTest>
+#include "core/MethodDraft.h"
 using namespace qitest;
 
 // Contract fixture, not a vendor implementation. Intentionally withholds ACK.
@@ -33,6 +34,28 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
+    void restrictedMethodChangesPreserveAdminFields() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("methods.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        qputenv("QITEST_OPERATOR_ROLE","admin");controller.setSessionOperator("admin");
+        const QJsonObject base{{"scan_mode","Fullscan"},{"injection",12.34},{"source",4.9},{"td",40.0}};
+        QVERIFY(controller.createMethodDraft("管理员方法",base));QString id;
+        for(const auto &method:controller.methods()) if(method.name=="管理员方法") id=method.id;
+        QVERIFY(!id.isEmpty());
+        qputenv("QITEST_OPERATOR_ROLE","operator");controller.setSessionOperator("operator");
+        QVERIFY(!controller.fullMethodAccess());
+        auto next=base;next.insert("scan_mode","SIM");next.insert("injection",600.0);
+        QVERIFY(controller.createMethodDraft("管理员方法",next,id));
+        next.insert("source",6.0);QVERIFY(!controller.createMethodDraft("管理员方法",next,id));
+        next=base;next.remove("td");QVERIFY(!controller.createMethodDraft("管理员方法",next,id));
+        QVERIFY(!controller.createMethodDraft("管理员方法",base,"missing"));
+        QVERIFY(!controller.requestRfTuning(true,true));
+        QString error;next=base;next.insert("injection",600.01);QVERIFY(!MethodDraft::validate(next,&error));
+        next.insert("injection",1.001);QVERIFY(!MethodDraft::validate(next,&error));
+        next.insert("injection",0.0);QVERIFY(MethodDraft::validate(next,&error));
+        qunsetenv("QITEST_OPERATOR_ROLE");qunsetenv("QITEST_WORKSPACE_DB");
+    }
+
     void initTestCase() {
         QVERIFY(settingsDirectory_.isValid());
         // Tests must not read/write the operator's registry or saved COM port.

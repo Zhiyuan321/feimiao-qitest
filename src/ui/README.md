@@ -3,8 +3,10 @@
 先按页面定位，不必通读整个 MainWindow：
 - MainWindow：主窗口、导航、页面组装、状态连接。
 - NetworkConnectionPanel / Rs485ConnectionPanel：运行状态页的网口TCP与485标签，可同时连接。
-- InstrumentWorkbench：调谐、质量轴等工作区。
-- MethodEditorDialog：方法编辑。
+- Rs485ConnectionPanel同时显示主控板状态与分子泵换算值（说明保留原始值），一组COM连接按钮，支持共享收发报文导出。
+- DeviceWaveformPanel：样品分析中的单包气压图、射频调谐启停；RF曲线编码/倍率仍待确认。
+- InstrumentWorkbench：质量轴等离线工作区。
+- MethodEditorDialog：管理员完整参数；普通角色仅扫描模式和进样时间（0～600 ms、0.01 ms）。保存新版本保留原方法其余参数，仍为离线草稿，不下发设备。当前沿用既有登录角色，未实现本地账户创建/密码管理。
 - SpectrumPlot / ChromatogramDialog：谱图与提取积分。
 - CalibrationPage：定量曲线。
 - UserStandardsPage / StandardComparisonDialog：用户标准与比较。
