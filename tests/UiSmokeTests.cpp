@@ -9,7 +9,6 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTabWidget>
-#include <QTabBar>
 #include "ui/MainWindow.h"
 #include "ui/ChatTranscript.h"
 #include "ui/ChromatogramDialog.h"
@@ -134,9 +133,13 @@ private slots:
         client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
         auto *plot=pressure->findChild<QWidget *>("pressureVoltagePlot");QVERIFY(plot);
         QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
+        QCOMPARE(plot->property("yMaximum").toDouble(),15.0);
         QVERIFY(pressure->findChild<QLabel *>("pressureWaveformStatus")->text().contains("14.25"));
         const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
-        if(!capture.isEmpty())QVERIFY(pressure->grab().save(capture+"/pressure-waveform.png"));
+        if(!capture.isEmpty()) {
+            QVERIFY(QDir().mkpath(capture));
+            QVERIFY(pressure->grab().save(capture+"/pressure-waveform.png"));
+        }
         std::unique_ptr<QWidget> rf(createDeviceWaveformPanel(&controller,true));rf->resize(720,480);rf->show();
         QCOMPARE(rf->findChildren<QPushButton *>().size(),2);
         QVERIFY(!rf->findChild<QPushButton *>("rfTuningStart")->isEnabled());
@@ -215,6 +218,16 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QTRY_COMPARE(table->item(0, 1)->text(), QString("3000 V"));
     QCOMPARE(table->item(1, 1)->text(), QString("1234"));
     QCOMPARE(table->item(2, 1)->text(), QString("开启"));
+    client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
+    tabs->setCurrentIndex(2);
+    auto *pressurePlot=window.findChild<QWidget *>("pressureVoltagePlot");QVERIFY(pressurePlot);
+    QTRY_COMPARE(pressurePlot->property("sampleCount").toInt(),5);
+    QCOMPARE(pressurePlot->property("yMaximum").toDouble(),15.0);
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    if(!capture.isEmpty()) {
+        QVERIFY(QDir().mkpath(capture));
+        QVERIFY(window.grab().save(capture+"/pressure-in-instrument-status.png"));
+    }
     QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
     // The revised status uses byte 9 = 00 for OFF, regardless of the reserved tail.
     auto offPayload = test::networkStatusWire().mid(7, 21);
@@ -237,10 +250,9 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QCoreApplication::processEvents();
     QVERIFY(window.rect().contains(QRect(listen->mapTo(&window, QPoint()), listen->size())));
     QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
-    const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/network-readback.png"));
     QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp.json")));
-    QCOMPARE(tabs->count(), 2);
+    QCOMPARE(tabs->count(), 3);
     tabs->setCurrentIndex(0);
     auto *pumpTable = window.findChild<QTableWidget *>("rs485Readings");
     QVERIFY(pumpTable);
@@ -255,8 +267,8 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QCOMPARE(controller.telemetry().molecularPumpTemperatureC, 45.0);
     bool rpmFound = false, tempFound = false;
     for (auto *label : window.findChildren<QLabel *>()) {
-        if (label->property("telemetryKey") == "pump") { QCOMPARE(label->text(), QString("1200")); rpmFound = true; }
-        if (label->property("telemetryKey") == "pumpTemp") { QCOMPARE(label->text(), QString("45.0")); tempFound = true; }
+        if (label->property("telemetryKey") == "pump") { QCOMPARE(label->text(), QString("1200 RPM")); rpmFound = true; }
+        if (label->property("telemetryKey") == "pumpTemp") { QCOMPARE(label->text(), QString("45.0 ℃")); tempFound = true; }
     }
     QVERIFY(rpmFound && tempFound);
     QVERIFY(controller.networkStatus().value("connected").toBool());
@@ -754,17 +766,13 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     auto *home=commandButton(window,"OpenHome"); QVERIFY(home);
     QTRY_VERIFY_WITH_TIMEOUT(home->isVisibleTo(&window),5000);
     home->click();
-    auto *analysisTabs=window.findChild<QTabWidget *>("analysisViewTabs");QVERIFY(analysisTabs);
-    auto *analysisTabBar=analysisTabs->tabBar();QVERIFY(analysisTabBar);QVERIFY(analysisTabBar->isVisibleTo(&window));
     auto *runStatus=window.findChild<QWidget *>("runStatusStrip");QVERIFY(runStatus);
-    QCOMPARE(analysisTabs->cornerWidget(Qt::TopRightCorner),runStatus);
-    QVERIFY(runStatus->height()<=analysisTabBar->height());
-    const QImage tabImage=analysisTabBar->grab().toImage();QVERIFY(!tabImage.isNull());
-    for(int index=0;index<analysisTabBar->count();++index) {
-        const QRect rect=analysisTabBar->tabRect(index);
-        QVERIFY2(tabImage.pixelColor(rect.left()+4,rect.center().y()).lightness()>140,
-            qPrintable(analysisTabBar->tabText(index)));
-    }
+    QCOMPARE(runStatus->parentWidget()->objectName(),QString("contextHeader"));
+    QVERIFY(!window.findChild<QTabWidget *>("analysisViewTabs"));
+    auto *communicationTabs=window.findChild<QTabWidget *>("communicationTabs");QVERIFY(communicationTabs);
+    QCOMPARE(communicationTabs->count(),3);
+    QCOMPARE(communicationTabs->tabText(2),QString("气压曲线"));
+    QCOMPARE(communicationTabs->widget(2)->objectName(),QString("pressureWaveformPanel"));
     auto *example=window.findChild<QPushButton *>("loadPublicExample"); QVERIFY(example);
     QVERIFY(example->isVisibleTo(&window));
     example->click();

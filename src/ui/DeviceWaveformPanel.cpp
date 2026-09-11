@@ -8,6 +8,7 @@
 #include <QMouseEvent>
 #include <QMessageBox>
 #include <algorithm>
+#include <cmath>
 
 namespace qitest {
 namespace {
@@ -15,16 +16,24 @@ namespace {
 class VoltagePlot final : public QWidget {
 public:
     explicit VoltagePlot(bool tuning):tuning_(tuning) {setMinimumSize(240,220);setMouseTracking(true);}
-    void setValues(const QVector<double> &v) {if(values_==v)return;values_=v;setProperty("sampleCount",v.size());update();}
+    void setValues(const QVector<double> &v) {
+        if(values_==v)return;
+        values_=v;setProperty("sampleCount",v.size());setProperty("yMaximum",scaleMaximum());update();
+    }
 protected:
     QRectF area() const {return QRectF(66,24,std::max(1,width()-90),std::max(1,height()-82));}
+    double scaleMaximum() const {
+        if (values_.isEmpty()) return 6.0;
+        const double peak=*std::max_element(values_.cbegin(),values_.cend());
+        return peak<=6.0 ? 6.0 : std::ceil(peak/5.0)*5.0;
+    }
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);p.setRenderHint(QPainter::Antialiasing);p.fillRect(rect(),QColor("#f7faf9"));
-        const auto a=area();p.setPen(QColor("#344540"));p.drawLine(a.bottomLeft(),a.topLeft());p.drawLine(a.bottomLeft(),a.bottomRight());
+        const auto a=area();const double yMaximum=scaleMaximum();p.setPen(QColor("#344540"));p.drawLine(a.bottomLeft(),a.topLeft());p.drawLine(a.bottomLeft(),a.bottomRight());
         if(!tuning_) for(int i=0;i<=6;++i) {
             const double y=a.bottom()-a.height()*i/6;
             p.setPen(QColor("#dae5e0"));p.drawLine(QPointF(a.left(),y),QPointF(a.right(),y));
-            p.setPen(QColor("#344540"));p.drawText(QRectF(2,y-10,55,20),Qt::AlignRight|Qt::AlignVCenter,QString::number(i,'f',2));
+            p.setPen(QColor("#344540"));p.drawText(QRectF(2,y-10,55,20),Qt::AlignRight|Qt::AlignVCenter,QString::number(yMaximum*i/6.0,'f',2));
         }
         p.drawText(QRectF(2,2,60,22),Qt::AlignCenter,tuning_?"mV":"V");
         p.drawText(QRectF(a.left(),a.bottom()+25,a.width(),36),Qt::AlignCenter,
@@ -37,7 +46,7 @@ protected:
         p.drawText(QRectF(a.right()-70,a.bottom()+2,70,20),Qt::AlignRight,QString::number(values_.size()-1));
         p.save();p.setClipRect(a);p.setPen(QPen(QColor("#008580"),1.5));QPainterPath path;
         for(int i=0;i<values_.size();++i) {
-            QPointF point(a.left()+a.width()*i/std::max(1,values_.size()-1),a.bottom()-a.height()*values_[i]/6.0);
+            QPointF point(a.left()+a.width()*i/std::max(1,values_.size()-1),a.bottom()-a.height()*values_[i]/yMaximum);
             if(!i)path.moveTo(point);else path.lineTo(point);
             if(values_.size()==1)p.drawEllipse(point,2,2);
         }
@@ -84,8 +93,7 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
                 .arg(data.value("pressureFrames",0).toULongLong()).arg(values.size());
             if(!values.isEmpty()) {
                 const auto high=*std::max_element(values.cbegin(),values.cend());
-                text+=QString(" 单包峰值 %1 V。").arg(high,0,'f',2);
-                if(high>6)text+="部分数值超出0～6 V显示范围，原始数值未截断。";
+                text+=QString(" 单包峰值 %1 V，纵轴已自动适配。").arg(high,0,'f',2);
             }
             status->setText(text);
         }

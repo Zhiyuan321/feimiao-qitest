@@ -77,7 +77,7 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
             if (!item) { item = new QTableWidgetItem; table->setItem(r, c, item); }
             item->setText(rows[r][c]); item->setToolTip(rows[r][c]);
         }
-        counts->setText(QString("接收 %1 字节 · CRC有效 %2 帧 · 未解析 %3 帧 · 丢弃 %4 字节\n保留最近256条收发帧供导出；气压图与调谐启停已接入，完整谱图采集未开放。")
+        counts->setText(QString("接收 %1 字节 · CRC有效 %2 帧 · 未解析 %3 帧 · 丢弃 %4 字节\n保留最近256条收发帧供导出；气压曲线与调谐启停已接入，完整谱图采集未开放。")
             .arg(data.value("receivedBytes", 0).toString()).arg(data.value("validFrames", 0).toString())
             .arg(data.value("unparsedFrames", 0).toString()).arg(data.value("rejectedBytes", 0).toString()));
     };

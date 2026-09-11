@@ -781,6 +781,7 @@ QWidget *MainWindow::createHomePage() {
     softwareTime->setProperty("sciRole","compactRuntime");
     softwareTime->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Fixed);
     contextLayout->addWidget(softwareTime);
+    contextLayout->addWidget(runStatus);
     // Windows 7 上原生 tooltip 窗口可能在这一条每秒刷新时残留成深色块。
     // 状态文字本身已经完整，补充说明放入无浮层的辅助功能描述。
     detectionTime->setAccessibleDescription("从开始采集到分析结束的软件用时");
@@ -1011,12 +1012,9 @@ QWidget *MainWindow::createHomePage() {
             statusBar()->showMessage(message, 8000);
         });
 
-    auto *views=new QTabWidget; views->setObjectName("analysisViewTabs"); views->setDocumentMode(true);
-    views->addTab(canvas,"谱图分析");
-    views->addTab(createDeviceWaveformPanel(controller_,false),"气压图");
-    // 状态与图页入口共用一行，把独立状态条的高度还给三张谱图。
-    views->setCornerWidget(runStatus,Qt::TopRightCorner);
-    layout->addWidget(views,1);
+    // 样品分析只保留三张质谱分析图。0x82 气压单包是仪器诊断数据，
+    // 在“仪器配置 / 运行状态”查看，不与正式检测图谱混在一起。
+    layout->addWidget(canvas,1);
     connect(startButton_, &QPushButton::clicked, actions_->action("StartRun"), &QAction::trigger);
     connect(importData, &QPushButton::clicked, this, &MainWindow::importRunArchiveFromDialog);
     return page;
@@ -1287,6 +1285,7 @@ QWidget *MainWindow::createSettingsPage() {
     communicationTabs->setObjectName("communicationTabs");
     communicationTabs->addTab(new Rs485ConnectionPanel(controller_), "485串口");
     communicationTabs->addTab(new NetworkConnectionPanel(controller_), "网口TCP");
+    communicationTabs->addTab(createDeviceWaveformPanel(controller_, false), "气压曲线");
     communicationTabs->hide();
     placeholderLayout->addWidget(communicationTabs);
     placeholderLayout->addWidget(settingsStatusTable_);
