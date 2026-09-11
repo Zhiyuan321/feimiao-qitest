@@ -102,7 +102,7 @@ QString Theme::buildStyleSheet(Density density) {
         QPushButton:focus { border: 2px solid %18; }
         QPushButton[sciRole="primary"] { background: %18; color: %4; border-color: %18; font-weight: 600; }
         QPushButton[sciRole="primary"]:hover { background: %20; }
-        QPushButton:disabled, QToolButton:disabled { background: %7; color: %11; border-color: %5; }
+        QPushButton:disabled, QToolButton:disabled { background: transparent; color: %11; border-color: transparent; }
         QPushButton[sciRole="primary"]:disabled { background: %7; color: %11; border-color: %5; }
         QPushButton[sciRole="quietAction"] { min-height: 28px; padding: 0 10px; background: transparent; color: %20; border-color: %5; }
         QPushButton[sciRole="plotAction"] { min-height: 0; padding: 0 8px; background: %4; color: %20; border: 1px solid %5; border-radius: 6px; font-size: 14px; }
@@ -125,8 +125,8 @@ QString Theme::buildStyleSheet(Density density) {
         QToolButton[sciRole="moduleTile"]:pressed { background: %7; border-color: %15; }
         QPushButton[sciRole="moduleTile"] { background: %4; border: 1px solid %5; border-radius: 8px; padding: 8px 12px; text-align: left; font-weight: 500; }
         QPushButton[sciRole="moduleTile"]:hover { border-color: %18; background: %19; }
-        QToolButton[sciRole="controlTile"] { background: %6; border: 1px solid %5; border-radius: 6px; padding: 10px; font-weight: 600; }
-        QToolButton[sciRole="controlTile"]:hover { border-color: %18; }
+        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 10px; padding: 10px; font-weight: 600; }
+        QToolButton[sciRole="controlTile"]:hover { background: %19; border-color: %5; }
         QToolButton[sciRole="controlTile"]:pressed { background: %7; border-color: %15; }
         QToolButton[sciRole="controlTile"]:checked { background: %17; border-color: %18; color: %20; }
         QPushButton[sciRole="choice"] { min-width: 52px; }

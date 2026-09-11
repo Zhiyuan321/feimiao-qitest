@@ -206,6 +206,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto *listen = window.findChild<QPushButton *>("networkListen");
     auto *stop = window.findChild<QPushButton *>("networkStop");
     QVERIFY(panel && table && address && tcpPort && listen && stop); QVERIFY(panel->isVisibleTo(&window));
+    QVERIFY(!table->showGrid());
     QTcpServer reservation; QVERIFY(reservation.listen(QHostAddress::LocalHost));
     const auto portNumber = reservation.serverPort(); reservation.close();
     address->setCurrentText("127.0.0.1"); tcpPort->setValue(portNumber); listen->click();
@@ -257,6 +258,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     tabs->setCurrentIndex(0);
     auto *pumpTable = window.findChild<QTableWidget *>("rs485Readings");
     QVERIFY(pumpTable);
+    QVERIFY(!pumpTable->showGrid());
     QTRY_COMPARE_WITH_TIMEOUT(pumpTable->item(7, 1)->text(), QString("45.0 ℃"), 2500);
     QCOMPARE(pumpTable->item(4, 1)->text(), QString("1200 RPM"));
     QCOMPARE(pumpTable->item(5, 1)->text(), QString("0.80 A"));

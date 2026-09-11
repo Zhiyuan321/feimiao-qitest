@@ -1009,7 +1009,9 @@ void AppController::exportRunArchive(const QString &runId, const QString &path) 
         finished->deleteLater();
         if (outcome->first) {
             emit archiveGenerated(path);
-            emit notice("数据已导出：" + path);
+            // The full path is already delivered by archiveGenerated. Keep the
+            // customer-facing status bar concise, especially at Win7 widths.
+            emit notice("数据已导出");
         } else emit notice("导出失败：" + outcome->second);
     });
     emit notice("正在导出数据…");

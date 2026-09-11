@@ -55,7 +55,14 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     table->setHorizontalHeaderLabels({"485回读项目", "当前值", "说明"});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionMode(QAbstractItemView::NoSelection);
+    // Wine/Windows 7 may ignore a transparent gridline color while the native
+    // grid is still enabled, producing the black blocks seen on the target UI.
+    table->setShowGrid(false);
+    table->setAlternatingRowColors(true);
+    table->setWordWrap(false);
+    table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     table->verticalHeader()->hide();
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     table->setMinimumHeight(300); table->setMaximumHeight(360);
     layout->addWidget(table);

@@ -45,7 +45,10 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     auto *table = new QTableWidget(4, 3); table->setObjectName("networkReadings");
     table->setHorizontalHeaderLabels({"网口回读项目", "当前值", "说明"});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers); table->setSelectionMode(QAbstractItemView::NoSelection);
+    table->setShowGrid(false); table->setAlternatingRowColors(true); table->setWordWrap(false);
+    table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     table->verticalHeader()->hide(); table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    table->verticalHeader()->setDefaultSectionSize(32);
     table->setMinimumHeight(165); table->setMaximumHeight(185); layout->addWidget(table);
     auto *counts = new QLabel; counts->setObjectName("networkFrameCounts"); counts->setWordWrap(true); layout->addWidget(counts);
     connect(start, &QPushButton::clicked, this, [=] {

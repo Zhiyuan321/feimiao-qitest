@@ -1415,8 +1415,9 @@ QWidget *MainWindow::createSettingsPage() {
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setProperty("sciRole", "controlTile");
         button->setChecked(enabled);
-        button->setMinimumSize(110, 104);
-        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        button->setMinimumSize(110, 92);
+        button->setMaximumHeight(104);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         manualGrid->addWidget(button, i / 3, i % 3);
         button->setProperty("instrumentControl", true);
         button->setToolTip("点击提交操作；没有仪器回执不视为成功。");
@@ -1436,8 +1437,6 @@ QWidget *MainWindow::createSettingsPage() {
         });
     }
     for (int column = 0; column < 3; ++column) manualGrid->setColumnStretch(column, 1);
-    manualGrid->setRowStretch(0, 1);
-    manualGrid->setRowStretch(1, 1);
     commonControls->setLayout(manualGrid);
     controlGroups->addWidget(commonControls);
     auto *auxiliary = new QWidget;
