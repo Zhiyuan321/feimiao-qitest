@@ -1346,7 +1346,7 @@ QWidget *MainWindow::createSettingsPage() {
     off->setChecked(!initialSettings.value("powerOn").toBool());
     oneKeyRow->addWidget(on);
     oneKeyRow->addWidget(off);
-    auto *powerState = makeLabel({}, "secondary");
+    auto *powerState = makeLabel({}, "contextTitle");
     powerState->setObjectName("instrumentStartupState");
     oneKeyRow->addWidget(powerState);
     const QString startupHint = "常用部件的启停状态以仪器回执为准。";
@@ -1396,7 +1396,12 @@ QWidget *MainWindow::createSettingsPage() {
     auto *controlGroups = new QStackedWidget;
     controlGroups->setObjectName("instrumentControlPages");
     auto *commonControls = new QWidget;
+    auto *commonLayout = new QVBoxLayout(commonControls);
+    commonLayout->setContentsMargins(0, 0, 0, 0);
+    auto *manualPanel = new QWidget;
+    manualPanel->setProperty("sciRole", "workspaceSection");
     auto *manualGrid = new QGridLayout;
+    manualGrid->setContentsMargins(12, 12, 12, 12);
     manualGrid->setSpacing(8);
     manualGrid->setAlignment(Qt::AlignTop);
     const QStringList controls{"RF", "离子源高压", "隔膜泵", "分子泵", "夹管阀", "内载气"};
@@ -1408,15 +1413,15 @@ QWidget *MainWindow::createSettingsPage() {
         auto *button = new QToolButton;
         const bool enabled = initialSettings.value(controlKeys[i]).toBool();
         button->setObjectName("instrumentControl_" + controlKeys[i]);
-        button->setText(controls[i] + (enabled ? "\n已开启" : "\n已关闭"));
+        button->setText(controls[i] + (enabled ? "·已开启" : "·已关闭"));
         button->setCheckable(true);
         button->setIcon(commandIcon(controlIcons[i]));
-        button->setIconSize(QSize(36, 36));
+        button->setIconSize(QSize(32, 32));
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setProperty("sciRole", "controlTile");
         button->setChecked(enabled);
-        button->setMinimumSize(110, 100);
-        button->setMaximumHeight(112);
+        button->setMinimumSize(110, 86);
+        button->setMaximumHeight(94);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         manualGrid->addWidget(button, i / 3, i % 3);
         button->setProperty("instrumentControl", true);
@@ -1425,7 +1430,7 @@ QWidget *MainWindow::createSettingsPage() {
             const QSignalBlocker blocker(button);
             const QVariant value = settings.value(key);
             button->setChecked(value.isValid() && value.toBool());
-            button->setText(label + (!value.isValid() ? "\n状态未知" : value.toBool() ? "\n已开启" : "\n已关闭"));
+            button->setText(label + (!value.isValid() ? "·状态未知" : value.toBool() ? "·已开启" : "·已关闭"));
         };
         refresh(initialSettings);
         connect(controller_, &AppController::instrumentSettingsChanged, button, refresh);
@@ -1437,7 +1442,9 @@ QWidget *MainWindow::createSettingsPage() {
         });
     }
     for (int column = 0; column < 3; ++column) manualGrid->setColumnStretch(column, 1);
-    commonControls->setLayout(manualGrid);
+    manualPanel->setLayout(manualGrid);
+    commonLayout->addWidget(manualPanel);
+    commonLayout->addStretch();
     controlGroups->addWidget(commonControls);
     auto *auxiliary = new QWidget;
     auxiliary->setObjectName("auxiliaryControls");

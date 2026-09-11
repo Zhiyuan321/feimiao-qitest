@@ -90,9 +90,10 @@ QString Theme::buildStyleSheet(Density density) {
         QLabel[sciTone="loginTitle"] { font-size: 28px; font-weight: 600; }
         QLabel[sciTone="pageTitle"] { font-size: 20px; font-weight: 600; }
         QLabel[sciTone="sectionTitle"] { font-size: 17px; font-weight: 600; }
-        QLabel[sciTone="panelTitle"], QLabel[sciTone="contextTitle"], QLabel[sciTone="identityTitle"], QLabel[sciTone="bodyStrong"] { font-weight: 600; }
+        QLabel[sciTone="panelTitle"], QLabel[sciTone="contextTitle"], QLabel[sciTone="identityTitle"], QLabel[sciTone="bodyStrong"] { font-weight: 500; }
         QLabel[sciTone="technical"] { color: %10; font-size: 10px; font-weight: 600; letter-spacing: 1px; }
-        QLabel[sciTone="secondary"], QLabel[sciTone="metadata"], QLabel[sciTone="user"] { color: #243331; font-size: 16px; font-weight: 600; }
+        QLabel[sciTone="secondary"], QLabel[sciTone="metadata"] { color: #52615f; font-size: 14px; font-weight: 400; }
+        QLabel[sciTone="user"] { color: #243331; font-size: 14px; font-weight: 500; }
         QLabel[sciRole="reportDetail"] { font-size: 13px; font-weight: 400; color: #243331; }
         QWidget#monitorPanel QLabel#readoutName, QWidget#monitorPanel QLabel[sciTone="metadata"] { font-size: 13px; font-weight: 400; color: #52615f; }
         QWidget#monitorPanel QLabel[sciTone="readoutValue"] { font-size: 15px; font-weight: 500; }
@@ -134,7 +135,7 @@ QString Theme::buildStyleSheet(Density density) {
         QPushButton[sciRole="plotAction"]:hover, QPushButton[sciRole="plotAction"]:focus { border: 1px solid %18; }
         QPushButton[sciRole="plotAction"]:pressed { background: %7; padding: 0 8px; }
         QPushButton[sciState="current"] { background: %17; color: %20; border-color: transparent; font-weight: 600; }
-        QToolButton[sciRole="command"] { background: transparent; border: 0; border-radius: 9px; padding: 4px 8px; font-size: 14px; font-weight: 600; }
+        QToolButton[sciRole="command"] { background: transparent; border: 0; border-radius: 9px; padding: 4px 8px; font-size: 14px; font-weight: 500; }
         QToolButton[sciRole="command"]:hover { background: %19; }
         QToolButton[sciRole="command"]:pressed { background: %7; }
         QToolButton[sciRole="command"][sciState="current"] { background: %17; color: %20; font-weight: 600; }
@@ -150,7 +151,7 @@ QString Theme::buildStyleSheet(Density density) {
         QToolButton[sciRole="moduleTile"]:pressed { background: %7; border-color: %15; }
         QPushButton[sciRole="moduleTile"] { background: %4; border: 1px solid %5; border-radius: 8px; padding: 8px 12px; text-align: left; font-weight: 500; }
         QPushButton[sciRole="moduleTile"]:hover { border-color: %18; background: %19; }
-        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 10px; padding: 8px 10px 10px 10px; font-size: 14px; font-weight: 500; }
+        QToolButton[sciRole="controlTile"] { background: %4; border: 1px solid transparent; border-radius: 10px; padding: 8px 10px; font-size: 13px; font-weight: 500; }
         QToolButton[sciRole="controlTile"]:hover { background: %19; border-color: %5; }
         QToolButton[sciRole="controlTile"]:pressed { background: %7; border-color: %15; }
         QToolButton[sciRole="controlTile"]:checked { background: %17; border-color: %18; color: %20; }
@@ -167,7 +168,8 @@ QString Theme::buildStyleSheet(Density density) {
         QTreeWidget::item:hover { background: %19; }
         QTreeWidget::item:selected { background: %17; color: %20; }
         QTreeWidget::branch { background: transparent; border: 0; image: none; }
-        QTreeWidget#settingsTree::item { min-height: 28px; }
+        QTreeWidget#settingsTree { padding: 4px; }
+        QTreeWidget#settingsTree::item { min-height: 30px; margin: 2px 4px; border-radius: 8px; }
         QTreeWidget#settingsTree::item:selected { background: %18; color: %4; }
         QTableWidget { background: %4; alternate-background-color: %6; border: 0; gridline-color: transparent; border-radius: 10px; outline: 0; }
         QTableWidget::item { border: 0; padding: 6px; }
