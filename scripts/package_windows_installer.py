@@ -42,6 +42,7 @@ Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "WinVer.nsh"
+!include "WinMessages.nsh"
 Name "飞秒质谱工作站"
 RequestExecutionLevel user
 InstallDir "$LOCALAPPDATA\FeimiaoWorkstation"
@@ -67,6 +68,24 @@ Function .onInit
     MessageBox MB_ICONSTOP "需要 Windows 7 SP1 或更新系统。"
     Abort
   ${EndIf}
+  FindWindow $0 "" "飞秒质谱工作站"
+  ${If} $0 == 0
+    Goto running_checked
+  ${EndIf}
+  IfSilent close_running 0
+  MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL "飞秒质谱工作站正在运行。请先保存正在编辑的内容；点击“确定”将关闭软件并继续安装。" IDOK close_running IDCANCEL cancel_install
+close_running:
+  SendMessage $0 ${WM_CLOSE} 0 0
+  Sleep 1500
+  FindWindow $0 "" "飞秒质谱工作站"
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "软件仍在运行，请手动关闭后重新安装。"
+    Abort
+  ${EndIf}
+  Goto running_checked
+cancel_install:
+  Abort
+running_checked:
   SetShellVarContext current
 FunctionEnd
 Section "完整软件"

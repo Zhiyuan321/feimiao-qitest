@@ -1,4 +1,5 @@
 #include "ui/NetworkConnectionPanel.h"
+#include "ui/RoundedComboBox.h"
 #include "app/AppController.h"
 #include <QComboBox>
 #include <QFileDialog>
@@ -22,7 +23,7 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
     auto *endpointRow = new QHBoxLayout;
     endpointRow->setSpacing(6);
-    auto *addresses = new QComboBox; addresses->setObjectName("networkAddress"); addresses->setEditable(true);
+    auto *addresses = new RoundedComboBox; addresses->setObjectName("networkAddress"); addresses->setEditable(true);
     addresses->addItem("0.0.0.0");
     for (const auto &address : QNetworkInterface::allAddresses())
         if (address.protocol() == QAbstractSocket::IPv4Protocol && !address.isLoopback())
@@ -44,7 +45,10 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     auto *start = new QPushButton("监听"); start->setObjectName("networkListen");
     auto *stop = new QPushButton("停止"); stop->setObjectName("networkStop");
     auto *save = new QPushButton("导出报文"); save->setObjectName("networkExport");
-    start->setFixedSize(72, 36); stop->setFixedSize(72, 36); save->setFixedSize(96, 36);
+    for (auto *button : {start, stop, save}) {
+        button->setFixedHeight(36);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
     stop->setToolTip("开始监听后可停止");
     save->setToolTip("收到有效网口报文后可导出");
     auto *addressLabel = new QLabel("IP");
@@ -54,7 +58,7 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     layout->addLayout(endpointRow);
     auto *actionRow = new QHBoxLayout;
     actionRow->setSpacing(6);
-    actionRow->addWidget(start); actionRow->addWidget(stop); actionRow->addWidget(save); actionRow->addStretch();
+    for (auto *button : {start, stop, save}) actionRow->addWidget(button, 1);
     layout->addLayout(actionRow);
     auto *stale = new QSpinBox; stale->setObjectName("networkStaleSeconds"); stale->setRange(1, 3600);
     stale->setValue(preferences.value("network/staleMs", 5000).toInt() / 1000); stale->setSuffix(" 秒");
@@ -90,6 +94,9 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
         start->setEnabled(!listening && !busy); stop->setEnabled(listening);
         addresses->setEnabled(!listening); port->setEnabled(!listening); stale->setEnabled(!listening);
         save->setEnabled(data.value("retainedFrames").toInt() > 0);
+        start->setToolTip(listening ? "网口正在监听" : "开始监听仪器的TCP连接");
+        stop->setToolTip(listening ? "停止当前网口监听" : "开始监听后可停止");
+        save->setToolTip(save->isEnabled() ? "导出已接收的网口报文" : "收到有效网口报文后可导出");
         status->setText(data.isEmpty() ? "尚未监听。可与485同时回读，调谐启停在射频页操作。" : data.value("message").toString()
             + (data.value("connected").toBool() ? " · 更新于" + data.value("lastReadback").toString() : QString()));
         addresses->setToolTip(status->text());

@@ -41,13 +41,18 @@ try:
     raise RuntimeError("Installed app exited early: "+str(process.returncode))
 except subprocess.TimeoutExpired:
     print("PASS: installed app remains running at startup",flush=True)
-finally:
-    if process.poll() is None:
-        # No /F: ask the GUI to close normally in this dedicated QA Wine prefix.
-        # Killing the host Wine wrapper can crash wineserver instead of exercising close.
-        subprocess.run([wine,"taskkill","/IM","飞秒质谱工作站.exe"],env=env,check=True,timeout=15)
-        process.wait(timeout=15)
-        print("PASS: installed GUI accepts normal window close",flush=True)
+if process.poll() is None:
+    # A silent upgrade must close the running GUI before overwriting Qt DLLs.
+    subprocess.run([wine,str(installer),"/S","/D="+win(installed)],env=env,check=True,timeout=180)
+    process.wait(timeout=20)
+    print("PASS: running application was closed before silent upgrade",flush=True)
+    for line in (installed / "SHA256SUMS.txt").read_text().splitlines():
+        expected, relative = line.split("  ",1)
+        h = hashlib.sha256()
+        with (installed / relative).open("rb") as stream:
+            for block in iter(lambda:stream.read(1024*1024),b""): h.update(block)
+        if h.hexdigest()!=expected: raise RuntimeError("Upgraded payload mismatch: "+relative)
+    print("PASS: upgraded payload still matches verified hashes",flush=True)
 subprocess.run([wine,str(installed / "卸载.exe"),"/S"],env=env,check=True,timeout=60)
 deadline=time.monotonic()+20
 while (installed / "飞秒质谱工作站.exe").exists() and time.monotonic()<deadline: time.sleep(0.5)

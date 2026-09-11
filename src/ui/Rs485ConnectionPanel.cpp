@@ -1,4 +1,5 @@
 #include "ui/Rs485ConnectionPanel.h"
+#include "ui/RoundedComboBox.h"
 #include "app/AppController.h"
 #include "domain/DisplayLabels.h"
 #include <QComboBox>
@@ -17,9 +18,9 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
-    auto *row = new QHBoxLayout;
-    row->setSpacing(6);
-    auto *ports = new QComboBox;
+    auto *endpointRow = new QHBoxLayout;
+    endpointRow->setSpacing(6);
+    auto *ports = new RoundedComboBox;
     ports->setObjectName("rs485Port");
     // Windows 7 is the delivery target.  A serial port must come from the
     // system enumeration; an editable empty box looks like an unexplained
@@ -35,19 +36,21 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     auto *disconnectButton = new QPushButton("断开");
     disconnectButton->setObjectName("rs485Disconnect");
     for (auto *button : {refresh, connectButton, disconnectButton}) button->setFixedHeight(36);
-    refresh->setMinimumWidth(62);
-    connectButton->setMinimumWidth(62);
-    disconnectButton->setMinimumWidth(54);
     refresh->setToolTip("重新扫描可用串口");
     connectButton->setToolTip("连接串口并读取设备状态");
     disconnectButton->setToolTip("连接串口后可断开");
     auto *save = new QPushButton("导出报文"); save->setObjectName("pumpExport");
     save->setFixedHeight(36);
-    save->setMinimumWidth(72);
     save->setToolTip("收到有效485或分子泵报文后可导出");
-    row->addWidget(ports); row->addWidget(refresh); row->addWidget(connectButton);
-    row->addWidget(disconnectButton); row->addWidget(save); row->addStretch();
-    layout->addLayout(row);
+    endpointRow->addWidget(ports, 1);
+    layout->addLayout(endpointRow);
+    auto *actionRow = new QHBoxLayout;
+    actionRow->setSpacing(6);
+    for (auto *button : {refresh, connectButton, disconnectButton, save}) {
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        actionRow->addWidget(button, 1);
+    }
+    layout->addLayout(actionRow);
     auto *status = new QLabel(this);
     status->setObjectName("rs485ConnectionStatus");
     status->hide();
@@ -118,6 +121,9 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         ports->setEnabled(hasPort && !open && !busy);
         const auto pump = controller->pumpStatus();
         save->setEnabled(pump.value("retainedRecords").toInt() > 0);
+        connectButton->setToolTip(hasPort ? "连接串口并读取设备状态" : "连接设备后刷新串口列表");
+        disconnectButton->setToolTip(open ? "断开当前串口" : "连接串口后可断开");
+        save->setToolTip(save->isEnabled() ? "导出已接收的485报文" : "收到有效485报文后可导出");
         pumpStatus->setText(pump.value("message", "勾选后，连接一次即可依次读取主控板和分子泵。").toString());
         disconnectButton->setEnabled(open);
         status->setText(active ? data.value("message").toString()

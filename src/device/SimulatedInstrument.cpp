@@ -23,7 +23,9 @@ SimulatedInstrument::SimulatedInstrument() {
 }
 
 InstrumentDescriptor SimulatedInstrument::descriptor() const {
-    return {"QITest 01", "SIMULATOR", "sim-contract-1", true};
+    // Keep the internal test-mode flag for safety and audit logic, but do not
+    // expose implementation labels in the operator-facing interface.
+    return {"QITest 01", {}, "工作站接口", true};
 }
 
 InstrumentHealth SimulatedInstrument::health() const {

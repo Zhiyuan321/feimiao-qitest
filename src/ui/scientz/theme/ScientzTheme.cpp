@@ -124,8 +124,8 @@ QString Theme::buildStyleSheet(Density density) {
         QTabWidget#workbenchTabs QTabBar::tab { background: %6; border: 0; border-radius: 8px; min-height: 44px; padding: 0 18px; margin-right: 6px; font-weight: 600; }
         QTabWidget#workbenchTabs QTabBar::tab:selected { background: %17; color: %20; }
         QTabWidget#workbenchTabs QTabBar::tab:hover { background: %19; }
-        QComboBox QAbstractItemView { background: %4; color: %1; border: 1px solid %15; border-radius: 0; padding: 0; outline: 0; selection-background-color: %17; selection-color: %20; }
-        QComboBox QAbstractItemView::item { min-height: 36px; padding: 0 10px; margin: 0; border: 0; border-radius: 0; }
+        QComboBox QAbstractItemView { background: %4; color: %1; border: 1px solid %15; border-radius: 10px; padding: 4px; outline: 0; selection-background-color: %17; selection-color: %20; }
+        QComboBox QAbstractItemView::item { min-height: 36px; padding: 0 10px; margin: 1px; border: 0; border-radius: 6px; }
         QComboBox QAbstractItemView::item:hover { background: %19; color: %20; }
         QLineEdit:focus, QPlainTextEdit:focus { border: 2px solid %18; }
         QLineEdit[sciRole="assistantInput"] { background: transparent; border: 0; padding: 0 4px; min-height: 32px; }

@@ -1199,7 +1199,7 @@ QWidget *MainWindow::createSettingsPage() {
     sectionOptions->setObjectName("settingsSectionOptions");
     sectionOptions->setUniformItemSizes(true);
     sectionOptions->setSpacing(0);
-    sectionOptions->setStyleSheet("QListView { background: #ffffff; color: #243331; border: 1px solid #b5c9c5; border-radius: 0; padding: 0; outline: 0; } QListView::item { min-height: 40px; padding: 0 10px; margin: 0; border: 0; border-radius: 0; } QListView::item:selected, QListView::item:hover { background: #d9efea; color: #007f80; }");
+    sectionOptions->setStyleSheet("QListView { background: #ffffff; color: #243331; border: 1px solid #b5c9c5; border-radius: 10px; padding: 4px; outline: 0; } QListView::item { min-height: 40px; padding: 0 10px; margin: 1px; border: 0; border-radius: 6px; } QListView::item:selected, QListView::item:hover { background: #d9efea; color: #007f80; }");
     section->setView(sectionOptions);
     section->addItems({"仪器控制", "分析校准", "系统"});
     section->setMinimumHeight(44);
@@ -1257,6 +1257,7 @@ QWidget *MainWindow::createSettingsPage() {
     contentLayout->setContentsMargins(16, 16, 16, 20);
     contentLayout->setSpacing(12);
     settingsDetail_ = makeLabel("仪器控制", "pageTitle");
+    settingsDetail_->setObjectName("settingsDetailTitle");
     auto *detailHeading = new QHBoxLayout;
     auto *chooseSettings = new QPushButton("全部设置"); chooseSettings->setObjectName("embeddedSettingsMenu");
     chooseSettings->setMinimumSize(110,44); detailHeading->addWidget(chooseSettings);
@@ -1406,7 +1407,6 @@ QWidget *MainWindow::createSettingsPage() {
     auto *controlHeading = new QHBoxLayout;
     controlHeading->addWidget(makeLabel("手动控制", "sectionTitle"));
     controlHeading->addStretch();
-    controlHeading->addWidget(makeLabel("设备控制 · 以回读为准", "secondary"));
     controlLayout->addLayout(controlHeading);
     auto *controlGroups = new QStackedWidget;
     controlGroups->setObjectName("instrumentControlPages");
@@ -1491,21 +1491,19 @@ QWidget *MainWindow::createSettingsPage() {
     apply->setProperty("instrumentControl", true);
     settingRow->addWidget(switchValue, 1); settingRow->addWidget(numericValue, 1); settingRow->addWidget(apply);
     auxLayout->addLayout(settingRow);
-    auto *scope = makeLabel("部件状态以设备回读为准；未接入的接口不能执行。", "secondary");
-    scope->setWordWrap(true); auxLayout->addWidget(scope);
-    auto *contract = makeLabel({}, "secondary"); contract->setWordWrap(true); auxLayout->addWidget(contract);
     auxLayout->addStretch(); controlGroups->addWidget(auxiliary);
     controlLayout->addWidget(controlGroups, 1);
-    const auto refreshAuxiliary = [this, part, state, switchValue, numericValue, contract] {
+    const auto refreshAuxiliary = [this, part, state, switchValue, numericValue, apply] {
         const auto *entry = VendorControlCatalog::find(part->currentData().toString());
         if (!entry) return;
-        part->setToolTip(VendorControlCatalog::sourceReference(*entry));
         switchValue->setVisible(entry->toggle); numericValue->setVisible(!entry->toggle);
         const auto current = controller_->instrumentSettings().value(entry->key);
         state->setText("当前状态：" + (!current.isValid() ? QString("未知") : entry->toggle
             ? (current.toBool() ? QString("开启") : QString("关闭")) : current.toString() + entry->unit));
-        contract->setText(entry->transport + " · 厂家协议控制项；更改待设值不会直接下发。"
-            + (entry->toggle ? QString() : QString("温度范围不代表设备安全范围，实际使用须按厂家限定。")));
+        const QString guidance = VendorControlCatalog::sourceReference(*entry)
+            + "；" + entry->transport + "；操作结果以设备回读为准。";
+        part->setToolTip(guidance);
+        apply->setToolTip(guidance);
     };
     connect(part, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
         [this, part, switchValue, numericValue, refreshAuxiliary] {
@@ -3023,7 +3021,7 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         actionText = configured.value("cleaningModeOn").toBool() ? "终止清洗" : "开始清洗";
         target = "toggle:cleaningModeOn";
     } else if (module == "数据处理") {
-        description = "这里显示 C++ 确定性分析管线的真实运行状态，而不是由大语言模型计算的数值。";
+        description = "显示当前分析管线与数据处理状态。";
         rows = {
             {"输入检查", controller_->liveSpectrum().isEmpty() ? "等待数据" : "已完成",
                 QString::number(controller_->liveSpectrum().size()) + " 点", "数据范围检查"},
@@ -3190,7 +3188,7 @@ void MainWindow::openSettingsModule(const QString &requestedModule, const QStrin
     const QString target = pages.contains(subpage) ? subpage : pages.first();
     if (workspaceStack_ && workspaceStack_->count() > 1) setWorkspaceSection(1);
     settingsDetail_->setText(target);
-    settingsDetail_->setVisible(module != "参考谱库" && module != "定量曲线");
+    settingsDetail_->setVisible(module != "参考谱库" && module != "定量曲线" && target != "运行状态");
     if (module == "仪器配置" && (target == "常用部件" || target == "辅助部件")) {
         settingsDetailStack_->setCurrentIndex(1);
         if (auto *controls = settingsDetailStack_->findChild<QStackedWidget *>("instrumentControlPages"))

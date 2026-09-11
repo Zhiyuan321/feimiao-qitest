@@ -5,6 +5,7 @@
 #include "NetworkTestFrames.h"
 #include "PumpTestDevice.h"
 #include "device/NetworkInstrument.h"
+#include <algorithm>
 #include <cmath>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -197,10 +198,25 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     }
     QVERIFY(opened);
     auto *sharedPort = window.findChild<QComboBox *>("rs485Port");
+    auto *sharedRefresh = window.findChild<QPushButton *>("rs485Refresh");
     auto *sharedConnect = window.findChild<QPushButton *>("rs485Connect");
-    QVERIFY(sharedPort && sharedConnect);
+    auto *sharedDisconnect = window.findChild<QPushButton *>("rs485Disconnect");
+    auto *sharedExport = window.findChild<QPushButton *>("pumpExport");
+    QVERIFY(sharedPort && sharedRefresh && sharedConnect && sharedDisconnect && sharedExport);
     QVERIFY(!window.findChild<QCheckBox *>("rs485IncludePump"));
     QVERIFY(!sharedPort->isEditable());
+    QCoreApplication::processEvents();
+    QVERIFY(sharedPort->y() < sharedRefresh->y());
+    QCOMPARE(sharedRefresh->y(), sharedConnect->y());
+    QCOMPARE(sharedConnect->y(), sharedDisconnect->y());
+    QCOMPARE(sharedDisconnect->y(), sharedExport->y());
+    const QList<int> serialWidths{sharedRefresh->width(), sharedConnect->width(),
+        sharedDisconnect->width(), sharedExport->width()};
+    QVERIFY(*std::max_element(serialWidths.cbegin(), serialWidths.cend())
+        - *std::min_element(serialWidths.cbegin(), serialWidths.cend()) <= 2);
+    auto *detailTitle = window.findChild<QLabel *>("settingsDetailTitle");
+    QVERIFY(detailTitle && !detailTitle->isVisibleTo(&window));
+    QVERIFY(!visibleWidgetWithText<QLabel>(window, "设备控制 · 以回读为准"));
     QVERIFY(controller.connectRs485("TEST_ONLY", true));
     QTRY_VERIFY(controller.rs485Status().value("connected").toBool());
     auto *tabs = window.findChild<QTabWidget *>("communicationTabs"); QVERIFY(tabs); tabs->setCurrentIndex(1);
@@ -218,6 +234,11 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     address->setCurrentText("192.168.31.59");
     QVERIFY(address->lineEdit()->fontMetrics().horizontalAdvance(address->currentText()) + 16 < address->lineEdit()->width());
     QVERIFY(listen->y() > address->y());
+    QCOMPARE(listen->y(), stop->y());
+    QCOMPARE(stop->y(), exportButton->y());
+    const QList<int> networkWidths{listen->width(), stop->width(), exportButton->width()};
+    QVERIFY(*std::max_element(networkWidths.cbegin(), networkWidths.cend())
+        - *std::min_element(networkWidths.cbegin(), networkWidths.cend()) <= 2);
     for (auto *button : {listen, stop, exportButton}) {
         QVERIFY2(button->width() >= button->fontMetrics().horizontalAdvance(button->text()) + 24,
             qPrintable(button->text() + "按钮宽度不足"));
