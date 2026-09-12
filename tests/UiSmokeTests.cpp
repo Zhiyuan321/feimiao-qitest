@@ -428,7 +428,7 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QCOMPARE(ionReading->text(), QString("—"));
     simulationButton->click();
     QTRY_VERIFY(controller.instrumentDescriptor().simulation);
-    QCOMPARE(simulationButton->text(), QString("模拟演示中"));
+    QCOMPARE(simulationButton->text(), QString("预览"));
     QVERIFY(!simulationButton->isEnabled());
     qunsetenv("QITEST_WORKSPACE_DB");
 }
@@ -771,9 +771,8 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     auto *detectionTime = window.findChild<QLabel *>("runDetectionTime");
     auto *softwareTime = window.findChild<QLabel *>("runSoftwareTime");
     QVERIFY(deviceState && detectionTime && softwareTime);
-    QVERIFY(deviceState->text().contains("模拟演示 · 未就绪"));
-    QCOMPARE(deviceState->accessibleDescription(),
-        QString("当前为模拟演示，所有读数和谱图均非真实设备数据"));
+    QCOMPARE(deviceState->text(), QString("未就绪"));
+    QCOMPARE(deviceState->accessibleDescription(), QString("仪器连接与运行状态"));
     QCOMPARE(detectionTime->text(), QString("检测待命"));
     QCOMPARE(deviceState->height(), detectionTime->height());
     QCOMPARE(deviceState->geometry().center().y(), detectionTime->geometry().center().y());
@@ -1636,7 +1635,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QVERIFY(!controller.liveSpectrum().isEmpty());
     QVERIFY(!controller.result().processedSpectrum.points.isEmpty());
     auto *sourceNotice = window.findChild<QLabel *>("resultDataSource");
-    QVERIFY(sourceNotice && sourceNotice->text().contains("本机检测数据"));
+    QVERIFY(sourceNotice && sourceNotice->text().contains("来源：预览"));
     auto *screeningResults = window.findChild<QTableWidget *>("reportScreeningResults");
     QVERIFY(screeningResults && screeningResults->rowCount() > 0);
     QCOMPARE(screeningResults->item(0, 3)->text(), QString("可疑"));

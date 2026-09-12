@@ -25,7 +25,7 @@ QString phaseFallback(const QString &phaseLabel) {
 
 QString dataScopeText(const QString &scope) {
     if (scope == "PUBLIC_EXAMPLE") return "OpenMS BSA 公开示例，不是客户检测结果，不用于浓度验证";
-    if (scope == "DEMO_SIMULATION") return "本机检测数据";
+    if (scope == "DEMO_SIMULATION") return "预览数据";
     if (scope == "FORMAL_ACQUISITION") return "正式采集数据";
     return scope.trimmed().isEmpty() ? "未标注" : scope.trimmed();
 }

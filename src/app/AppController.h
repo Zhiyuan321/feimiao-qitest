@@ -19,6 +19,8 @@ namespace qitest {
 
 class LocalAiBridge;
 class ArchiveImportWorker;
+class Rs485Instrument;
+class NetworkInstrument;
 
 struct StartupCheck {
     QString name;
@@ -46,6 +48,7 @@ public:
     InstrumentTelemetry telemetry() const;
     InstrumentDescriptor instrumentDescriptor() const;
     bool instrumentReadOnly() const { return instrument_->readOnly(); }
+    bool realConnectionPending() const;
     QString instrumentConnectionSummary() const { return instrument_->connectionSummary(); }
     QVariantMap rs485Status() const;
     QStringList rs485Ports() const;
@@ -154,12 +157,19 @@ signals:
 private:
     void bindInstrumentSignals();
     void refreshInstrumentReadback();
+    void watchPendingRealInstrument(IInstrumentAdapter *adapter);
+    void promotePendingRealInstrument();
+    Rs485Instrument *rs485Endpoint() const;
+    NetworkInstrument *networkEndpoint() const;
     void setPhase(Phase phase, const QString &label);
     void finishAcquisition();
     AiContextSnapshot buildAiContext() const;
     QString currentAiEvidence() const;
 
     std::unique_ptr<IInstrumentAdapter> instrument_;
+    std::unique_ptr<Rs485Instrument> pendingRs485_;
+    std::unique_ptr<NetworkInstrument> pendingNetwork_;
+    bool pendingPromotionScheduled_ = false;
     AnalysisEngine engine_;
     QTimer acquisitionTimer_;
     QElapsedTimer softwareClock_, detectionClock_;

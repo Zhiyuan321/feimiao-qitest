@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
     qRegisterMetaType<qitest::RunSummary>();
 
     // 厂家联调入口：环境变量可指定插件或预设485串口。
-    // 未指定时进入明确标识的模拟演示，保证离线展示与交互可用。
+    // 未指定时保留轻量预览，保证离线展示与交互可用。
     // 已指定的驱动加载失败必须报错退出，不能悄悄切换设备来源。
     // driverLoader 的生命周期覆盖 controller，避免适配器使用期间插件被卸载。
     std::unique_ptr<qitest::IInstrumentAdapter> instrument;
@@ -50,13 +50,7 @@ int main(int argc, char *argv[]) {
         return 2;
     }
     if (!serialPort.isEmpty()) {
-        auto serial = std::make_unique<qitest::Rs485Instrument>();
-        if (serial->openPort(serialPort)) instrument = std::move(serial);
-        else {
-            QMessageBox::warning(nullptr, "485连接失败",
-                serial->connectionSummary() + "\n已进入模拟演示；所有显示数据均非真实设备回读。");
-            instrument = std::make_unique<qitest::SimulatedInstrument>();
-        }
+        instrument = std::make_unique<qitest::SimulatedInstrument>();
     } else if (pluginPath.isEmpty()) instrument = std::make_unique<qitest::SimulatedInstrument>();
     else {
         driverLoader.setFileName(pluginPath);
@@ -69,6 +63,9 @@ int main(int argc, char *argv[]) {
         }
     }
     qitest::AppController controller(std::move(instrument));
+    if (!serialPort.isEmpty()) QTimer::singleShot(0, &controller, [&controller, serialPort] {
+        controller.connectRs485(serialPort);
+    });
     qitest::MainWindow window(&controller);
     // 登录/进入工作站后异步导入；每个进程仅一次，已存在的谱图按内容哈希跳过。
     bool customerSamplesRequested = false;

@@ -45,7 +45,7 @@ void AiEvidenceTests::evidenceIsBoundedAndExplicit() {
 
     const QString evidence = AiEvidenceBuilder::buildEvidence(snapshot);
     QVERIFY(evidence.contains("运行方式：本地离线智能台"));
-    QVERIFY(evidence.contains("数据范围：本机检测数据"));
+    QVERIFY(evidence.contains("数据范围：预览数据"));
     QVERIFY(evidence.contains("候选 1：演示候选"));
     QVERIFY(evidence.contains("【边界】"));
     QVERIFY(!evidence.contains("phase_label"));

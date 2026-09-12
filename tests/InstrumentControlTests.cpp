@@ -3,7 +3,9 @@
 #include "device/SimulatedInstrument.h"
 #include "device/Rs485Instrument.h"
 #include "Rs485TestDevice.h"
+#include "NetworkTestFrames.h"
 #include <QTcpServer>
+#include <QTcpSocket>
 #include <cmath>
 #include <limits>
 #include <QTemporaryDir>
@@ -48,7 +50,14 @@ private slots:
         next.insert("source",6.0);
         QVERIFY(controller.createMethodDraft("现场方法",next));
         QVERIFY(controller.startNetworkListening("127.0.0.1",0));
-        QVERIFY(!controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.realConnectionPending());
+        QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost, controller.networkStatus().value("port").toUInt());
+        QTRY_VERIFY(controller.networkStatus().value("tcpConnected").toBool());
+        client.write(test::networkStatusWire());
+        QTRY_VERIFY(!controller.instrumentDescriptor().simulation);
+        QVERIFY(!controller.realConnectionPending());
         QVERIFY(controller.fullMethodAccess());
         next.insert("source",7.0);
         QVERIFY(controller.createMethodDraft("联网方法",next));
@@ -113,7 +122,10 @@ private slots:
         QVERIFY(controller.telemetry().multiplierVoltageV > 0.0);
         QVERIFY(controller.instrumentSettings().value("powerOn").toBool());
         QVERIFY(controller.startNetworkListening("127.0.0.1", 0));
-        controller.stopNetworkListening(); QVERIFY(!controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.realConnectionPending());
+        controller.stopNetworkListening(); QVERIFY(controller.instrumentDescriptor().simulation);
+        QVERIFY(!controller.realConnectionPending());
         QVERIFY(controller.useSimulatedInstrument());
         QVERIFY(controller.instrumentDescriptor().simulation);
         QVERIFY(controller.health().ready);

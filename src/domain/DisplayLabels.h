@@ -18,7 +18,7 @@ inline QString measurementText(double value, char format = 'f', int precision = 
 // Presentation only: persisted identifiers and audit values stay unchanged.
 inline QString dataScopeLabel(const QString &scope) {
     if (scope == "PUBLIC_EXAMPLE") return "公开示例 · 非检测结果";
-    if (scope == "DEMO_SIMULATION") return "检测数据";
+    if (scope == "DEMO_SIMULATION") return "预览数据";
     if (scope == "IMPORTED_UNVALIDATED") return "导入数据 · 待验证";
     return "其他数据来源";
 }

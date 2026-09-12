@@ -17,7 +17,7 @@ QString AiSafetyGuard::enforce(const QString &modelText, const QString &determin
         {"peak_count", "谱峰数量"},
         {"candidate_count", "候选数量"},
         {"data_scope", "数据范围"},
-        {"DEMO_SIMULATION", "本机检测数据"},
+        {"DEMO_SIMULATION", "预览数据"},
         {"instrument_ready", "仪器就绪"},
         {"instrument_connected", "仪器已连接"}
     };

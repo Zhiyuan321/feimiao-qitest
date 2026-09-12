@@ -805,13 +805,11 @@ QWidget *MainWindow::createHomePage() {
     const auto refreshRunStatus = [this, deviceState, detectionTime, softwareTime] {
         const auto health = controller_->health();
         const auto phase = controller_->phase();
-        const bool simulation = controller_->instrumentDescriptor().simulation;
         const QString state = !health.connected ? "未连接" : !health.ready ? "未就绪"
             : phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中" : "就绪";
-        deviceState->setText(simulation ? QString("模拟演示 · ") + state : QString("仪器") + state);
-        deviceState->setAccessibleDescription(simulation
-            ? "当前为模拟演示，所有读数和谱图均非真实设备数据" : "当前真实设备连接与运行状态");
+        deviceState->setText(state);
+        deviceState->setAccessibleDescription("仪器连接与运行状态");
         const qint64 elapsed = controller_->detectionElapsedMs();
         detectionTime->setText(elapsed < 0 ? QString("检测待命")
             : QString("检测 %1 s").arg(elapsed / 1000.0, 0, 'f', 1));
@@ -3263,9 +3261,7 @@ void MainWindow::showResult(const AnalysisResult &result) {
     }
     const bool simulated = controller_->currentRun().dataScope == "DEMO_SIMULATION"
         || std::any_of(result.candidates.begin(), result.candidates.end(), [](const MatchCandidate &candidate) { return candidate.demo; });
-    if (resultSource_) resultSource_->setText(simulated
-        ? "数据来源：本机检测数据"
-        : "数据来源：导入数据");
+    if (resultSource_) resultSource_->setText(simulated ? "来源：预览" : "来源：导入");
     refreshAiContext();
 }
 

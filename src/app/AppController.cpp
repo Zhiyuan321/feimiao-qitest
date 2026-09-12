@@ -353,10 +353,53 @@ void AppController::refreshInstrumentReadback() {
     emit instrumentSettingsChanged(instrumentSettings_);
 }
 
+bool AppController::realConnectionPending() const {
+    return pendingRs485_ || pendingNetwork_;
+}
+
+Rs485Instrument *AppController::rs485Endpoint() const {
+    if (auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get())) return adapter;
+    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) return network->serial();
+    if (pendingNetwork_) return pendingNetwork_->serial();
+    return pendingRs485_.get();
+}
+
+NetworkInstrument *AppController::networkEndpoint() const {
+    if (auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get())) return adapter;
+    return pendingNetwork_.get();
+}
+
+void AppController::watchPendingRealInstrument(IInstrumentAdapter *adapter) {
+    connect(adapter, &IInstrumentAdapter::stateChanged, this, [this, adapter] {
+        const bool current = adapter == pendingRs485_.get() || adapter == pendingNetwork_.get();
+        if (!current) return;
+        emit instrumentSettingsChanged(instrumentSettings_);
+        if (!adapter->health().connected || pendingPromotionScheduled_) return;
+        pendingPromotionScheduled_ = true;
+        QTimer::singleShot(0, this, &AppController::promotePendingRealInstrument);
+    });
+}
+
+void AppController::promotePendingRealInstrument() {
+    pendingPromotionScheduled_ = false;
+    std::unique_ptr<IInstrumentAdapter> verified;
+    if (pendingNetwork_ && pendingNetwork_->health().connected)
+        verified = std::move(pendingNetwork_);
+    else if (pendingRs485_ && pendingRs485_->health().connected)
+        verified = std::move(pendingRs485_);
+    if (!verified) return;
+    QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
+    instrument_ = std::move(verified);
+    bindInstrumentSignals();
+    refreshInstrumentReadback();
+    if (workspace_) workspace_->appendAudit(sessionOperator_, "REAL_DEVICE_CONNECTED",
+        instrument_->descriptor().model, instrument_->connectionSummary().left(300));
+    emit notice("设备已连接");
+}
+
 QStringList AppController::rs485Ports() const { return Rs485Instrument::availablePorts(); }
 QVariantMap AppController::rs485Status() const {
-    const auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get());
-    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) adapter = network->serial();
+    const auto *adapter = rs485Endpoint();
     return adapter ? adapter->statusDetails() : QVariantMap{};
 }
 
@@ -365,28 +408,23 @@ bool AppController::connectRs485(const QString &portName, bool includePump) {
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing || !pendingSettingId_.isEmpty()) {
         emit notice("请先结束采集或待确认操作，再更换设备连接"); return false;
     }
-    auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get());
-    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) adapter = network->serial();
+    auto *adapter = rs485Endpoint();
     if (!adapter) {
         // Never replace a loaded vendor plugin through the serial settings UI.
         if (!instrument_->descriptor().simulation) {
             emit notice("当前使用厂家插件，请通过插件配置设备连接"); return false;
         }
-        auto serial = std::make_unique<Rs485Instrument>();
-        adapter = serial.get();
-        // Keep the simulator alive when the selected real port cannot open.
-        // A failed connection attempt must not blank the offline workspace.
+        pendingRs485_ = std::make_unique<Rs485Instrument>();
+        adapter = pendingRs485_.get();
+        watchPendingRealInstrument(adapter);
         if (!adapter->openPort(portName, includePump)) {
             emit notice(adapter->connectionSummary());
+            pendingRs485_.reset();
             return false;
         }
-        QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
-        instrument_ = std::move(serial);
-        bindInstrumentSignals();
-        refreshInstrumentReadback();
         QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01")
             .setValue("rs485/port", portName.trimmed());
-        emit notice(adapter->connectionSummary());
+        emit notice("正在连接");
         return true;
     }
     const bool opened = adapter->openPort(portName, includePump);
@@ -398,18 +436,24 @@ bool AppController::connectRs485(const QString &portName, bool includePump) {
 }
 
 void AppController::disconnectRs485() {
-    if (auto *adapter = qobject_cast<Rs485Instrument *>(instrument_.get())) adapter->closePort();
-    if (auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) network->serial()->closePort();
+    if (auto *adapter = rs485Endpoint()) adapter->closePort();
+    if (pendingRs485_) pendingRs485_.reset();
+    if (pendingNetwork_ && !pendingNetwork_->statusDetails().value("listening").toBool())
+        pendingNetwork_.reset();
 }
 
 bool AppController::useSimulatedInstrument() {
     if (instrument_->descriptor().simulation) {
-        emit notice("当前已是模拟演示模式");
+        if (pendingNetwork_) { pendingNetwork_->stopListening(); pendingNetwork_.reset(); }
+        pendingRs485_.reset();
+        pendingPromotionScheduled_ = false;
+        emit instrumentSettingsChanged(instrumentSettings_);
+        emit notice("已取消连接");
         return true;
     }
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing
         || !pendingSettingId_.isEmpty() || !pendingMethodRequestId_.isEmpty()) {
-        emit notice("请先结束采集或待确认操作，再切换到模拟演示");
+        emit notice("请先结束当前操作");
         return false;
     }
     QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
@@ -418,16 +462,16 @@ bool AppController::useSimulatedInstrument() {
     refreshInstrumentReadback();
     if (workspace_) workspace_->appendAudit(sessionOperator_, "DEVICE_MODE_CHANGED",
         "simulation", "operator selected explicit offline simulation");
-    emit notice("已切换到模拟演示；所有读数和谱图均为模拟数据");
+    emit notice("已切换到预览");
     return true;
 }
 
 QVariantMap AppController::networkStatus() const {
-    auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get());
+    auto *adapter = networkEndpoint();
     return adapter ? adapter->statusDetails() : QVariantMap{};
 }
 QVector<double> AppController::pressureVolts() const {
-    const auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
+    const auto *network=networkEndpoint();
     return network ? network->pressureVolts() : QVector<double>{};
 }
 bool AppController::requestRfTuning(bool enabled, bool confirmed) {
@@ -436,7 +480,7 @@ bool AppController::requestRfTuning(bool enabled, bool confirmed) {
     if(phase_==Phase::Acquiring || phase_==Phase::Analyzing || !pendingSettingId_.isEmpty()) {
         emit notice("请先结束当前采集或待确认操作");return false;
     }
-    auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
+    auto *network=networkEndpoint();
     if(!network) {emit notice("请先连接网口仪器");return false;}
     if(!workspace_ || !workspace_->appendAudit(sessionOperator_,"TUNING_REQUESTED", "rf", enabled?"start":"stop")) {
         emit notice("操作记录保存失败，调谐指令未发送");return false;
@@ -448,27 +492,26 @@ bool AppController::startNetworkListening(const QString &address, quint16 port, 
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing || !pendingSettingId_.isEmpty()) {
         emit notice("请先结束采集或待确认操作，再更换设备连接"); return false;
     }
-    auto *network = qobject_cast<NetworkInstrument *>(instrument_.get());
+    auto *network = networkEndpoint();
     if (!network) {
-        auto *serial = qobject_cast<Rs485Instrument *>(instrument_.get());
+        auto *serial = rs485Endpoint();
         if (!serial && !instrument_->descriptor().simulation) {
             emit notice("当前使用厂家插件，请通过插件配置设备连接"); return false;
         }
         if (instrument_->descriptor().simulation) {
-            auto candidate = std::make_unique<NetworkInstrument>();
-            if (!candidate->startListening(address, port, staleMs)) {
-                emit notice(candidate->connectionSummary());
+            pendingNetwork_ = std::make_unique<NetworkInstrument>(std::move(pendingRs485_));
+            network = pendingNetwork_.get();
+            watchPendingRealInstrument(network);
+            if (!network->startListening(address, port, staleMs)) {
+                emit notice(network->connectionSummary());
+                if (!network->serial()->portOpen()) pendingNetwork_.reset();
                 return false;
             }
-            network = candidate.get();
-            QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
-            instrument_ = std::move(candidate);
-            bindInstrumentSignals(); refreshInstrumentReadback();
             QSettings preferences(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
             preferences.setValue("network/address", address.trimmed());
             if (port) preferences.setValue("network/port", port);
             preferences.setValue("network/staleMs", staleMs);
-            emit notice(network->connectionSummary());
+            emit notice("等待设备连接");
             return true;
         }
         QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
@@ -488,10 +531,12 @@ bool AppController::startNetworkListening(const QString &address, quint16 port, 
     emit notice(network->connectionSummary()); return opened;
 }
 void AppController::stopNetworkListening() {
-    if (auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get())) adapter->stopListening();
+    if (auto *adapter = networkEndpoint()) adapter->stopListening();
+    if (pendingNetwork_ && !pendingNetwork_->serial()->portOpen()) pendingNetwork_.reset();
+    emit instrumentSettingsChanged(instrumentSettings_);
 }
 bool AppController::exportNetworkFrames(const QString &path) {
-    auto *adapter = qobject_cast<NetworkInstrument *>(instrument_.get());
+    auto *adapter = networkEndpoint();
     if (!adapter || path.isEmpty()) return false;
     QString error;
     const bool saved = adapter->exportFrames(path, &error);
@@ -500,13 +545,11 @@ bool AppController::exportNetworkFrames(const QString &path) {
 }
 
 QVariantMap AppController::pumpStatus() const {
-    const auto *serial = qobject_cast<Rs485Instrument *>(instrument_.get());
-    if (const auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) serial = network->serial();
+    const auto *serial = rs485Endpoint();
     return serial ? serial->pumpStatusDetails() : QVariantMap{};
 }
 bool AppController::exportPumpFrames(const QString &path) {
-    const auto *serial = qobject_cast<Rs485Instrument *>(instrument_.get());
-    if (const auto *network = qobject_cast<NetworkInstrument *>(instrument_.get())) serial = network->serial();
+    const auto *serial = rs485Endpoint();
     if (!serial || path.isEmpty()) return false;
     QString error;
     const bool saved = serial->exportFrames(path, &error);
@@ -627,7 +670,7 @@ QVector<StartupCheck> AppController::startupChecks() const {
     const auto instrumentHealth = instrument_->health();
     const bool simulation = instrument_->descriptor().simulation;
     const QString instrumentDetail = simulation
-        ? QString("模拟演示已启用（非真实设备）")
+        ? QString("预览就绪")
         : instrument_->readOnly() ? instrument_->connectionSummary()
         : instrumentHealth.connected ? QString("接口已就绪") : QString("仪器未连接");
     return {
@@ -873,7 +916,7 @@ bool AppController::createMethodDraft(const QString &name, const QJsonObject &pa
          {"method_parameters",parameters}},sessionOperator_,&error);
     if(method.id.isEmpty()){emit notice("保存失败："+error);return false;}
     emit methodsChanged();emit notice(simulation
-        ? "方法参数已保存；选择“设为当前方法”后应用"
+        ? "方法已保存"
         : "方法参数已保存，尚未映射或下发真实仪器");return true;
 }
 void AppController::activateMethod(const QString &methodId) {
