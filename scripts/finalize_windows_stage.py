@@ -11,6 +11,8 @@ root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("stage", type=Path)
 parser.add_argument("destination", type=Path)
+parser.add_argument("--build-dir", type=Path, default=root / "build-windows7-qt512",
+                    help="Windows build directory containing the release executable")
 parser.add_argument("--objdump", default=shutil.which("x86_64-w64-mingw32-objdump"))
 args = parser.parse_args()
 stage, destination = args.stage.resolve(), args.destination.resolve()
@@ -18,7 +20,10 @@ if not stage.parent.name.startswith(".qt512-stage.") or not stage.is_dir() or de
     raise RuntimeError("Expected a known staging folder and a new destination")
 if root.parent not in stage.parents or root.parent not in destination.parents:
     raise RuntimeError("Both paths must remain inside this project's development directory")
-shutil.copy2(root / "build-windows7-qt512/飞秒质谱工作站.exe", stage / "飞秒质谱工作站.exe")
+executable = args.build_dir.resolve() / "飞秒质谱工作站.exe"
+if not executable.is_file():
+    raise RuntimeError("Windows executable not found: " + str(executable))
+shutil.copy2(executable, stage / "飞秒质谱工作站.exe")
 shutil.copy2(root / "config/ai-model-manifest.json", stage / "resources/config/ai-model-manifest.json")
 shutil.copy2(root / "docs/WINDOWS7_PORTABLE_README.txt", stage / "使用说明.txt")
 objdump = args.objdump
