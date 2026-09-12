@@ -12,8 +12,11 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--wine", required=True)
 parser.add_argument("--prefix", required=True)
 parser.add_argument("--package", required=True, type=Path)
+parser.add_argument("--build-dir", type=Path, default=root / "build-windows7-qt512",
+                    help="Windows test build directory (default: build-windows7-qt512)")
 parser.add_argument("--test", action="append", help="Run a named subset without replacing the full-suite result")
 args = parser.parse_args()
+build_dir = args.build_dir.resolve()
 target = root / ".qa/qt512-tests"
 target.mkdir(parents=True, exist_ok=True)
 qt = root / ".tools/qt512-win/5.12.12/mingw73_64"
@@ -36,7 +39,7 @@ if args.test:
     names = tuple(args.test)
 results = []
 for name in names:
-    source = root / "build-windows7-qt512" / ("qitest_" + name + "_tests.exe")
+    source = build_dir / ("qitest_" + name + "_tests.exe")
     exe = target / source.name
     shutil.copy2(source, exe)
     log = target / (name + ".txt")

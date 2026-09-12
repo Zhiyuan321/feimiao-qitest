@@ -49,7 +49,9 @@ $env:QITEST_INSTRUMENT_PLUGIN = "C:\Dev\driver\QITestVendorAdapter.dll"
 & "C:\Dev\app\飞秒质谱工作站.exe"
 ```
 
-未指定插件或485串口时使用模拟器；指定插件加载失败会报错退出，不会偷偷退回模拟。
+未指定插件或485串口时使用明确标识的模拟演示；指定插件加载失败会报错退出，不会偷偷退回模拟。
+从模拟演示尝试连接485或网口时，只有真实端点成功打开后才切换；失败仍保留模拟展示。
+运行状态页可手动返回“模拟演示”，真实设备连接会随适配器切换而关闭。
 详细契约见 ../../docs/integration/VENDOR_INSTRUMENT_INTEGRATION.md。
 对应 tests/InstrumentControlTests.cpp；这组测试通过不代表实机通过。
 

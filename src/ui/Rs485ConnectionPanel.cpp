@@ -29,6 +29,10 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     ports->setMinimumHeight(36);
     ports->setMinimumWidth(154);
     ports->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto *simulationButton = new QPushButton("模拟演示");
+    simulationButton->setObjectName("instrumentUseSimulation");
+    simulationButton->setFixedHeight(36);
+    simulationButton->setToolTip("切换到离线模拟数据；真实设备连接将关闭");
     auto *refresh = new QPushButton("刷新");
     refresh->setObjectName("rs485Refresh");
     auto *connectButton = new QPushButton("连接");
@@ -43,6 +47,7 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     save->setFixedHeight(36);
     save->setToolTip("收到有效485或分子泵报文后可导出");
     endpointRow->addWidget(ports, 1);
+    endpointRow->addWidget(simulationButton);
     layout->addLayout(endpointRow);
     auto *actionRow = new QHBoxLayout;
     actionRow->setSpacing(6);
@@ -99,6 +104,7 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         controller->connectRs485(ports->currentText(), true);
     });
     connect(disconnectButton, &QPushButton::clicked, controller, &AppController::disconnectRs485);
+    connect(simulationButton, &QPushButton::clicked, controller, &AppController::useSimulatedInstrument);
     connect(save, &QPushButton::clicked, this, [=] {
         const auto path = QFileDialog::getSaveFileName(this, "导出主控板与分子泵收发报文", "485报文.json", "JSON (*.json)");
         if (!path.isEmpty()) controller->exportPumpFrames(path);
@@ -108,6 +114,7 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         const bool active = !data.isEmpty(), connected = data.value("connected").toBool();
         const bool busy = controller->phase() == AppController::Phase::Acquiring
             || controller->phase() == AppController::Phase::Analyzing;
+        const bool simulation = controller->instrumentDescriptor().simulation;
         const bool open = data.value("open").toBool();
         if (open) {
             const QString activePort = data.value("port").toString();
@@ -126,6 +133,8 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         save->setToolTip(save->isEnabled() ? "导出已接收的485报文" : "收到有效485报文后可导出");
         pumpStatus->setText(pump.value("message", "勾选后，连接一次即可依次读取主控板和分子泵。").toString());
         disconnectButton->setEnabled(open);
+        simulationButton->setEnabled(!simulation && !busy);
+        simulationButton->setText(simulation ? "模拟演示中" : "模拟演示");
         status->setText(active ? data.value("message").toString()
             + (connected ? " · 更新于" + data.value("lastReadback").toString() : QString())
             : "选择连接仪器的串口。仅查询状态，不发送加热、电源或泵控制命令。");

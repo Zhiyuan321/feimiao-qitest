@@ -81,6 +81,7 @@ public:
 public slots:
     bool connectRs485(const QString &portName, bool includePump = false);
     void disconnectRs485();
+    bool useSimulatedInstrument();
     bool startNetworkListening(const QString &address, quint16 port = 11000, int staleMs = 5000);
     void stopNetworkListening();
     bool exportNetworkFrames(const QString &path);

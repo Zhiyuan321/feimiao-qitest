@@ -380,8 +380,11 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     auto *panel = window.findChild<QWidget *>("rs485ConnectionPanel");
     auto *table = window.findChild<QTableWidget *>("rs485Readings");
     auto *connectButton = window.findChild<QPushButton *>("rs485Connect");
-    QVERIFY(panel && table && connectButton);
+    auto *simulationButton = window.findChild<QPushButton *>("instrumentUseSimulation");
+    QVERIFY(panel && table && connectButton && simulationButton);
     QVERIFY(panel->isVisibleTo(&window));
+    QVERIFY(simulationButton->isEnabled());
+    QVERIFY(window.rect().contains(QRect(simulationButton->mapTo(&window, QPoint()), simulationButton->size())));
     QCOMPARE(table->item(0, 1)->text(), QString("—"));
     auto ionPayload = test::statusPayload(); ionPayload[7] = 0; ionPayload[8] = 49;
     port.reply = test::frame(ionPayload);
@@ -423,6 +426,10 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QCOMPARE(table->item(0, 1)->text(), QString("—"));
     QCOMPARE(table->item(9, 1)->text(), QString("—"));
     QCOMPARE(ionReading->text(), QString("—"));
+    simulationButton->click();
+    QTRY_VERIFY(controller.instrumentDescriptor().simulation);
+    QCOMPARE(simulationButton->text(), QString("模拟演示中"));
+    QVERIFY(!simulationButton->isEnabled());
     qunsetenv("QITEST_WORKSPACE_DB");
 }
 
@@ -764,7 +771,9 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     auto *detectionTime = window.findChild<QLabel *>("runDetectionTime");
     auto *softwareTime = window.findChild<QLabel *>("runSoftwareTime");
     QVERIFY(deviceState && detectionTime && softwareTime);
-    QVERIFY(deviceState->text().contains("系统未就绪"));
+    QVERIFY(deviceState->text().contains("模拟演示 · 未就绪"));
+    QCOMPARE(deviceState->accessibleDescription(),
+        QString("当前为模拟演示，所有读数和谱图均非真实设备数据"));
     QCOMPARE(detectionTime->text(), QString("检测待命"));
     QCOMPARE(deviceState->height(), detectionTime->height());
     QCOMPARE(deviceState->geometry().center().y(), detectionTime->geometry().center().y());

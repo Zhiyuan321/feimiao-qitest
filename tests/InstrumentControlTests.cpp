@@ -98,18 +98,25 @@ private slots:
         QVERIFY(!controller.instrumentSettings().value("observationLightOn").isValid());
         qunsetenv("QITEST_WORKSPACE_DB");
     }
-    void networkFailureLeavesRealUnknownAndCannotReplacePlugin() {
+    void failedConnectionsPreserveSimulationAndCannotReplacePlugin() {
         QTemporaryDir dir;
         qputenv("QITEST_WORKSPACE_DB", dir.filePath("network-controller.sqlite").toUtf8());
         AppController controller(std::make_unique<SimulatedInstrument>());
+        QVERIFY(!controller.connectRs485("QITEST_PORT_THAT_DOES_NOT_EXIST"));
+        QVERIFY(controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.health().ready);
         QTcpServer occupied; QVERIFY(occupied.listen(QHostAddress::LocalHost));
         QVERIFY(!controller.startNetworkListening("127.0.0.1", occupied.serverPort()));
-        QVERIFY(!controller.instrumentDescriptor().simulation);
-        QVERIFY(controller.instrumentReadOnly()); QVERIFY(!controller.health().connected);
-        QVERIFY(std::isnan(controller.telemetry().multiplierVoltageV));
-        QVERIFY(!controller.instrumentSettings().value("powerOn").isValid());
+        // A failed real connection attempt preserves the usable offline demo.
+        QVERIFY(controller.instrumentDescriptor().simulation);
+        QVERIFY(!controller.instrumentReadOnly()); QVERIFY(controller.health().connected);
+        QVERIFY(controller.telemetry().multiplierVoltageV > 0.0);
+        QVERIFY(controller.instrumentSettings().value("powerOn").toBool());
         QVERIFY(controller.startNetworkListening("127.0.0.1", 0));
         controller.stopNetworkListening(); QVERIFY(!controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.useSimulatedInstrument());
+        QVERIFY(controller.instrumentDescriptor().simulation);
+        QVERIFY(controller.health().ready);
         auto plugin = std::make_unique<TestInstrument>();
         AppController vendor(std::move(plugin));
         QVERIFY(!vendor.startNetworkListening("127.0.0.1", 0));
