@@ -162,6 +162,7 @@ private slots:
     void instrumentPowerButtonsReflectPartialState();
     void bundledExampleLoadsThreePlotsWithoutAi();
     void navigationAndAcquisitionRemainStable();
+    void reportSelectionSurvivesPageRoundTrips();
     void conversationIsBoundedAndSelectable();
     void traceAnalysisUsesImportedScans();
     void calibrationPageLoadsSavesAndCalculatesWithoutExtraNavigation();
@@ -1061,6 +1062,47 @@ void UiSmokeTests::calibrationPageLoadsSavesAndCalculatesWithoutExtraNavigation(
     const QString capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     QVERIFY(page.grab().toImage().pixelColor(2,2).lightness() > 160);
     if(!capture.isEmpty()) { QCoreApplication::processEvents(); QVERIFY(page.grab().save(capture+"/calibration.png")); }
+}
+
+void UiSmokeTests::reportSelectionSurvivesPageRoundTrips() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir dir;
+    qputenv("QITEST_WORKSPACE_DB", dir.filePath("round-trips.sqlite").toUtf8());
+    AppController controller(std::make_unique<SimulatedInstrument>());
+    MainWindow window(&controller);
+    window.resize(1024, 768);
+    window.show();
+    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
+    QVERIFY(enter); enter->click();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window), 5000);
+    controller.startDetection();
+    for (const auto &name : {"OpenMethod", "OpenReport", "OpenHome"})
+        window.findChild<QAction *>(name)->trigger();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 7000);
+    window.findChild<QAction *>("OpenReport")->trigger();
+    auto *table = window.findChild<QTableWidget *>("reportScreeningResults");
+    auto *search = window.findChild<QLineEdit *>("reportCandidateSearch");
+    QVERIFY(table && search); QVERIFY(table->rowCount() > 0);
+    const QString name = table->item(0, 0)->text();
+    search->setText(name); table->selectRow(0);
+    for (int round = 0; round < 20; ++round) {
+        for (const auto &page : {"OpenMethod", "OpenHome", "OpenReport"})
+            window.findChild<QAction *>(page)->trigger();
+        QCoreApplication::processEvents();
+        QCOMPARE(search->text(), name);
+        QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(table->selectionModel()->selectedRows().first().row(), 0);
+        QVERIFY(table->isVisible());
+        QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
+    }
+    search->setText("不存在的候选");
+    controller.startDetection();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 7000);
+    window.findChild<QAction *>("OpenReport")->trigger();
+    QVERIFY(search->text().isEmpty());
+    QVERIFY(table->selectionModel()->selectedRows().isEmpty());
+    QVERIFY(!table->isRowHidden(0));
+    qunsetenv("QITEST_WORKSPACE_DB");
 }
 
 void UiSmokeTests::navigationAndAcquisitionRemainStable() {

@@ -565,6 +565,7 @@ QWidget *MainWindow::createWorkspacePage() {
     batteryStatus->setAccessibleName("仪器电池电量未知");
     batteryStatus->setFixedSize(54, 48);
     commandLayout->addWidget(batteryStatus);
+    batteryStatus->hide(); // No battery field exists in the instrument protocol.
     layout->addWidget(commands);
 
     workspaceStack_ = new CurrentPageStack;
@@ -945,7 +946,7 @@ QWidget *MainWindow::createHomePage() {
         statusBar()->showMessage(spectrumPlot_->toolTip(), 5000);
     };
     connect(ticPlot_, &SpectrumPlot::pointActivated, this, selectScan);
-    plotsLayout->addWidget(spectrumContainer_, 1);
+    plotsLayout->addWidget(spectrumContainer_, 2);
     eicPlot_ = new SpectrumPlot(SpectrumPlot::Mode::Line);
     eicPlot_->setObjectName("runEicPlot");
     eicPlot_->setMinimumHeight(100);
@@ -1806,12 +1807,15 @@ QWidget *MainWindow::createReportPage() {
     reportReviewViewButton_->setToolTip("查看可疑结果并进行人工复核");
     reportPreviewViewButton_->setToolTip("查看报告内容预览");
     header->addWidget(openSavedData);
-    header->addWidget(reportReviewViewButton_);
-    header->addWidget(screeningDetails);
     header->addWidget(reportReviewButton_);
-    header->addWidget(reportPreviewViewButton_);
     header->addWidget(reportExportButton_);
     layout->addLayout(header);
+    auto *viewTools = new QHBoxLayout;
+    viewTools->addWidget(reportReviewViewButton_);
+    viewTools->addWidget(reportPreviewViewButton_);
+    viewTools->addStretch();
+    viewTools->addWidget(screeningDetails);
+    layout->addLayout(viewTools);
 
     auto *summaryStrip = new QFrame;
     summaryStrip->setObjectName("reportSummaryStrip");
@@ -2286,6 +2290,7 @@ QWidget *MainWindow::createMethodPage() {
     methodTable_->setObjectName("methodTable");
     polishDataTable(methodTable_);
     methodTable_->setHorizontalHeaderLabels({"状态", "名称", "版本", "校验值", "创建人", "创建时间"});
+    methodTable_->setColumnHidden(3, true);
     methodTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
     methodTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     methodTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
@@ -2756,6 +2761,14 @@ bool MainWindow::executeAssistantCommand(AssistantCommand command, const QString
 
 void MainWindow::refreshReport(const RunSummary &run) {
     if (!reportRunId_ || !reportStatus_ || !reportCandidateTable_) return;
+    const bool sameRun = !run.id.isEmpty()
+        && reportCandidateTable_->property("displayedRunId").toString() == run.id;
+    QList<int> selectedRows;
+    if (sameRun)
+        for (const auto &index : reportCandidateTable_->selectionModel()->selectedRows())
+            selectedRows.append(index.row());
+    else if (reportCandidateSearch_) reportCandidateSearch_->clear();
+    reportCandidateTable_->setProperty("displayedRunId", run.id);
     if (run.id.isEmpty()) {
         reportRunId_->setText("等待检测");
         reportMeta_->clear();
@@ -2829,6 +2842,10 @@ void MainWindow::refreshReport(const RunSummary &run) {
     reportExportButton_->setEnabled(reviewed);
     reportReviewButton_->setEnabled(!reviewed);
     reportSelectionHint_->setText("未选择时将导出全部候选结果。");
+    for (int row : selectedRows)
+        if (row < reportCandidateTable_->rowCount() && !reportCandidateTable_->isRowHidden(row))
+            reportCandidateTable_->selectionModel()->select(reportCandidateTable_->model()->index(row, 0),
+                QItemSelectionModel::Select | QItemSelectionModel::Rows);
 }
 
 void MainWindow::performLibrarySearch() {
@@ -2872,6 +2889,7 @@ void MainWindow::refreshMethods() {
         if (method.id == selectedId || (rowToSelect < 0 && selectedId.isEmpty() && method.active)) rowToSelect = row;
         for (int column = 0; column < values.size(); ++column)
             if (auto *item = methodTable_->item(row, column)) item->setToolTip(values[column]);
+        methodTable_->item(row, 1)->setToolTip(displayName + "\n校验值：" + method.checksum);
     }
     if (rowToSelect < 0 && !methods.isEmpty()) rowToSelect = 0;
     if (rowToSelect >= 0) {

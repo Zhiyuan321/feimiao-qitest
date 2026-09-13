@@ -38,6 +38,43 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
+    void analysisStorageWaitKeepsGuiResponsive() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("responsive-save.sqlite");
+        qputenv("QITEST_WORKSPACE_DB", path.toUtf8());
+        {
+            AppController controller(std::make_unique<SimulatedInstrument>());
+            auto db = QSqlDatabase::addDatabase("QSQLITE", "slow-storage-fixture");
+            db.setDatabaseName(path);
+            QVERIFY(db.open());
+            bool released = false;
+            int heartbeats = 0;
+            QTimer heartbeat;
+            heartbeat.setInterval(10);
+            connect(&heartbeat, &QTimer::timeout, &controller, [&] { ++heartbeats; });
+            connect(&controller, &AppController::phaseChanged, &controller,
+                [&](AppController::Phase phase) {
+                    if (phase != AppController::Phase::Analyzing) return;
+                    QSqlQuery lock(db);
+                    QVERIFY(lock.exec("BEGIN IMMEDIATE"));
+                    heartbeat.start();
+                    QTimer::singleShot(250, &controller, [&] {
+                        QSqlQuery unlock(db);
+                        QVERIFY(unlock.exec("ROLLBACK"));
+                        released = true;
+                    });
+                });
+            controller.startDetection();
+            QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 7000);
+            QVERIFY(released);
+            QVERIFY(heartbeats >= 3);
+            QVERIFY(!controller.currentRun().id.isEmpty());
+            QCOMPARE(controller.recentRuns().size(), 1);
+            db.close();
+        }
+        QSqlDatabase::removeDatabase("slow-storage-fixture");
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void failedPersistenceDoesNotPublishSuccess() {
         QTemporaryDir dir;
         const QString path = dir.filePath("failed-save.sqlite");

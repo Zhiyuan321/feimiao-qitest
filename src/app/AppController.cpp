@@ -6,6 +6,7 @@
 #include "core/MethodDraft.h"
 #include "core/PlatformPaths.h"
 #include "storage/ArchiveImportWorker.h"
+#include "storage/AnalysisWorker.h"
 #include "ai/AiEvidenceBuilder.h"
 #include "ai/LocalAiBridge.h"
 #include "library/SpectralLibraryRepository.h"
@@ -1015,6 +1016,12 @@ void AppController::loadPublicExample() {
 }
 
 AppController::~AppController() {
+    if (analysisWorker_) {
+        analysisWorker_->wait(); // never destroy a running writer
+        if (workspace_ && !activeAcquisitionSessionId_.isEmpty())
+            workspace_->finishAcquisitionSession(activeAcquisitionSessionId_,
+                analysisWorker_->stored ? "COMPLETED" : "FAILED", "analysis finished during shutdown");
+    }
     if (importWorker_) {
         importWorker_->requestInterruption();
         importWorker_->wait(); // finish/rollback the current transaction before closing main DB
@@ -1240,25 +1247,32 @@ void AppController::setPhase(Phase phase, const QString &label) {
 }
 
 void AppController::finishAcquisition() {
+    if (analysisWorker_) return;
     acquisitionTimer_.stop();
+    if (!workspace_) { setPhase(Phase::Failed, "数据目录不可用"); return; }
+    const auto method = activeMethod();
+    const QString methodLabel = method.id.isEmpty() ? "未绑定方法"
+        : QString("%1 v%2 [%3]").arg(method.name).arg(method.version).arg(method.checksum.left(8));
+    RunSummary summary{QUuid::createUuid().toString(QUuid::WithoutBraces).left(12),
+        QDateTime::currentDateTimeUtc(), sessionOperator_, methodLabel,
+        activeSampleInfo_.contains("reanalysis_source_run") ? "IMPORTED_UNVALIDATED" : "DEMO_SIMULATION",
+        {}, 0, 0, "PENDING_REVIEW", {}};
+    summary.sampleInfo = activeSampleInfo_;
+    auto *worker = new AnalysisWorker(engine_, pendingSpectrum_, scans_, instrument_->health(),
+        instrument_->telemetry(), summary, workspace_->databasePath(), this);
+    analysisWorker_ = worker;
     setPhase(Phase::Analyzing, "正在分析");
-    QTimer::singleShot(120, this, [this] {
-        try {
-            result_ = engine_.analyze(pendingSpectrum_, instrument_->health());
+    connect(worker, &QThread::finished, this, [this, worker] {
+            worker->wait();
+            const bool stored = worker->stored;
+            const QString storageError = worker->error;
+            result_ = std::move(worker->result);
+            currentRun_ = std::move(worker->summary);
+            analysisWorker_ = nullptr;
+            worker->deleteLater();
             liveSpectrum_ = result_.processedSpectrum.points;
-            const auto method = activeMethod();
-            const QString methodLabel = method.id.isEmpty() ? "未绑定方法"
-                : QString("%1 v%2 [%3]").arg(method.name).arg(method.version).arg(method.checksum.left(8));
-            currentRun_ = {QUuid::createUuid().toString(QUuid::WithoutBraces).left(12),
-                QDateTime::currentDateTimeUtc(), sessionOperator_, methodLabel,
-                activeSampleInfo_.contains("reanalysis_source_run") ? "IMPORTED_UNVALIDATED" : "DEMO_SIMULATION", qualityLevelName(result_.quality.level), result_.quality.score,
-                static_cast<int>(result_.candidates.size()), "PENDING_REVIEW", {}};
-            currentRun_.sampleInfo = activeSampleInfo_;
-            QString storageError;
-            const bool stored = workspace_ && workspace_->saveCompletedRun(
-                currentRun_, pendingSpectrum_, result_, instrument_->telemetry(), &storageError, scans_);
             if (!stored)
-                emit notice("检测完成，但记录保存失败：" + storageError);
+                emit notice("分析或保存失败：" + storageError);
             if (workspace_ && !activeAcquisitionSessionId_.isEmpty())
                 workspace_->finishAcquisitionSession(activeAcquisitionSessionId_,
                     stored ? "COMPLETED" : "FAILED",
@@ -1281,14 +1295,8 @@ void AppController::finishAcquisition() {
                 if (QFileInfo::exists(activeSamplePath_)) emit notice("自动保存未完成：目标文件已存在。检测数据已保留在本机，请另行导出。");
                 else exportRunArchive(currentRun_.id, activeSamplePath_);
             }
-        } catch (const std::exception &error) {
-            if (workspace_ && !activeAcquisitionSessionId_.isEmpty())
-                workspace_->finishAcquisitionSession(activeAcquisitionSessionId_, "FAILED",
-                    "analysis exception: " + QString::fromUtf8(error.what()));
-            activeAcquisitionSessionId_.clear();
-            setPhase(Phase::Failed, QString::fromUtf8(error.what()));
-        }
     });
+    worker->start();
 }
 
 void AppController::exportDiagnosticBundle() {

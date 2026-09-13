@@ -19,6 +19,7 @@ namespace qitest {
 
 class LocalAiBridge;
 class ArchiveImportWorker;
+class AnalysisWorker;
 class Rs485Instrument;
 class NetworkInstrument;
 
@@ -171,6 +172,7 @@ private:
     std::unique_ptr<NetworkInstrument> pendingNetwork_;
     bool pendingPromotionScheduled_ = false;
     AnalysisEngine engine_;
+    AnalysisWorker *analysisWorker_ = nullptr;
     QTimer acquisitionTimer_;
     QElapsedTimer softwareClock_, detectionClock_;
     qint64 detectionDurationMs_ = -1; // Unknown for imported/historical records.

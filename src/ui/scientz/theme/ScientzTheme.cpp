@@ -47,7 +47,7 @@ QString Theme::buildStyleSheet(Density density) {
         QLabel#assistantMessage { background: %4; color: %1; border-radius: 10px; padding: 10px 12px; }
         QWidget#brandHeader QWidget, QWidget#startupPage QWidget, QWidget#brandIdentity QWidget { background: transparent; }
         QWidget#brandHeader { background: %4; border-bottom: 1px solid %5; }
-        QWidget#startupPage { background: %3; }
+        QWidget#startupPage { background: %2; }
         QWidget#identityBar, QWidget#commandBar, QWidget#brandIdentity, QWidget#statusRail, QWidget#panelHeader { background: %4; }
         QWidget#commandBar, QWidget#contextHeader, QWidget#statusRail { border-bottom: 1px solid %5; }
         QWidget#contextHeader { background: %6; }
@@ -92,10 +92,11 @@ QString Theme::buildStyleSheet(Density density) {
         QFrame[sciRole="emptyState"] { background: %6; border: 0; border-radius: 12px; }
         QFrame[sciState="warning"] { background: %8; border: 0; border-radius: 10px; }
         QLabel#brandLogo { background: transparent; border: 0; }
-        QLabel[sciTone="onBrand"], QLabel[sciTone="startupDetail"], QLabel[sciTone="startupSteps"] { color: %4; }
+        QLabel[sciTone="onBrand"] { color: %4; }
+        QLabel[sciTone="startupDetail"], QLabel[sciTone="startupSteps"] { color: %10; }
         QLabel[sciTone="brandTitle"] { color: %4; font-size: 15px; font-weight: 600; }
         QLabel[sciTone="startupBrand"] { color: %4; font-size: 18px; font-weight: 600; letter-spacing: 2px; }
-        QLabel[sciTone="startupTitle"] { color: %4; font-size: 30px; font-weight: 600; }
+        QLabel[sciTone="startupTitle"] { color: %1; font-size: 30px; font-weight: 600; }
         QLabel[sciTone="loginTitle"] { font-size: 28px; font-weight: 600; }
         QLabel[sciTone="pageTitle"] { font-size: 20px; font-weight: 600; }
         QLabel[sciTone="sectionTitle"] { font-size: 17px; font-weight: 600; }
