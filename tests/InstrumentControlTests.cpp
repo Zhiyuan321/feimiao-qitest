@@ -9,6 +9,8 @@
 #include <cmath>
 #include <limits>
 #include <QTemporaryDir>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QtTest>
 #include "core/MethodDraft.h"
 using namespace qitest;
@@ -36,6 +38,60 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
+    void failedPersistenceDoesNotPublishSuccess() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("failed-save.sqlite");
+        qputenv("QITEST_WORKSPACE_DB", path.toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        {
+            auto db = QSqlDatabase::addDatabase("QSQLITE", "failed-save-fixture");
+            db.setDatabaseName(path);
+            QVERIFY(db.open());
+            QSqlQuery query(db);
+            QVERIFY(query.exec("CREATE TRIGGER reject_run BEFORE INSERT ON runs "
+                               "BEGIN SELECT RAISE(ABORT, 'test save failure'); END"));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase("failed-save-fixture");
+        QSignalSpy saved(&controller, &AppController::runSaved);
+        QSignalSpy completed(&controller, &AppController::analysisCompleted);
+        controller.startDetection();
+        QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::Failed, 5000);
+        QCOMPARE(saved.count(), 0);
+        QCOMPARE(completed.count(), 0);
+        QVERIFY(controller.currentRun().id.isEmpty());
+        QVERIFY(controller.recentRuns().isEmpty());
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void acquisitionKeepsMethodAndSettingsStable() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB", dir.filePath("stable-method.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        qputenv("QITEST_OPERATOR_ROLE", "admin");
+        controller.setSessionOperator("admin");
+        const auto before = controller.activeMethod();
+        const QJsonObject parameters{{"scan_mode", "Fullscan"}, {"injection", 12.34},
+                                     {"source", 4.9}, {"td", 40.0}};
+        QVERIFY(controller.createMethodDraft("下一次检测", parameters));
+        QString nextId;
+        for (const auto &method : controller.methods())
+            if (method.name == "下一次检测") nextId = method.id;
+        QVERIFY(!nextId.isEmpty());
+        controller.startDetection();
+        QCOMPARE(controller.phase(), AppController::Phase::Acquiring);
+        controller.activateMethod(nextId);
+        QCOMPARE(controller.activeMethod().id, before.id);
+        const auto settings = controller.instrumentSettings();
+        QVERIFY(!controller.updateInstrumentSetting("ionSourceSetpointKv", 5.0, true));
+        QCOMPARE(controller.instrumentSettings(), settings);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 5000);
+        QCOMPARE(controller.activeMethod().id, before.id);
+        controller.activateMethod(nextId);
+        QCOMPARE(controller.activeMethod().id, nextId);
+        QVERIFY(controller.updateInstrumentSetting("ionSourceSetpointKv", 5.0, true));
+        qunsetenv("QITEST_OPERATOR_ROLE");
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void realReplyDuringAcquisitionWaitsForCompletion() {
         QTemporaryDir dir;
         qputenv("QITEST_WORKSPACE_DB", dir.filePath("source-boundary.sqlite").toUtf8());

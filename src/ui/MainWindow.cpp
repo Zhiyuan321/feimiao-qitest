@@ -864,7 +864,7 @@ QWidget *MainWindow::createHomePage() {
     ticPlot_->setObjectName("runPrimaryPlot");
     ticPlot_->setMinimumHeight(100);
     ticPlot_->setAxisLabels("时间 / s", "总离子信号");
-    ticPlot_->setEmptyMessage("等待时间序列", "单次质谱不生成 TIC");
+    ticPlot_->setEmptyMessage("等待时间序列", "");
     ticPlot_->setToolTip("TIC：点击时间点查看该次 MS1 扫描的原始质谱");
     auto *ticContainer = new QWidget;
     ticContainer->setObjectName("runTicPanel");

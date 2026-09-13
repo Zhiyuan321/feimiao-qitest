@@ -577,6 +577,9 @@ QString AppController::sessionSummary() const {
 }
 
 bool AppController::updateInstrumentSetting(const QString &key, const QVariant &value, bool confirmed) {
+    if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) {
+        emit notice("请等待检测完成后修改参数"); return false;
+    }
     if (instrument_->readOnly()) { emit notice("当前设备仅提供状态读取，硬件控制未开放"); return false; }
     // 固定顺序：并发限制 → 类型/范围 → 权限/连接 → 厂家校验 → 用户确认 → 审计 → 下发。
     // 下方通用输入范围不是设备的物理安全范围；厂家适配器必须继续收紧校验。
@@ -930,6 +933,9 @@ bool AppController::createMethodDraft(const QString &name, const QJsonObject &pa
         : "方法参数已保存，尚未映射或下发真实仪器");return true;
 }
 void AppController::activateMethod(const QString &methodId) {
+    if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) {
+        emit notice("请等待检测完成后切换方法"); return;
+    }
     if (!AuthorizationPolicy::allows(sessionRole_, Permission::ManageMethods)) {
         emit notice("当前角色无权激活方法版本"); return;
     }
@@ -1259,6 +1265,12 @@ void AppController::finishAcquisition() {
                     stored ? "analysis and traceable run persistence completed"
                            : "analysis completed but traceable run persistence failed: " + storageError);
             activeAcquisitionSessionId_.clear();
+            if (!stored) {
+                currentRun_ = {};
+                setPhase(Phase::Failed, "记录保存失败");
+                emit spectrumChanged(liveSpectrum_);
+                return;
+            }
             setPhase(Phase::ResultReady,
                 result_.quality.level == QualityLevel::Pass ? "质量通过" : "结果需要复核");
             emit spectrumChanged(liveSpectrum_);
