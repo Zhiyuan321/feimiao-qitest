@@ -808,7 +808,7 @@ QWidget *MainWindow::createHomePage() {
         const QString state = !health.connected ? "未连接" : !health.ready ? "未就绪"
             : phase == AppController::Phase::Acquiring ? "采集中"
             : phase == AppController::Phase::Analyzing ? "分析中" : "就绪";
-        deviceState->setText(state);
+        deviceState->setText(controller_->instrumentDescriptor().simulation ? QString("预览") : state);
         deviceState->setAccessibleDescription("仪器连接与运行状态");
         const qint64 elapsed = controller_->detectionElapsedMs();
         detectionTime->setText(elapsed < 0 ? QString("检测待命")

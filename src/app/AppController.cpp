@@ -382,6 +382,10 @@ void AppController::watchPendingRealInstrument(IInstrumentAdapter *adapter) {
 
 void AppController::promotePendingRealInstrument() {
     pendingPromotionScheduled_ = false;
+    // Preserve one source for the whole acquisition/analysis transaction.
+    // Recheck freshness after it finishes; a queued reply may already be stale.
+    if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing
+        || !pendingSettingId_.isEmpty() || !pendingMethodRequestId_.isEmpty()) return;
     std::unique_ptr<IInstrumentAdapter> verified;
     if (pendingNetwork_ && pendingNetwork_->health().connected)
         verified = std::move(pendingNetwork_);
@@ -440,6 +444,7 @@ void AppController::disconnectRs485() {
     if (pendingRs485_) pendingRs485_.reset();
     if (pendingNetwork_ && !pendingNetwork_->statusDetails().value("listening").toBool())
         pendingNetwork_.reset();
+    emit instrumentSettingsChanged(instrumentSettings_);
 }
 
 bool AppController::useSimulatedInstrument() {
@@ -458,6 +463,11 @@ bool AppController::useSimulatedInstrument() {
     }
     QObject::disconnect(instrument_.get(), nullptr, this, nullptr);
     instrument_ = std::make_unique<SimulatedInstrument>();
+    if (workspace_) {
+        const auto parameters = workspace_->activeMethod().parameters.value("method_parameters").toObject();
+        if (!parameters.isEmpty() && instrument_->validateMethodParameters(parameters).allowed)
+            instrument_->requestMethodParameters("preview-restore", parameters);
+    }
     bindInstrumentSignals();
     refreshInstrumentReadback();
     if (workspace_) workspace_->appendAudit(sessionOperator_, "DEVICE_MODE_CHANGED",
@@ -1219,6 +1229,8 @@ void AppController::setPhase(Phase phase, const QString &label) {
     phase_ = phase;
     phaseLabel_ = label;
     emit phaseChanged(phase, label);
+    if (realConnectionPending() && phase != Phase::Acquiring && phase != Phase::Analyzing)
+        QTimer::singleShot(0, this, &AppController::promotePendingRealInstrument);
 }
 
 void AppController::finishAcquisition() {

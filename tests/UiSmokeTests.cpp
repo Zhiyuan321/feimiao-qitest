@@ -771,7 +771,7 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     auto *detectionTime = window.findChild<QLabel *>("runDetectionTime");
     auto *softwareTime = window.findChild<QLabel *>("runSoftwareTime");
     QVERIFY(deviceState && detectionTime && softwareTime);
-    QCOMPARE(deviceState->text(), QString("未就绪"));
+    QCOMPARE(deviceState->text(), QString("预览"));
     QCOMPARE(deviceState->accessibleDescription(), QString("仪器连接与运行状态"));
     QCOMPARE(detectionTime->text(), QString("检测待命"));
     QCOMPARE(deviceState->height(), detectionTime->height());

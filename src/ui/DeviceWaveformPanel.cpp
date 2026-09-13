@@ -18,6 +18,7 @@ class VoltagePlot final : public QWidget {
 public:
     explicit VoltagePlot(bool tuning):tuning_(tuning) {
         repaintTimer_.setSingleShot(true);repaintTimer_.setInterval(16);
+        repaintTimer_.setTimerType(Qt::PreciseTimer);
         QObject::connect(&repaintTimer_,&QTimer::timeout,this,[this]{update();});
         setProperty("frameIntervalMs",16);setMinimumSize(240,220);setMouseTracking(true);
     }

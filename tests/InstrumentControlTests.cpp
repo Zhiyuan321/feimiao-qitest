@@ -36,6 +36,29 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
+    void realReplyDuringAcquisitionWaitsForCompletion() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB", dir.filePath("source-boundary.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        QVERIFY(controller.startNetworkListening("127.0.0.1", 0));
+        QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost, controller.networkStatus().value("port").toUInt());
+        QTRY_VERIFY(controller.networkStatus().value("tcpConnected").toBool());
+        controller.startDetection();
+        QCOMPARE(controller.phase(), AppController::Phase::Acquiring);
+        client.write(test::networkStatusWire());
+        QTRY_VERIFY(controller.networkStatus().value("connected").toBool());
+        QVERIFY(controller.instrumentDescriptor().simulation);
+        QCOMPARE(controller.telemetry().multiplierVoltageV, 1450.0);
+        QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 5000);
+        QCOMPARE(controller.currentRun().dataScope, QString("DEMO_SIMULATION"));
+        QTRY_VERIFY(!controller.instrumentDescriptor().simulation);
+        QCOMPARE(controller.telemetry().multiplierVoltageV, 3000.0);
+        client.abort();
+        QTRY_VERIFY(!controller.health().connected);
+        QVERIFY(!controller.instrumentDescriptor().simulation);
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void completeMethodEditingSurvivesDeviceConnection() {
         QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("methods.sqlite").toUtf8());
         AppController controller(std::make_unique<SimulatedInstrument>());
@@ -44,6 +67,8 @@ private slots:
         QVERIFY(controller.createMethodDraft("管理员方法",base));QString id;
         for(const auto &method:controller.methods()) if(method.name=="管理员方法") id=method.id;
         QVERIFY(!id.isEmpty());
+        controller.activateMethod(id);
+        QCOMPARE(controller.confirmedMethodParameters(), base);
         qputenv("QITEST_OPERATOR_ROLE","operator");controller.setSessionOperator("operator");
         QVERIFY(controller.fullMethodAccess());
         auto next=base;next.insert("scan_mode","SIM");next.insert("injection",600.0);
@@ -63,6 +88,8 @@ private slots:
         QVERIFY(controller.createMethodDraft("联网方法",next));
         controller.stopNetworkListening();
         QVERIFY(!controller.requestRfTuning(true,true));
+        QVERIFY(controller.useSimulatedInstrument());
+        QCOMPARE(controller.confirmedMethodParameters(), base);
         QString error;next=base;next.insert("injection",600.01);QVERIFY(!MethodDraft::validate(next,&error));
         next.insert("injection",1.001);QVERIFY(!MethodDraft::validate(next,&error));
         next.insert("injection",0.0);QVERIFY(MethodDraft::validate(next,&error));

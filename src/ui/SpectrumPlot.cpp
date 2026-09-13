@@ -15,6 +15,7 @@
 #include <QCoreApplication>
 #include <memory>
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace qitest {
@@ -25,6 +26,7 @@ SpectrumPlot::SpectrumPlot(Mode mode, QWidget *parent) : QWidget(parent), mode_(
     // continuously repaint just to maintain a nominal frame rate.
     repaintTimer_ = new QTimer(this);
     repaintTimer_->setSingleShot(true);
+    repaintTimer_->setTimerType(Qt::PreciseTimer);
     repaintTimer_->setInterval(16);
     setProperty("frameIntervalMs", 16);
     setProperty("hoverRepaintCoalesced", true);
@@ -134,7 +136,7 @@ void SpectrumPlot::ensureDisplayCache() const {
     const qsizetype end=std::min<qsizetype>(points_.size(),std::distance(points_.cbegin(),last)+1);
     int bucket=-1; qsizetype start=begin, low=begin, high=begin, previous=begin;
     const auto flush=[&] {
-        QVector<qsizetype> selected{start,low,high,previous};
+        std::array<qsizetype, 4> selected{{start,low,high,previous}};
         std::sort(selected.begin(),selected.end());
         for(auto index:selected) if(drawIndices_.isEmpty() || drawIndices_.last()!=index) drawIndices_.append(index);
     };
