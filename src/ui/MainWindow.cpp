@@ -788,11 +788,12 @@ QWidget *MainWindow::createHomePage() {
         label->setWordWrap(false); label->setMinimumWidth(0);
         label->setFixedHeight(30);
         label->setProperty("sciRole", "statusPill");
-        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        label->setAlignment(Qt::AlignCenter);
         label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         runStatusLayout->addWidget(label);
     }
     softwareTime->setWordWrap(false);
+    softwareTime->setAlignment(Qt::AlignCenter);
     softwareTime->setProperty("sciRole","compactRuntime");
     softwareTime->setProperty("sciSurface","statusPill");
     softwareTime->setFixedHeight(30);

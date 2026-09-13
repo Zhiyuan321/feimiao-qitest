@@ -773,6 +773,10 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     auto *softwareTime = window.findChild<QLabel *>("runSoftwareTime");
     QVERIFY(deviceState && detectionTime && softwareTime);
     QCOMPARE(deviceState->text(), QString("预览"));
+    for (const auto *pill : {deviceState, detectionTime, softwareTime}) {
+        QCOMPARE(pill->alignment(), Qt::Alignment(Qt::AlignCenter));
+        QVERIFY(pill->width() >= pill->fontMetrics().horizontalAdvance(pill->text()) + 18);
+    }
     QCOMPARE(deviceState->accessibleDescription(), QString("仪器连接与运行状态"));
     QCOMPARE(detectionTime->text(), QString("检测待命"));
     QCOMPARE(deviceState->height(), detectionTime->height());
@@ -1086,14 +1090,26 @@ void UiSmokeTests::reportSelectionSurvivesPageRoundTrips() {
     const QString name = table->item(0, 0)->text();
     search->setText(name); table->selectRow(0);
     for (int round = 0; round < 20; ++round) {
-        for (const auto &page : {"OpenMethod", "OpenHome", "OpenReport"})
-            window.findChild<QAction *>(page)->trigger();
+        for (const auto &page : {"OpenMethod", "OpenHome", "OpenReport"}) {
+            auto *button = commandButton(window, page);
+            QVERIFY(button && button->isVisible() && button->isEnabled());
+            QTest::mouseClick(button, Qt::LeftButton);
+            QCOMPARE(button->property("sciState").toString(), QString("current"));
+        }
         QCoreApplication::processEvents();
         QCOMPARE(search->text(), name);
         QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
         QCOMPARE(table->selectionModel()->selectedRows().first().row(), 0);
         QVERIFY(table->isVisible());
         QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
+        auto *preview = window.findChild<QPushButton *>("reportPreviewView");
+        auto *review = window.findChild<QPushButton *>("reportReviewView");
+        QTest::mouseClick(preview, Qt::LeftButton);
+        QVERIFY(!table->isVisible());
+        QVERIFY(window.findChild<QWidget *>("reportPreviewWorkspace")->isVisible());
+        QTest::mouseClick(review, Qt::LeftButton);
+        QVERIFY(table->isVisible());
+        QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
     }
     search->setText("不存在的候选");
     controller.startDetection();
