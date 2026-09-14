@@ -264,10 +264,11 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QCOMPARE(table->item(1, 1)->text(), QString("1234"));
     QCOMPARE(table->item(2, 1)->text(), QString("开启"));
     client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
-    // Keep accepting the voltage samples internally, but do not expose a
-    // duplicate pressure chart until the vendor confirms its time semantics.
+    // The dedicated pressure page renders the actual packet without inventing time.
     QTRY_COMPARE(controller.pressureVolts().size(), 5);
-    QVERIFY(!window.findChild<QWidget *>("pressureWaveformPanel"));
+    auto *pressurePlot = window.findChild<QWidget *>("pressureVoltagePlot");
+    QVERIFY(pressurePlot);
+    QTRY_COMPARE(pressurePlot->property("sampleCount").toInt(), 5);
     QVERIFY(!window.statusBar()->isVisibleTo(&window));
     const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
@@ -829,10 +830,12 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     home->click();
     auto *runStatus=window.findChild<QWidget *>("runStatusStrip");QVERIFY(runStatus);
     QCOMPARE(runStatus->parentWidget()->objectName(),QString("contextHeader"));
-    QVERIFY(!window.findChild<QTabWidget *>("analysisViewTabs"));
+    auto *analysisViews = window.findChild<QTabWidget *>("analysisViewTabs");
+    QVERIFY(analysisViews); QCOMPARE(analysisViews->count(), 2);
     auto *communicationTabs=window.findChild<QTabWidget *>("communicationTabs");QVERIFY(communicationTabs);
     QCOMPARE(communicationTabs->count(),2);
-    QVERIFY(!window.findChild<QWidget *>("pressureWaveformPanel"));
+    QVERIFY(window.findChild<QWidget *>("pressureWaveformPanel"));
+    QVERIFY(!window.findChild<QWidget *>("smallScreenPlotChoice"));
     QVERIFY(communicationTabs->tabBar()->expanding());
     QVERIFY(!communicationTabs->tabBar()->usesScrollButtons());
     QCOMPARE(communicationTabs->tabBar()->elideMode(), Qt::ElideNone);
@@ -855,6 +858,25 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     for (const auto &name:{"runPrimaryPlot","runMsPlot","runEicPlot"}) {
         auto *plot=window.findChild<SpectrumPlot *>(name); QVERIFY(plot);
         QTRY_VERIFY_WITH_TIMEOUT(plot->points().size()>1,1000);
+    }
+    for (const QSize size : {QSize(1024,700), QSize(1024,768)}) {
+        window.resize(size);
+        for (int round = 0; round < 5; ++round) {
+            QTest::mouseClick(analysisViews->tabBar(), Qt::LeftButton, Qt::NoModifier,
+                              analysisViews->tabBar()->tabRect(1).center());
+            QCOMPARE(analysisViews->currentIndex(), 1);
+            QVERIFY(window.findChild<QWidget *>("pressureVoltagePlot")->isVisible());
+            QTest::mouseClick(analysisViews->tabBar(), Qt::LeftButton, Qt::NoModifier,
+                              analysisViews->tabBar()->tabRect(0).center());
+            QCOMPARE(analysisViews->currentIndex(), 0);
+            QCoreApplication::processEvents();
+            for (const auto *name : {"runPrimaryPlot", "runMsPlot", "runEicPlot"}) {
+                auto *plot = window.findChild<SpectrumPlot *>(name);
+                QVERIFY(plot->isVisible());
+                QVERIFY(window.rect().contains(QRect(plot->mapTo(&window,QPoint()),plot->size())));
+                QVERIFY(plot->points().size() > 1);
+            }
+        }
     }
     QVERIFY(!example->isVisible());
     const auto id=controller.currentRun().id;

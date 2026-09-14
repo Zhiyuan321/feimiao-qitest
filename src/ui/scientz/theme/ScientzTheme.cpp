@@ -59,6 +59,12 @@ QString Theme::buildStyleSheet(Density density) {
         QWidget#standardLibraryTabs, QStackedWidget#standardLibraryPages { background: %2; border: 0; }
         QWidget#calibrationPage, QWidget#userStandardsPage { background: %2; }
         QTabWidget#communicationTabs::pane { background: %2; border: 0; }
+        QTabWidget#analysisViewTabs::pane { background: %2; border: 0; }
+        QTabWidget#analysisViewTabs QStackedWidget { background: %2; }
+        QTabWidget#analysisViewTabs QTabBar { background: %2; }
+        QTabWidget#analysisViewTabs QTabBar::tab { background: %4; color: %10; border: 1px solid %5; border-radius: 8px; min-width: 104px; min-height: 32px; padding: 2px 12px; margin-right: 6px; }
+        QTabWidget#analysisViewTabs QTabBar::tab:selected { background: %17; color: %20; border-color: %18; font-weight: 500; }
+        QTabWidget#analysisViewTabs QTabBar::tab:hover { background: %19; color: %20; }
         QTabWidget#communicationTabs QStackedWidget,
         QWidget#networkConnectionPanel, QWidget#rs485ConnectionPanel { background: %2; }
         QWidget#rs485ConnectionPanel QComboBox, QWidget#rs485ConnectionPanel QPushButton,

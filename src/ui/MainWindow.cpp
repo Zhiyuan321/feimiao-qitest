@@ -947,7 +947,7 @@ QWidget *MainWindow::createHomePage() {
         statusBar()->showMessage(spectrumPlot_->toolTip(), 5000);
     };
     connect(ticPlot_, &SpectrumPlot::pointActivated, this, selectScan);
-    plotsLayout->addWidget(spectrumContainer_, 2);
+    plotsLayout->addWidget(spectrumContainer_, 1);
     eicPlot_ = new SpectrumPlot(SpectrumPlot::Mode::Line);
     eicPlot_->setObjectName("runEicPlot");
     eicPlot_->setMinimumHeight(100);
@@ -991,30 +991,6 @@ QWidget *MainWindow::createHomePage() {
     eicHeader->addWidget(eicTolerance_, 0, Qt::AlignVCenter);
     eicLayout->addLayout(eicHeader); eicLayout->addWidget(eicPlot_, 1);
     plotsLayout->addWidget(eicPanel, 1);
-    // On short embedded displays keep TIC plus one detailed view readable.
-    // This only switches presentation; no scans or extraction values are reset.
-    auto *detailChoice = new QWidget;
-    detailChoice->setObjectName("smallScreenPlotChoice");
-    auto *choiceLayout = new QHBoxLayout(detailChoice);
-    choiceLayout->setContentsMargins(0, 0, 0, 0);
-    auto *choiceGroup = new QButtonGroup(detailChoice);
-    for (const auto &name : {QString("质谱图"), QString("EIC 提取离子")}) {
-        auto *choice = new QPushButton(name);
-        choice->setObjectName(name == "质谱图" ? "smallScreenMs" : "smallScreenEic");
-        choice->setCheckable(true);
-        choice->setProperty("sciRole", "choice");
-        choice->setIcon(commandIcon(name == "质谱图" ? "process" : "curve"));
-        choice->setFixedHeight(30);
-        choiceGroup->addButton(choice);
-        choiceLayout->addWidget(choice);
-        connect(choice, &QPushButton::toggled, this, [this](bool checked) {
-            if (checked) updateWorkspaceLayout();
-        });
-    }
-    choiceGroup->buttons().first()->setChecked(true);
-    choiceLayout->addStretch();
-    plotsLayout->insertWidget(1, detailChoice);
-    detailChoice->hide();
     eicRefreshTimer_ = new QTimer(this); eicRefreshTimer_->setSingleShot(true); eicRefreshTimer_->setInterval(150);
     connect(eicRefreshTimer_, &QTimer::timeout, this, &MainWindow::refreshRunEic);
     for (auto *input : {eicMz_, eicTolerance_})
@@ -1029,9 +1005,13 @@ QWidget *MainWindow::createHomePage() {
             statusBar()->showMessage(message, 8000);
         });
 
-    // 样品分析只保留三张质谱分析图。0x82 气压单包是仪器诊断数据，
-    // 在“仪器配置 / 运行状态”查看，不与正式检测图谱混在一起。
-    layout->addWidget(canvas,1);
+    auto *views = new QTabWidget;
+    views->setObjectName("analysisViewTabs");
+    views->setDocumentMode(true);
+    views->tabBar()->setExpanding(false);
+    views->addTab(canvas, "谱图分析");
+    views->addTab(createDeviceWaveformPanel(controller_, false), "气压图");
+    layout->addWidget(views, 1);
     connect(startButton_, &QPushButton::clicked, actions_->action("StartRun"), &QAction::trigger);
     connect(importData, &QPushButton::clicked, this, &MainWindow::importRunArchiveFromDialog);
     return page;
@@ -2551,13 +2531,11 @@ void MainWindow::updateWorkspaceLayout() {
     for (const auto *name : {"loadPublicExample", "openTraceAnalysis"})
         if(auto *button=findChild<QPushButton *>(name))button->setFixedSize(120,30);
     if(auto *reset=findChild<QToolButton *>("resetRunPlots"))reset->setFixedSize(shortPlots?30:44,shortPlots?30:44);
-    if (auto *choice = findChild<QWidget *>("smallScreenPlotChoice")) {
-        choice->setVisible(shortPlots);
-        const bool showEic = findChild<QPushButton *>("smallScreenEic")->isChecked();
-        spectrumContainer_->setVisible(!shortPlots || !showEic);
-        findChild<QWidget *>("runEicPanel")->setVisible(!shortPlots || showEic);
-        for (auto *plot : {ticPlot_, spectrumPlot_, eicPlot_}) plot->setMinimumHeight(100);
-    }
+    // Keep all three scientific views visible when returning from pressure/navigation.
+    if (spectrumContainer_) spectrumContainer_->show();
+    if (auto *eic = findChild<QWidget *>("runEicPanel")) eic->show();
+    for (auto *plot : {ticPlot_, spectrumPlot_, eicPlot_})
+        if (plot) plot->setMinimumHeight(100);
     if (emptyDataBanner_) emptyDataBanner_->setVisible(!shortPlots
         && controller_->phase() == AppController::Phase::Ready && controller_->liveSpectrum().isEmpty());
     if (auto *canvas = findChild<QWidget *>("analysisCanvas")) {
