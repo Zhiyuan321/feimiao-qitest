@@ -3,6 +3,7 @@
 先读 AppController.h 的 public slots 和 signals，再找 cpp 中对应实现。
 - 控制按钮：updateInstrumentSetting；返回 true 是已提交，不是执行成功。
 - 回执：构造函数内 settingFinished 连接；匹配请求号、控制键及实际回读。
+- 成功提示：预览路径只显示本地“已更新”；只有真实适配器的请求号、字段和回读全部匹配，才显示“设置成功”。
 - 检测：startDetection / cancelDetection / finishAcquisition。
 - 分析与落库：AnalysisWorker 使用输入快照和线程内独立数据库连接；完成后主线程发布结果。关闭程序等待当前事务，不强制终止写入线程。
 - 导入：importRunArchives；后台工作见 storage/ArchiveImportWorker。

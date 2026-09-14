@@ -67,7 +67,7 @@ int main(int argc, char *argv[]) {
         controller.connectRs485(serialPort);
     });
     qitest::MainWindow window(&controller);
-    // 登录/进入工作站后异步导入；每个进程仅一次，已存在的谱图按内容哈希跳过。
+    // 自动进入工作站后异步导入；每个进程仅一次，已存在的谱图按内容哈希跳过。
     bool customerSamplesRequested = false;
     QObject::connect(&controller, &qitest::AppController::sessionChanged, &window, [&] {
         if (customerSamplesRequested) return;

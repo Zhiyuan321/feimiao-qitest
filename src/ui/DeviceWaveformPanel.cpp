@@ -95,7 +95,7 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
             const bool connected=data.value("tcpConnected").toBool(),pending=data.value("tuningPending").toBool();
             start->setEnabled(controller->canTune()&&connected&&!pending&&data.value("connected").toBool()&&!data.value("experimentRunning").toBool());
             stop->setEnabled(controller->canTune()&&connected&&!pending);
-            status->setText(!controller->canTune()?"调谐启停需管理员或工程师账号":data.value("tuningMessage","请先连接网口仪器").toString());
+            status->setText(data.value("tuningMessage","请先连接网口仪器").toString());
         } else {
             const auto values=controller->pressureVolts();plot->setValues(values);
             QString text=QString("已接收 %1 帧气压数据；当前单包 %2 点。时间参数和周期边界待确认，暂不拼接周期。")

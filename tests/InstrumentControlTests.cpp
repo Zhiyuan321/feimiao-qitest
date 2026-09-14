@@ -31,6 +31,15 @@ public:
         id = request; key = name; ++count;
     }
     void acknowledge(bool success, QVariant value) { emit settingFinished(id, key, success, value, "fixture"); }
+    CommandValidation validateMethodParameters(const QJsonObject &) const override { return {true, {}}; }
+    void requestMethodParameters(const QString &request, const QJsonObject &parameters) override {
+        methodId = request; requestedMethod = parameters;
+    }
+    void acknowledgeMethod(bool success, const QJsonObject &readback) {
+        emit methodParametersFinished(methodId, success, readback, success ? QString() : QString("fixture"));
+    }
+    QString methodId;
+    QJsonObject requestedMethod;
 };
 
 class InstrumentControlTests : public QObject {
@@ -352,12 +361,9 @@ private slots:
     void boundedCommandsRequireMatchingReadback() {
         QTemporaryDir dir;
         qputenv("QITEST_WORKSPACE_DB", dir.filePath("workspace.sqlite").toUtf8());
-        qputenv("QITEST_OPERATOR_ROLE", "engineer");
         auto instrument = std::make_unique<TestInstrument>();
         auto *device = instrument.get();
         AppController controller(std::move(instrument));
-        QVERIFY(!controller.updateInstrumentSetting("rfOn", true, true)); // offline role
-        controller.setSessionOperator("test-engineer");
         QSignalSpy confirmations(&controller, &AppController::instrumentConfirmationRequired);
         QVERIFY(!controller.updateInstrumentSetting("rfOn", true));
         QCOMPARE(confirmations.count(), 1);
@@ -398,7 +404,6 @@ private slots:
         device->acknowledge(true, true);
         QCOMPARE(controller.instrumentSettings().value("wastePumpOn"), QVariant(true));
         qunsetenv("QITEST_WORKSPACE_DB");
-        qunsetenv("QITEST_OPERATOR_ROLE");
     }
     void simulatorAcceptsAndUsesCompleteMethodParameters() {
         QTemporaryDir dir;
@@ -415,9 +420,12 @@ private slots:
             if (method.name == "旧版字段模拟方法") created = method;
         QVERIFY(!created.id.isEmpty());
         QCOMPARE(created.parameters.value("data_scope").toString(), QString("DEMO_SIMULATION"));
+        QSignalSpy notices(&controller, &AppController::notice);
         controller.activateMethod(created.id);
         QCOMPARE(controller.activeMethod().id, created.id);
         QCOMPARE(controller.confirmedMethodParameters(), parameters);
+        QVERIFY(!notices.isEmpty());
+        QCOMPARE(notices.last().at(0).toString(), QString("当前方法已更新"));
         auto updatedParameters=parameters;updatedParameters.insert("injection",381.0);
         QVERIFY(controller.updateMethodDraft(created.id,created.name,updatedParameters));
         QVERIFY(controller.activeMethod().id.isEmpty());
@@ -440,6 +448,36 @@ private slots:
         QCOMPARE(controller.phase(), AppController::Phase::Acquiring);
         QCOMPARE(controller.liveSpectrum().size(), 0);
         controller.cancelDetection();
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void realMethodSuccessRequiresMatchingDeviceReadback() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB", dir.filePath("method-real-ack.sqlite").toUtf8());
+        qputenv("QITEST_OPERATOR_ROLE", "admin");
+        auto fixture = std::make_unique<TestInstrument>();
+        auto *device = fixture.get();
+        AppController controller(std::move(fixture));
+        controller.setSessionOperator("admin");
+        const QJsonObject parameters{{"scan_mode","Fullscan"},{"carrier",1.0},{"extraction",0.0},
+            {"inlet",50.0},{"td",0.0},{"source",0.0},{"trap",85.0},{"period",10000.0},
+            {"speed",8000.0},{"rf_frequency",50.0},{"storage_mass",30.0},{"low_mass",40.0},
+            {"high_mass",300.0},{"cooling",5000.0},{"ac_frequency",590.0},
+            {"injection",380.0},{"multiplier",1000.0}};
+        QVERIFY(controller.createMethodDraft("实机回传方法", parameters));
+        QString createdId;
+        for (const auto &method : controller.methods())
+            if (method.name == "实机回传方法") createdId = method.id;
+        QVERIFY(!createdId.isEmpty());
+        QSignalSpy notices(&controller, &AppController::notice);
+        controller.activateMethod(createdId);
+        QCOMPARE(device->requestedMethod, parameters);
+        QVERIFY(controller.activeMethod().id != createdId);
+        QVERIFY(notices.isEmpty());
+        device->acknowledgeMethod(true, parameters);
+        QCOMPARE(controller.activeMethod().id, createdId);
+        QCOMPARE(notices.count(), 1);
+        QCOMPARE(notices.last().at(0).toString(), QString("方法设置成功"));
+        qunsetenv("QITEST_OPERATOR_ROLE");
         qunsetenv("QITEST_WORKSPACE_DB");
     }
 };

@@ -145,9 +145,13 @@ private slots:
             QVERIFY(QDir().mkpath(capture));
             QVERIFY(pressure->grab().save(capture+"/pressure-waveform.png"));
         }
+        auto statusPayload=test::networkStatusWire().mid(7,21);statusPayload[9]=0;
+        client.write(test::networkFrame(statusPayload));
+        QTRY_VERIFY(controller.networkStatus().value("connected").toBool());
         std::unique_ptr<QWidget> rf(createDeviceWaveformPanel(&controller,true));rf->resize(720,480);rf->show();
         QCOMPARE(rf->findChildren<QPushButton *>().size(),2);
-        QVERIFY(!rf->findChild<QPushButton *>("rfTuningStart")->isEnabled());
+        QVERIFY(rf->findChild<QPushButton *>("rfTuningStart")->isEnabled());
+        QVERIFY(!rf->findChild<QLabel *>("rfTuningStatus")->text().contains("账号"));
         if(!capture.isEmpty())QVERIFY(rf->grab().save(capture+"/rf-panel.png"));
         controller.stopNetworkListening();QTRY_COMPARE(plot->property("sampleCount").toInt(),0);
         qunsetenv("QITEST_WORKSPACE_DB");
@@ -182,7 +186,6 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     AppController controller(std::move(instrument));
     MainWindow window(&controller); window.resize(1024, 768); window.show();
     QCOMPARE(QApplication::font().family(), QString("IBM Plex Sans SC"));
-    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站"); QVERIFY(enter); enter->click();
     auto *workspace = window.findChild<QStackedWidget *>("centralWorkspace"); QVERIFY(workspace);
     QTRY_VERIFY_WITH_TIMEOUT(workspace->isVisibleTo(&window), 4000);
     auto *settings = window.findChild<QAction *>("OpenSettings"); QVERIFY(settings); settings->trigger();
@@ -355,10 +358,6 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     MainWindow window(&controller);
     window.resize(1024, 768);
     window.show();
-    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
-    QVERIFY(enter);
-    QVERIFY(enter->isEnabled());
-    enter->click();
     auto *workspace = window.findChild<QStackedWidget *>("centralWorkspace");
     QVERIFY(workspace);
     QTRY_VERIFY_WITH_TIMEOUT(workspace->isVisibleTo(&window), 4000);
@@ -446,9 +445,7 @@ void UiSmokeTests::foreignSavedPathFallsBackToLocalDocuments() {
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller);
     window.show();
-    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
-    QVERIFY(enter);
-    enter->click();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window), 4000);
     auto *runAction = window.findChild<QAction *>("StartRun");
     QVERIFY(runAction);
     runAction->trigger();
@@ -522,12 +519,11 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller);
     window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window), 5000);
+    QVERIFY(!visibleWidgetWithText<QPushButton>(window, "登录正式账户"));
+    QVERIFY(!visibleWidgetWithText<QPushButton>(window, "进入工作站"));
     if (!captureDirectory.isEmpty())
         QVERIFY(window.grab().save(captureDirectory + "/welcome-customer-review.png"));
-    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
-    QVERIFY(enter);
-    enter->click();
-    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window), 5000);
     auto *monitor = window.findChild<QScrollArea *>("monitorScroll");
     QVERIFY(monitor && monitor->isVisibleTo(&window));
     QVERIFY(monitor->width() >= 280);
@@ -664,7 +660,6 @@ void UiSmokeTests::externalArchivePreview() {
         QVERIFY2(RunArchiveCodec::read(directory.filePath(name)).valid,qPrintable(name));
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller);window.show();window.resize(1024,768);
-    auto *enter=visibleWidgetWithText<QPushButton>(window,"进入工作站");QVERIFY(enter);enter->click();
     QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),5000);
     controller.importRunArchive(path);
     QTRY_VERIFY_WITH_TIMEOUT(!controller.currentRun().id.isEmpty(),5000);
@@ -684,8 +679,6 @@ void UiSmokeTests::fixedLandscapeNavigation() {
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller); window.show();
     QCOMPARE(qApp->font().pixelSize(), 15);
-    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
-    QVERIFY(enter); enter->click();
     QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window),4000);
     window.resize(800, 480); QTest::qWait(50);
     QVERIFY(window.width() >= 1024); QVERIFY(window.height() >= 700);
@@ -836,7 +829,6 @@ void UiSmokeTests::bundledExampleLoadsThreePlotsWithoutAi() {
     MainWindow window(&controller);
     window.show();
     QVERIFY(controller.scans().isEmpty()); // Never insert a sample on startup.
-    auto *enter=visibleWidgetWithText<QPushButton>(window,"进入工作站"); QVERIFY(enter); enter->click();
     auto *home=commandButton(window,"OpenHome"); QVERIFY(home);
     QTRY_VERIFY_WITH_TIMEOUT(home->isVisibleTo(&window),5000);
     home->click();
@@ -1110,8 +1102,6 @@ void UiSmokeTests::reportSelectionSurvivesPageRoundTrips() {
     MainWindow window(&controller);
     window.resize(1024, 768);
     window.show();
-    auto *enter = visibleWidgetWithText<QPushButton>(window, "进入工作站");
-    QVERIFY(enter); enter->click();
     QTRY_VERIFY_WITH_TIMEOUT(commandButton(window, "OpenHome")->isVisibleTo(&window), 5000);
     controller.startDetection();
     for (const auto &name : {"OpenMethod", "OpenReport", "OpenHome"})
@@ -1183,9 +1173,6 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QCOMPARE(aiMode->currentText(), QString("自动"));
     QVERIFY(!window.findChild<QWidget *>("assistantSuggestions"));
     QVERIFY(!window.findChild<QLabel *>("deepAiPurpose"));
-    auto *offline = visibleWidgetWithText<QPushButton>(window, "进入工作站");
-    QVERIFY(offline);
-    QTest::mouseClick(offline, Qt::LeftButton);
     auto *homeButton = commandButton(window, "OpenHome");
     QVERIFY(homeButton);
     QCOMPARE(homeButton->text(), QString("样品分析"));
@@ -1583,7 +1570,8 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QVERIFY(openModule("参考谱库"));
     QVERIFY(openModule("定量曲线"));
     QVERIFY(!openModule("标准与校准"));
-    for (const QString module : {QString("帮助"), QString("用户及参数设置"), QString("锁屏")}) {
+    QVERIFY(!openModule("用户及参数设置"));
+    for (const QString module : {QString("帮助"), QString("锁屏")}) {
         QVERIFY(openModule(module));
         QVERIFY(settingsPrimary->isVisibleTo(&window));
         settingsPrimary->click();

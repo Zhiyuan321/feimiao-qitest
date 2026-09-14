@@ -30,7 +30,7 @@ struct StartupCheck {
     bool blocking = false;
 };
 
-// 业务协调层：接收界面意图，负责状态、权限、确认、审计及设备回执。
+// 业务协调层：接收界面意图，负责状态、确认、审计及设备回执。
 // 新增硬件控制必须走 updateInstrumentSetting，不能在按钮槽中直接写 SDK。
 // 主界面只订阅这里的状态信号，不把“点击过”当作“设备已执行”。
 class AppController final : public QObject {
@@ -55,7 +55,9 @@ public:
     QStringList rs485Ports() const;
     QVariantMap networkStatus() const;
     QVector<double> pressureVolts() const;
-    bool canTune() const { return sessionRole_ == SessionRole::Administrator || sessionRole_ == SessionRole::Engineer; }
+    // 射频调谐是仪器现场的常规维护动作。角色不再让按钮静默失效；
+    // 真正的发送仍由有效网口状态、实验停止和二次确认三重门控。
+    bool canTune() const { return true; }
     QVariantMap pumpStatus() const;
     QVariantMap instrumentSettings() const { return instrumentSettings_; }
     QJsonObject confirmedMethodParameters() const { return instrument_->confirmedMethodParameters(); }
@@ -119,7 +121,7 @@ public slots:
     void exportRunArchive(const QString &runId, const QString &path);
     void exportDiagnosticBundle();
     // 返回 true 只表示已提交请求，不代表仪器成功；结果由状态/提示信号异步通知。
-    // confirmed 表示用户完成确认，不是设备确认，也不能替代权限和互锁检查。
+    // confirmed 表示用户完成确认，不是设备确认，也不能替代连接与互锁检查。
     bool updateInstrumentSetting(const QString &key, const QVariant &value, bool confirmed = false);
     void setDeepAiEnabled(bool enabled);
     void setAiMode(qitest::AppController::AiMode mode);

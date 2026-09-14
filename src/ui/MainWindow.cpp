@@ -223,7 +223,6 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
         {"数据处理", {"处理管线"}},
         {"参考谱库", {"参考谱库"}},
         {"定量曲线", {"定量曲线"}},
-        {"用户及参数设置", {"账户与权限"}},
         {"帮助", {"操作与状态"}},
         {"清洗模式", {"清洗流程"}},
         {"载气节省", {"载气节省"}},
@@ -233,7 +232,6 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
 
     rootStack_ = new QStackedWidget;
     rootStack_->setObjectName("rootStack");
-    rootStack_->addWidget(createLoginPage());
     rootStack_->addWidget(createStartupPage());
     rootStack_->addWidget(createWorkspacePage());
     setCentralWidget(rootStack_);
@@ -358,99 +356,8 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
             }
         });
     updateWorkspaceLayout();
-}
-
-QWidget *MainWindow::createLoginPage() {
-    auto *page = new QWidget;
-    auto *pageLayout = new QVBoxLayout(page);
-    pageLayout->setContentsMargins(0, 0, 0, 0);
-    pageLayout->setSpacing(0);
-
-    auto *body = new QWidget;
-    body->setObjectName("loginBody");
-    auto *bodyLayout = new QHBoxLayout(body);
-    bodyLayout->setContentsMargins(80, 48, 80, 48);
-    bodyLayout->setSpacing(72);
-    bodyLayout->addStretch();
-    auto *intro = new QWidget;
-    intro->setObjectName("loginIntro");
-    auto *introLayout = new QVBoxLayout(intro);
-    introLayout->addStretch();
-    introLayout->addWidget(makeLabel("飞秒质谱工作站", "loginTitle"));
-    introLayout->addWidget(makeLabel("准备、检测、复核与报告", "sectionTitle"));
-    introLayout->addStretch();
-    intro->setFixedWidth(300);
-    bodyLayout->addWidget(intro);
-
-    auto *formCard = new QFrame;
-    formCard->setObjectName("panel");
-    formCard->setFixedWidth(390);
-    auto *formLayout = new QVBoxLayout(formCard);
-    formLayout->setContentsMargins(30, 28, 30, 28);
-    formLayout->setSpacing(10);
-    formLayout->addWidget(makeLabel("进入工作站", "pageTitle"));
-    auto *skip = new QPushButton("进入工作站");
-    skip->setProperty("sciRole", "primary");
-    skip->setMinimumHeight(38);
-    formLayout->addWidget(skip);
-    formLayout->addWidget(separator());
-    auto *accountToggle = new QToolButton;
-    accountToggle->setText("使用正式账户登录  ›");
-    accountToggle->setCheckable(true);
-    accountToggle->setProperty("sciRole", "disclosure");
-    formLayout->addWidget(accountToggle);
-    auto *accountFields = new QWidget;
-    auto *accountLayout = new QVBoxLayout(accountFields);
-    accountLayout->setContentsMargins(0, 4, 0, 0);
-    accountLayout->setSpacing(8);
-    accountLayout->addWidget(makeLabel("用户名", "fieldLabel"));
-    username_ = new QLineEdit("operator");
-    accountLayout->addWidget(username_);
-    accountLayout->addWidget(makeLabel("密码", "fieldLabel"));
-    password_ = new QLineEdit;
-    password_->setEchoMode(QLineEdit::Password);
-    accountLayout->addWidget(password_);
-    loginError_ = makeLabel("", "error");
-    accountLayout->addWidget(loginError_);
-    auto *actions = new QHBoxLayout;
-    auto *login = new QPushButton("登录正式账户");
-    actions->addWidget(login);
-    actions->addStretch();
-    accountLayout->addLayout(actions);
-    const bool accountConfigured = !qEnvironmentVariable("QITEST_OPERATOR_PASSWORD").isEmpty();
-    login->setEnabled(accountConfigured);
-    if (!accountConfigured)
-        accountLayout->addWidget(makeLabel("尚未配置账户，可从上方进入工作站。", "metadata"));
-    accountFields->setVisible(false);
-    formLayout->addWidget(accountFields);
-    formLayout->addStretch();
-    bodyLayout->addWidget(formCard, 0, Qt::AlignVCenter);
-    bodyLayout->addStretch();
-    pageLayout->addWidget(body, 1);
-
-    auto begin = [this] {
-        const QString configuredPassword = qEnvironmentVariable("QITEST_OPERATOR_PASSWORD");
-        if (configuredPassword.isEmpty() || password_->text() != configuredPassword) {
-            loginError_->setText(configuredPassword.isEmpty()
-                ? "尚未配置本地账户，请从上方进入工作站"
-                : "用户名或密码不正确");
-            return;
-        }
-        loginError_->clear();
-        controller_->setSessionOperator(username_->text());
-        startStartupSequence();
-    };
-    connect(login, &QPushButton::clicked, this, begin);
-    connect(password_, &QLineEdit::returnPressed, this, begin);
-    connect(skip, &QPushButton::clicked, this, [this] {
-        controller_->setOfflineDemoSession();
-        startStartupSequence();
-    });
-    connect(accountToggle, &QToolButton::toggled, this, [accountToggle, accountFields](bool open) {
-        accountFields->setVisible(open);
-        accountToggle->setText(open ? "收起正式账户登录  ⌄" : "使用正式账户登录  ›");
-    });
-    return page;
+    controller_->setOfflineDemoSession();
+    QTimer::singleShot(0, this, &MainWindow::startStartupSequence);
 }
 
 QWidget *MainWindow::createStartupPage() {
@@ -476,7 +383,7 @@ QWidget *MainWindow::createStartupPage() {
 }
 
 void MainWindow::startStartupSequence() {
-    rootStack_->setCurrentIndex(1);
+    rootStack_->setCurrentIndex(0);
     startupProgress_->setValue(0);
     const auto checks = controller_->startupChecks();
     auto *timer = new QTimer(this);
@@ -1197,13 +1104,13 @@ QWidget *MainWindow::createSettingsPage() {
     settingsCategoryTree_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     settingsCategoryTree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     const QStringList modules{"仪器配置", "载气节省",
-        "参考谱库", "定量曲线", "视图", "用户及参数设置", "帮助", "锁屏"};
+        "参考谱库", "定量曲线", "视图", "帮助", "锁屏"};
     const QMap<QString, QString> moduleIcons{{"运行状态", "view"}, {"常用部件", "control-rf"},
             {"辅助部件", "settings"}, {"参数预设", "method"}, {"降温与关机", "power"},
             {"射频调谐", "rf-tuning"}, {"质量轴校准", "mass-calibration"}, {"注射泵", "syringe"},
             {"硬件接入说明", "help"}, {"离子源", "control-ion"},
             {"载气节省", "control-carrier"}, {"清洗模式", "clean"}, {"参考谱库", "library"},
-            {"定量曲线", "curve"}, {"视图", "view"}, {"用户及参数设置", "user"},
+            {"定量曲线", "curve"}, {"视图", "view"},
             {"帮助", "help"}, {"锁屏", "lock"}};
     for (const auto &module : modules) {
         const auto pages = settingsPages_.value(module);
@@ -1211,11 +1118,10 @@ QWidget *MainWindow::createSettingsPage() {
             if (subpage == "硬件接入说明") continue;
             const QString label = pages.size() > 1 ? subpage : module;
             auto *item = new QTreeWidgetItem(settingsCategoryTree_,
-                {label == "用户及参数设置" ? QString("用户与参数")
-                 : label == "载气节省" ? QString("气路与清洗") : label});
+                {label == "载气节省" ? QString("气路与清洗") : label});
             const int sectionIndex = label == "射频调谐" || label == "质量轴校准"
                 || module == "参考谱库" || module == "定量曲线" ? 1
-                : module == "视图" || module == "用户及参数设置" || module == "帮助" || module == "锁屏" ? 2 : 0;
+                : module == "视图" || module == "帮助" || module == "锁屏" ? 2 : 0;
             item->setData(0, Qt::UserRole + 3, sectionIndex);
             item->setHidden(sectionIndex != 0);
             if(moduleIcons.contains(label))item->setIcon(0, commandIcon(moduleIcons.value(label)));
@@ -1711,7 +1617,7 @@ QWidget *MainWindow::createSettingsPage() {
             setInstrumentToolsVisible(true);
             populateSettingsDetail("视图", "显示布局");
             statusBar()->showMessage("已恢复默认布局：仪器监控开启，智能台收起", 5000);
-        } else if (target == "lock" || target == "guide" || target == "requirements" || target == "account") {
+        } else if (target == "lock" || target == "guide" || target == "requirements") {
             const bool guard = target == "lock";
             const bool busy = controller_->phase() == AppController::Phase::Acquiring
                 || controller_->phase() == AppController::Phase::Analyzing;
@@ -1735,8 +1641,6 @@ QWidget *MainWindow::createSettingsPage() {
                 ? "界面操作已锁定。\n\n这是本软件的防误触保护，不是系统锁屏或身份验证。不会关闭仪器。点击下方按钮恢复操作。"
                 : target == "guide"
                 ? "1. 方法选择：选择并激活方法。\n\n2. 样品分析：导入已有数据，或填写样本信息后开始检测；完成后自动保存。\n\n3. 报告查看：复核结果并导出 PDF。"
-                : target == "account"
-                ? "当前会话：" + controller_->sessionSummary() + "\n\n操作权限由本地会话控制器校验。此页不提供未经认证的权限提升或账户切换。"
                 : settingsDetailDescription_->text() + "\n\n接入前需提供厂家通信协议或 SDK、接口与量程、单位、安全互锁及操作回执。资料尚缺，不会向仪器发送猜测指令。");
             body->addWidget(copy);
             auto *done = new QPushButton(guard ? "恢复操作" : "关闭");
@@ -2729,7 +2633,7 @@ bool MainWindow::executeAssistantCommand(AssistantCommand command, const QString
             feedback = QString("离子源已%1，状态已回读。")
                 .arg(enable ? "开启" : "关闭");
         } else {
-            feedback = "已定位到离子源控制。真实仪器需核对当前值、安全范围和权限后，由操作人员确认。";
+            feedback = "已定位到离子源控制。真实仪器需核对当前值和安全范围，再由操作人员确认。";
         }
         if (source.contains("分子源"))
             feedback += " 已将“分子源”按本仪器的“离子源”理解。";
@@ -2737,7 +2641,7 @@ bool MainWindow::executeAssistantCommand(AssistantCommand command, const QString
     }
     case AssistantCommand::ReviewInstrumentAdjustment:
         openSettingsModule("仪器配置", "参数预设");
-        feedback = "已打开参数页。请先确认参数、目标值和原因，并核对当前值、允许范围和操作权限。";
+        feedback = "已打开参数页。请先确认参数、目标值和原因，并核对当前值与允许范围。";
         break;
     case AssistantCommand::OpenPower:
         openSettingsModule("仪器配置", "降温与关机");
@@ -2934,7 +2838,7 @@ QToolButton *MainWindow::createCommandButton(const QString &actionId, const QStr
 }
 
 void MainWindow::showWorkspace() {
-    rootStack_->setCurrentIndex(2);
+    rootStack_->setCurrentIndex(1);
     setWorkspaceSection(0);
     QTimer::singleShot(450, controller_, &AppController::prepareAiAssistant);
 }
@@ -3062,14 +2966,6 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         rows = {{"参考谱库", controller_->librarySummary().contains("未加载") ? "未加载" : "已加载",
             controller_->librarySummary(), "只读、来源可追溯"}};
         actionText = "打开参考谱库"; target = "library";
-    } else if (module == "用户及参数设置") {
-        description = "当前会话、方法和记录都来自本地控制器与 SQLite 工作区。";
-        rows = {
-            {"当前会话", "已登录", controller_->sessionSummary(), "三级权限门控"},
-            {"方法版本", "可用", QString::number(controller_->methods().size()) + " 个", "不可覆盖"},
-            {"检测记录", "可用", QString::number(controller_->recentRuns().size()) + " 条", controller_->workspaceSummary()}
-        };
-        actionText = "查看当前权限"; target = "account";
     } else if (module == "定量曲线") {
         description = "定量曲线需要经确认的浓度点和校准数据；缺少数据时明确阻断，不生成伪造浓度。";
         rows = {

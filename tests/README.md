@@ -13,7 +13,7 @@
 | LibraryTests.cpp | 谱库和用户标准 |
 | AiEvidenceTests.cpp | 基础指令、证据和模型边界 |
 | LocalAiBridgeTests.cpp | 模型进程生命周期与问答失败 |
-| SecurityTests.cpp | 权限与安全 |
+| SecurityTests.cpp | 单机完整功能与硬件安全边界 |
 | UiSmokeTests.cpp | 窗口、页面、按钮及布局 |
 
 统一通过 ctest --test-dir 构建目录 --output-on-failure 运行。

@@ -6,14 +6,14 @@ using namespace qitest;
 class SecurityTests final : public QObject {
     Q_OBJECT
 private slots:
-    void enforcesRoleBoundaries();
+    void allWorkstationRolesUseFullFeatureSet();
 };
 
-void SecurityTests::enforcesRoleBoundaries() {
+void SecurityTests::allWorkstationRolesUseFullFeatureSet() {
     QVERIFY(AuthorizationPolicy::allows(SessionRole::OfflineDemo, Permission::RunAcquisition));
-    QVERIFY(!AuthorizationPolicy::allows(SessionRole::Operator, Permission::ManageMethods));
+    QVERIFY(AuthorizationPolicy::allows(SessionRole::Operator, Permission::ManageMethods));
     QVERIFY(AuthorizationPolicy::allows(SessionRole::Engineer, Permission::ManageMethods));
-    QVERIFY(!AuthorizationPolicy::allows(SessionRole::OfflineDemo, Permission::HardwareCriticalCommand));
+    QVERIFY(AuthorizationPolicy::allows(SessionRole::OfflineDemo, Permission::HardwareCriticalCommand));
     QVERIFY(AuthorizationPolicy::allows(SessionRole::Administrator, Permission::HardwareCriticalCommand));
 }
 

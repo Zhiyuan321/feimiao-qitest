@@ -40,7 +40,6 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
-    QWidget *createLoginPage();
     QWidget *createStartupPage();
     QWidget *createWorkspacePage();
     QWidget *createHomePage();
@@ -94,9 +93,6 @@ private:
     QToolButton *instrumentToolsButton_ = nullptr;
     QStackedWidget *settingsStack_ = nullptr;
     QTreeWidget *settingsCategoryTree_ = nullptr;
-    QLineEdit *username_ = nullptr;
-    QLineEdit *password_ = nullptr;
-    QLabel *loginError_ = nullptr;
     QLabel *startupLabel_ = nullptr;
     QProgressBar *startupProgress_ = nullptr;
     QLabel *phaseLabel_ = nullptr;

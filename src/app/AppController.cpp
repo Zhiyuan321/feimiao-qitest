@@ -322,7 +322,8 @@ void AppController::bindInstrumentSignals() {
                 id + "; " + (instrument_->descriptor().simulation ? "simulation; " : "hardware; ") + error.left(300));
             emit instrumentSettingsChanged(instrumentSettings_);
             emit instrumentCommandPending(key, false);
-            emit notice(acknowledged ? "操作已确认"
+            const bool simulation = instrument_->descriptor().simulation;
+            emit notice(acknowledged ? (simulation ? QString("设置已更新") : QString("设置成功"))
                 : "操作未确认：" + (error.isEmpty() ? QString("设备回读与设定不一致") : error));
         });
     connect(instrument_.get(), &IInstrumentAdapter::methodParametersFinished, this,
@@ -340,7 +341,8 @@ void AppController::bindInstrumentSignals() {
                 id + "; " + (instrument_->descriptor().simulation ? "simulation; " : "hardware; ")
                     + (error.isEmpty() ? storageError : error).left(300));
             if (activated) emit methodsChanged();
-            emit notice(activated ? "方法参数已确认，当前方法已更新"
+            const bool simulation = instrument_->descriptor().simulation;
+            emit notice(activated ? (simulation ? QString("当前方法已更新") : QString("方法设置成功"))
                 : "方法未激活：" + (error.isEmpty() ? QString("参数回读不一致") : error));
         });
 }
@@ -487,7 +489,6 @@ QVector<double> AppController::pressureVolts() const {
     return network ? network->pressureVolts() : QVector<double>{};
 }
 bool AppController::requestRfTuning(bool enabled, bool confirmed) {
-    if(!canTune()) {emit notice("调谐需管理员或工程师账号");return false;}
     if(enabled && !confirmed) {emit notice("请先确认开始调谐");return false;}
     if(phase_==Phase::Acquiring || phase_==Phase::Analyzing || !pendingSettingId_.isEmpty()) {
         emit notice("请先结束当前采集或待确认操作");return false;
@@ -583,7 +584,7 @@ bool AppController::updateInstrumentSetting(const QString &key, const QVariant &
         emit notice("请等待检测完成后修改参数"); return false;
     }
     if (instrument_->readOnly()) { emit notice("当前设备仅提供状态读取，硬件控制未开放"); return false; }
-    // 固定顺序：并发限制 → 类型/范围 → 权限/连接 → 厂家校验 → 用户确认 → 审计 → 下发。
+    // 固定顺序：并发限制 → 类型/范围 → 连接 → 厂家校验 → 用户确认 → 审计 → 下发。
     // 下方通用输入范围不是设备的物理安全范围；厂家适配器必须继续收紧校验。
     if (!pendingSettingId_.isEmpty()) { emit notice("请等待仪器确认上一项操作"); return false; }
     if (!instrumentSettings_.contains(key)) {
@@ -764,7 +765,7 @@ void AppController::explainFeature(const QString &feature) {
     } else if (feature == "仪器状态与仪器设置")
         answer = AiEvidenceBuilder::buildSummary(buildAiContext());
     else if (feature.contains("开关") || feature.contains("高压"))
-        answer = "仪器操作经过权限、安全校验和设备回执。没有回执不算成功；超时状态未知，不会自动重发。操作前请核实设备连接状态。";
+        answer = "仪器操作经过安全校验和设备回执。没有回执不算成功；超时状态未知，不会自动重发。操作前请核实设备连接状态。";
     else if (!hits.isEmpty() && hits.first().score >= 8) answer = hits.first().title + "\n" + hits.first().text;
     else answer = "当前还没有足够的本地说明。请明确功能名称，或开启自动模式进一步解释；没有执行仪器操作。";
     emit aiAssistantAnswerReady(feature, answer);
