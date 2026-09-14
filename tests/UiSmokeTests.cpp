@@ -495,7 +495,7 @@ void UiSmokeTests::customerResultReviewWorkflow() {
         QVERIFY(!label->text().contains("演示"));
     }
     QVERIFY(!editor->findChild<QPushButton *>("loadLegacyReference"));
-    for (const QString text : {QString("打开文件"), QString("导出文件"), QString("保存新版本"), QString("取消")}) {
+    for (const QString text : {QString("打开文件"), QString("导出文件"), QString("另存版本"), QString("取消")}) {
         auto *button = visibleWidgetWithText<QPushButton>(*editor, text);
         QVERIFY(button);
         QVERIFY(editor->rect().contains(QRect(button->mapTo(editor, QPoint()), button->size())));
@@ -506,6 +506,18 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     if (!captureDirectory.isEmpty()) QVERIFY(editorImage.save(captureDirectory + "/method-editor-customer-review.png"));
     editor->findChild<QPushButton *>("saveMethodDraft")->click();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    bool savedCurrent=false,savedAs=false;
+    auto *currentEditor=new MethodEditorDialog("现有方法",MethodDraft::defaultParameters(),
+        [&](const QString &,const QJsonObject &){savedAs=true;return true;},nullptr,true,
+        [&](const QString &,const QJsonObject &){savedCurrent=true;return true;});
+    currentEditor->show();QCoreApplication::processEvents();
+    auto *saveCurrent=currentEditor->findChild<QPushButton *>("updateMethodDraft");
+    QVERIFY(saveCurrent&&saveCurrent->isVisibleTo(currentEditor));
+    if(!captureDirectory.isEmpty())QVERIFY(currentEditor->grab().save(captureDirectory+"/method-editor-existing.png"));
+    QTest::mouseClick(saveCurrent,Qt::LeftButton);
+    QVERIFY(savedCurrent);QVERIFY(!savedAs);
+    QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
 
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller);
@@ -1364,6 +1376,24 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     auto *activateMethod = visibleWidgetWithText<QPushButton>(window, "设为当前方法");
     QVERIFY(activateMethod);
     QVERIFY(!activateMethod->isEnabled());
+    auto *deleteMethod = window.findChild<QPushButton *>("deleteMethodVersion");
+    QVERIFY(deleteMethod);QVERIFY(deleteMethod->isVisibleTo(&window));QVERIFY(!deleteMethod->isEnabled());
+    controller.createDemoMethodVersion("删除回归方法","UI 删除回归");
+    QTRY_VERIFY_WITH_TIMEOUT([&]{
+        for(int row=0;row<methodTable->rowCount();++row)
+            if(methodTable->item(row,1)&&methodTable->item(row,1)->text()=="删除回归方法")return true;
+        return false;
+    }(),1000);
+    int deletionRow=-1;for(int row=0;row<methodTable->rowCount();++row)
+        if(methodTable->item(row,1)&&methodTable->item(row,1)->text()=="删除回归方法")deletionRow=row;
+    QVERIFY(deletionRow>=0);methodTable->selectRow(deletionRow);QTRY_VERIFY(deleteMethod->isEnabled());
+    const QString deletionId=methodTable->item(deletionRow,0)->data(Qt::UserRole).toString();
+    QVERIFY(controller.deleteMethod(deletionId));
+    QTRY_VERIFY_WITH_TIMEOUT([&]{
+        for(int row=0;row<methodTable->rowCount();++row)
+            if(methodTable->item(row,1)&&methodTable->item(row,1)->text()=="删除回归方法")return false;
+        return true;
+    }(),1000);
     controller.createDemoMethodVersion("激活回归方法", "UI 点击回归");
     QTRY_VERIFY_WITH_TIMEOUT([&] {
         for (int row = 0; row < methodTable->rowCount(); ++row) {
@@ -1388,6 +1418,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QVERIFY(activationRow >= 0);
     methodTable->selectRow(activationRow);
     QTRY_VERIFY_WITH_TIMEOUT(activateMethod->isEnabled(), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(deleteMethod->isEnabled(),1000);
     QSignalSpy methodsChanged(&controller, &AppController::methodsChanged);
     QTest::mouseClick(activateMethod, Qt::LeftButton);
     QTRY_VERIFY_WITH_TIMEOUT(methodsChanged.count() >= 1, 1000);

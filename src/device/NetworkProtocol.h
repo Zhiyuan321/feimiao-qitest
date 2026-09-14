@@ -1,5 +1,7 @@
 #pragma once
 #include <QByteArray>
+#include <QJsonObject>
+#include <QString>
 #include <QVector>
 
 namespace qitest {
@@ -21,6 +23,11 @@ public:
     static double vacuumMbarFromRaw(quint16 value);
     static bool decodePressure(const NetworkFrame &frame, QVector<double> *volts);
     static QByteArray tuningCommand(bool enabled);
+    // Fullscan 0x81 frame from the vendor V1.4 protocol and the supplied
+    // workstation parameter mapping. Returns empty on any unsafe conversion.
+    static QByteArray fullscanMethodCommand(const QJsonObject &parameters, QString *error = nullptr);
+    static bool decodeCommandAcknowledgement(const NetworkFrame &frame, quint8 expectedCommand,
+                                             bool *success);
     static quint16 crc16(const QByteArray &bytes);
     static bool decodeStatus(const NetworkFrame &frame, NetworkStatus *status);
     QVector<NetworkFrame> feed(const QByteArray &bytes);

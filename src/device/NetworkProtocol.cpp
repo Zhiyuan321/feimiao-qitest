@@ -1,10 +1,50 @@
 #include "device/NetworkProtocol.h"
 #include <cmath>
+#include <limits>
 
 namespace qitest {
 namespace {
 quint16 u16(const QByteArray &bytes, int offset) {
     return (quint16(quint8(bytes[offset])) << 8) | quint8(bytes[offset + 1]);
+}
+void appendU16(QByteArray &bytes, quint16 value) {
+    bytes.append(char(value >> 8)); bytes.append(char(value & 0xff));
+}
+QByteArray controlFrame(quint8 command, const QByteArray &payload) {
+    const int length = payload.size() + 2; // count + index are part of LEN.
+    QByteArray body;
+    body.reserve(payload.size() + 8);
+    body.append(char(0x10)); body.append(char(command));
+    appendU16(body, quint16(length)); body.append(char(0x01)); body.append(char(0x01));
+    body.append(payload);
+    const auto crc = NetworkProtocol::crc16(body);
+    QByteArray wire(1, char(0x55)); wire += body;
+    wire.append(char(crc >> 8)); wire.append(char(crc & 0xff)); wire.append(char(0xaa));
+    return wire;
+}
+bool exactInteger(const QJsonObject &values, const char *key, int minimum, int maximum,
+                  int *result, QString *error) {
+    const auto value = values.value(QLatin1String(key));
+    const double number = value.toDouble(std::numeric_limits<double>::quiet_NaN());
+    if (!value.isDouble() || !std::isfinite(number) || number < minimum || number > maximum
+        || std::abs(number - std::round(number)) > 1e-6) {
+        if (error) *error = QString::fromLatin1(key) + " 必须是协议范围内的整数";
+        return false;
+    }
+    *result = int(std::llround(number)); return true;
+}
+bool calibratedVoltage(double mass, quint16 *result, QString *error) {
+    // Coefficients are from the instrument vendor's Fullscan datafit profile
+    // supplied with QitVenture 6.1.0.1; the user's code applies this polynomial / 2.
+    constexpr double a = -6.988023031577528e-05;
+    constexpr double b = 5.813283558573496;
+    constexpr double c = -21.41114811567877;
+    const double raw = (c + b * mass + a * mass * mass) / 2.0;
+    if (!std::isfinite(raw) || raw < 0 || raw > 65535) {
+        if (error) *error = "质量数超出当前仪器 Fullscan 校准范围";
+        return false;
+    }
+    *result = quint16(raw); return true; // Matches the supplied code's int truncation.
 }
 }
 double NetworkProtocol::vacuumMbarFromRaw(quint16 value) {
@@ -20,12 +60,67 @@ bool NetworkProtocol::decodePressure(const NetworkFrame &frame, QVector<double> 
     *volts=values; return true;
 }
 QByteArray NetworkProtocol::tuningCommand(bool enabled) {
-    QByteArray body=QByteArray::fromHex("102000030101");
-    body.append(enabled ? char(0x22) : char(0x23));
-    const auto crc=crc16(body);
-    QByteArray wire(1,char(0x55)); wire+=body;
-    wire.append(char(crc>>8)); wire.append(char(crc&0xff)); wire.append(char(0xaa));
-    return wire;
+    return controlFrame(0x20, QByteArray(1, enabled ? char(0x22) : char(0x23)));
+}
+QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QString *error) {
+    const auto fail = [error](const QString &message) { if (error) *error = message; return QByteArray{}; };
+    if (values.value("scan_mode").toString().compare("Fullscan", Qt::CaseInsensitive) != 0)
+        return fail("真实方法下发当前仅开放 Fullscan");
+    int period=0, speed=0, rf=0, ac=0, injection=0, cooling=0, multiplier=0;
+    if (!exactInteger(values,"period",1,65535,&period,error)
+        || !exactInteger(values,"speed",1,100000,&speed,error)
+        || !exactInteger(values,"rf_frequency",1,100,&rf,error)
+        // The supplied running workstation uses 590 although V1.4 prints 0-500;
+        // preserve the observed firmware value while keeping the U16 wire bound.
+        || !exactInteger(values,"ac_frequency",0,65535,&ac,error)
+        || !exactInteger(values,"injection",0,10000,&injection,error)
+        || !exactInteger(values,"cooling",0,65535,&cooling,error)
+        || !exactInteger(values,"multiplier",0,2000,&multiplier,error)) return {};
+    const double storageMass=values.value("storage_mass").toDouble(-1);
+    const double lowMass=values.value("low_mass").toDouble(-1);
+    const double highMass=values.value("high_mass").toDouble(-1);
+    if (!std::isfinite(storageMass) || !std::isfinite(lowMass) || !std::isfinite(highMass)
+        || storageMass < 0 || lowMass < 0 || highMass <= lowMass) return fail("Fullscan 质量数范围无效");
+    quint16 storage=0, low=0, high=0;
+    if (!calibratedVoltage(storageMass,&storage,error) || !calibratedVoltage(lowMass,&low,error)
+        || !calibratedVoltage(highMass,&high,error)) return {};
+    const double scanTimeRaw=(highMass-lowMass)*10000.0/speed;
+    if (!std::isfinite(scanTimeRaw) || scanTimeRaw < 1 || scanTimeRaw > 65535)
+        return fail("扫描时间超出协议范围");
+    const int scanTime=int(scanTimeRaw); // supplied workstation code truncates to int
+    constexpr int rfFastScanTime=30, rfLowVoltageDuration=50;
+    if (injection + scanTime + rfFastScanTime + rfLowVoltageDuration + 1000 > period)
+        return fail("扫描各阶段时间和不得超过总周期");
+    constexpr double acK=0.01921598770176787, acB=544.8501152959262;
+    const int acLow=int(acK*(low*2)+acB), acHigh=int(acK*(high*2)+acB);
+    if (acLow < 0 || acLow > 65535 || acHigh < 0 || acHigh > 65535)
+        return fail("AC 电压换算超出协议范围");
+
+    // Hidden Fullscan values come from the vendor default.ini shipped with the
+    // same workstation build. Slots 25-44 are MS-N-only and remain zero.
+    int data[45]{};
+    data[0]=1; data[1]=1; data[2]=period; data[3]=rf; data[4]=3000;
+    data[5]=storage; data[6]=low; data[7]=high; data[8]=injection; data[9]=scanTime;
+    data[10]=acLow; data[11]=acHigh; data[12]=ac; data[13]=263; data[14]=0;
+    data[15]=20; data[16]=20; data[17]=500; data[18]=500; data[19]=500;
+    data[20]=1; data[21]=cooling; data[22]=multiplier;
+    data[23]=rfFastScanTime; data[24]=rfLowVoltageDuration;
+    QByteArray payload; payload.reserve(86);
+    for (int i=0;i<45;++i) {
+        if (i==0 || i==1 || i==14 || i==20) payload.append(char(data[i]));
+        else appendU16(payload, quint16(data[i]));
+    }
+    if (payload.size()!=86) return fail("Fullscan 方法报文长度异常");
+    if (error) error->clear();
+    return controlFrame(0x81,payload);
+}
+bool NetworkProtocol::decodeCommandAcknowledgement(const NetworkFrame &frame, quint8 expectedCommand,
+                                                   bool *success) {
+    if (!success || frame.action!=0x10 || frame.command!=expectedCommand || frame.count!=1
+        || frame.index!=1 || frame.payload.size()!=1) return false;
+    const quint8 result=quint8(frame.payload[0]);
+    if (result!=0x11 && result!=0x12) return false;
+    *success=result==0x11; return true;
 }
 quint16 NetworkProtocol::crc16(const QByteArray &bytes) {
     quint16 crc = 0xffff;

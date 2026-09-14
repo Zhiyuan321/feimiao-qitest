@@ -8,7 +8,7 @@
 - DeviceWaveformPanel：样品分析的“气压图”页显示网口 0x82 单包采样电压，保留采样点横轴；仪器配置中的射频调谐启停沿用原接口，RF曲线编码/倍率仍待确认。
 - SpectrumPlot / DeviceWaveformPanel：数据到达时最多每 16 ms 合并刷新一次（约 60 Hz），空闲时不持续重绘；数值自适应量程并为最高峰和边缘刻度保留显示余量。
 - InstrumentWorkbench：质量轴等离线工作区。
-- MethodEditorDialog：所有会话均显示完整方法参数，连接或断开485/TCP时字段不缩减。保存新版本仍为离线草稿，不直接下发设备；真实设备的激活继续由权限、协议映射和回读校验。当前沿用既有登录角色，未实现本地账户创建/密码管理。
+- MethodEditorDialog：所有会话均显示完整方法参数，连接或断开485/TCP时字段不缩减。可保存当前版本或另存版本；已修改的当前方法须重新通过“设为当前方法”确认，非活动版本可删除。真实设备仅在设为当前方法时按 485 基本设置、网口 Fullscan 的顺序下发并等待设备应答。当前沿用既有登录角色，未实现本地账户创建/密码管理。
 - SpectrumPlot / ChromatogramDialog：谱图与提取积分。
 - CalibrationPage：定量曲线。
 - UserStandardsPage / StandardComparisonDialog：用户标准与比较。

@@ -310,6 +310,16 @@ void WorkspaceTests::versionsAndActivatesMethods() {
     QVERIFY(repository.activateMethod(second.id, "engineer", &error));
     QCOMPARE(repository.activeMethod().id, second.id);
     QCOMPARE(repository.methods().size(), 2);
+    QVERIFY(repository.updateMethodVersion(first.id,"快速筛查",{{"scope","DEMO"},{"note","saved"}},"engineer",&error));
+    QCOMPARE(repository.methods().size(),2);
+    MethodDefinition updated;for(const auto &method:repository.methods())if(method.id==first.id)updated=method;
+    QCOMPARE(updated.name,QString("快速筛查"));QCOMPARE(updated.version,1);QCOMPARE(updated.parameters.value("note").toString(),QString("saved"));
+    QVERIFY(!repository.deleteMethodVersion(second.id,"engineer",&error));
+    QVERIFY(repository.updateMethodVersion(second.id,"筛查方法",{{"scope","DEMO"}},"engineer",&error));
+    QVERIFY(repository.activeMethod().id.isEmpty());
+    QVERIFY(repository.activateMethod(second.id,"engineer",&error));
+    QVERIFY(repository.deleteMethodVersion(first.id,"engineer",&error));
+    QCOMPARE(repository.methods().size(),1);
 }
 
 void WorkspaceTests::archivesAndValidatesRawSpectrum() {

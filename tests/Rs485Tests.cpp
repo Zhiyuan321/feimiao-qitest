@@ -2,6 +2,7 @@
 #include "domain/DisplayLabels.h"
 #include <QtTest>
 #include "Rs485TestDevice.h"
+#include "core/MethodDraft.h"
 #include <cmath>
 
 using namespace qitest;
@@ -12,6 +13,16 @@ class Rs485Tests final : public QObject {
 private slots:
     void documentedQueryAndStateOffsets() {
         QCOMPARE(Rs485Protocol::statusQuery(), QByteArray::fromHex("558830000101aa"));
+        QCOMPARE(Rs485Protocol::controlCommand(0x02,QByteArray::fromHex("0038")),
+                 QByteArray::fromHex("55880200020038aa"));
+        QCOMPARE(Rs485Protocol::controlCommand(0x12,QByteArray::fromHex("03e8")),
+                 QByteArray::fromHex("558812000203e8aa"));
+        bool acknowledged=false;
+        QVERIFY(Rs485Protocol::decodeAcknowledgement({0x02,QByteArray::fromHex("1100")},0x02,&acknowledged));
+        QVERIFY(acknowledged);
+        QVERIFY(Rs485Protocol::decodeAcknowledgement({0x02,QByteArray::fromHex("12")},0x02,&acknowledged));
+        QVERIFY(!acknowledged);
+        QVERIFY(!Rs485Protocol::decodeAcknowledgement({0x13,QByteArray::fromHex("11")},0x02,&acknowledged));
         const auto bytes = statusPayload();
         QCOMPARE(bytes.size(), 23);
         Rs485Status state;
@@ -98,6 +109,24 @@ private slots:
         QVERIFY(std::isnan(adapter.telemetry().tdTemperatureC));
         QVERIFY(std::isnan(adapter.health().ionSourceKv));
         QVERIFY(std::isnan(adapter.telemetry().ionSourceVoltageV));
+    }
+    void basicMethodStopsAtFirstRejectedAcknowledgement() {
+        FakeSerial device;
+        device.responder=[](const QByteArray &request){
+            if(request.size()<3)return QByteArray{};const quint8 command=quint8(request[2]);
+            if(command==0x30)return frame(statusPayload());
+            return frame(QByteArray::fromHex(command==0x13?"1200":"1100"),command);
+        };
+        Rs485Instrument adapter(&device,nullptr);QVERIFY(adapter.openPort("fixture"));
+        QTRY_VERIFY(adapter.health().connected);
+        const auto parameters=MethodDraft::defaultParameters();
+        QVERIFY(adapter.validateBasicMethodParameters(parameters).allowed);
+        QSignalSpy finished(&adapter,&Rs485Instrument::basicMethodParametersFinished);QString error;
+        QVERIFY(adapter.requestBasicMethodParameters("basic-1",parameters,&error));
+        QTRY_COMPARE(finished.size(),1);QVERIFY(!finished[0][1].toBool());
+        QVector<int> controls;for(const auto &wire:device.writes)if(wire.size()>2&&quint8(wire[2])!=0x30)controls<<quint8(wire[2]);
+        QCOMPARE(controls,QVector<int>({0x02,0x13}));
+        auto unsafe=parameters;unsafe.insert("source",1);QVERIFY(!adapter.validateBasicMethodParameters(unsafe).allowed);
     }
     void confirmedIonSourceVoltageAndZero() {
         FakeSerial device;

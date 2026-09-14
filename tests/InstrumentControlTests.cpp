@@ -418,6 +418,12 @@ private slots:
         controller.activateMethod(created.id);
         QCOMPARE(controller.activeMethod().id, created.id);
         QCOMPARE(controller.confirmedMethodParameters(), parameters);
+        auto updatedParameters=parameters;updatedParameters.insert("injection",381.0);
+        QVERIFY(controller.updateMethodDraft(created.id,created.name,updatedParameters));
+        QVERIFY(controller.activeMethod().id.isEmpty());
+        controller.activateMethod(created.id);
+        QCOMPARE(controller.activeMethod().id,created.id);
+        QCOMPARE(controller.confirmedMethodParameters(),updatedParameters);
         QCOMPARE(controller.telemetry().carrierGasFlowMlMin, 1.0);
         QCOMPARE(controller.telemetry().extractionFlowPercent, 0.0);
         QCOMPARE(controller.telemetry().ionTrapTemperatureC, 85.0);

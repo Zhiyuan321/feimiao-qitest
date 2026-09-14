@@ -31,6 +31,9 @@ public:
     CommandValidation validate(const InstrumentCommand &command) const override;
     CommandValidation validateSetting(const QString &, const QVariant &) const override;
     void requestSetting(const QString &id, const QString &key, const QVariant &) override;
+    QJsonObject confirmedMethodParameters() const override { return confirmedMethodParameters_; }
+    CommandValidation validateMethodParameters(const QJsonObject &parameters) const override;
+    void requestMethodParameters(const QString &requestId, const QJsonObject &parameters) override;
     QVector<SpectrumPoint> acquireSpectrum() override { return {}; }
     void cancel() override {}
 private:
@@ -38,11 +41,13 @@ private:
     void receive();
     void closePeer(const QString &message);
     void notify();
+    void sendFullscanMethod();
+    void finishMethod(bool success, const QString &error = {});
     void recordConnectionEvent(const QString &event, const QTcpSocket *socket);
     std::unique_ptr<Rs485Instrument> serial_;
     QTcpServer server_;
     QTcpSocket *peer_ = nullptr;
-    QTimer staleTimer_, updateTimer_, pressureTimer_, tuningTimer_;
+    QTimer staleTimer_, updateTimer_, pressureTimer_, tuningTimer_, methodTimer_;
     QVector<double> pressureVolts_;
     quint64 pressureFrameCount_ = 0;
     int pressureFrameIndex_ = 0, pressureFrameTotal_ = 0;
@@ -57,5 +62,8 @@ private:
     quint64 acceptedConnections_ = 0, replacedConnections_ = 0, rejectedConnections_ = 0;
     QList<QJsonObject> recentFrames_;
     QList<QJsonObject> connectionEvents_;
+    QString methodRequestId_;
+    QJsonObject pendingMethodParameters_, confirmedMethodParameters_;
+    QByteArray pendingMethodWire_;
 };
 }

@@ -1,6 +1,7 @@
 #include "device/NetworkInstrument.h"
 #include "NetworkTestFrames.h"
 #include "Rs485TestDevice.h"
+#include "core/MethodDraft.h"
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -11,6 +12,49 @@ using namespace qitest;
 class NetworkTests final : public QObject {
     Q_OBJECT
 private slots:
+    void fullscanMethodFrameMatchesDocumentedLayout() {
+        const auto values=MethodDraft::defaultParameters();QString error;
+        const auto wire=NetworkProtocol::fullscanMethodCommand(values,&error);
+        QVERIFY2(!wire.isEmpty(),qPrintable(error));QCOMPARE(wire.size(),96);
+        NetworkProtocol codec;const auto frames=codec.feed(wire);QCOMPARE(frames.size(),1);
+        const auto frame=frames.first();QCOMPARE(frame.action,quint8(0x10));QCOMPARE(frame.command,quint8(0x81));
+        QCOMPARE(frame.count,quint8(1));QCOMPARE(frame.index,quint8(1));QCOMPARE(frame.payload.size(),86);
+        QCOMPARE(quint8(frame.payload[0]),quint8(1));QCOMPARE(quint8(frame.payload[1]),quint8(1));
+        QCOMPARE(QByteArray(frame.payload.mid(2,2)),QByteArray::fromHex("2710"));
+        QCOMPARE(QByteArray(frame.payload.mid(4,2)),QByteArray::fromHex("0032"));
+        bool success=false;
+        const auto ack=codec.feed(test::networkFrame(QByteArray(1,char(0x11)),0x10,0x81));
+        QCOMPARE(ack.size(),1);QVERIFY(NetworkProtocol::decodeCommandAcknowledgement(ack[0],0x81,&success));QVERIFY(success);
+        auto invalid=values;invalid.insert("scan_mode","SIM");QVERIFY(NetworkProtocol::fullscanMethodCommand(invalid,&error).isEmpty());
+        invalid=values;invalid.insert("period",1000);QVERIFY(NetworkProtocol::fullscanMethodCommand(invalid,&error).isEmpty());
+    }
+    void fullscanWaitsForFiveRs485AcksThenNetworkAck() {
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &request){
+            if(request.size()<3)return QByteArray{};const quint8 command=quint8(request[2]);
+            return command==0x30?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),command);
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);
+        NetworkInstrument adapter(std::move(serial));QVERIFY(adapter.startListening("127.0.0.1",0,3000));
+        QTcpSocket client;client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails().value("port").toUInt());
+        QTRY_VERIFY(adapter.statusDetails().value("tcpConnected").toBool());
+        auto statusPayload=test::networkStatusWire().mid(7,21);statusPayload[9]=0;
+        client.write(test::networkFrame(statusPayload));QTRY_VERIFY(adapter.statusDetails().value("connected").toBool());
+        const auto values=MethodDraft::defaultParameters();QVERIFY(adapter.validateMethodParameters(values).allowed);
+        QSignalSpy finished(&adapter,&IInstrumentAdapter::methodParametersFinished);
+        adapter.requestMethodParameters("method-1",values);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,2000);
+        QString error;QCOMPARE(client.readAll(),NetworkProtocol::fullscanMethodCommand(values,&error));
+        QVector<int> controls;for(const auto &wire:port.writes)if(wire.size()>2&&quint8(wire[2])!=0x30)controls<<quint8(wire[2]);
+        QCOMPARE(controls,QVector<int>({0x02,0x13,0x12,0x04,0x14}));
+        QVERIFY(adapter.statusDetails().value("methodPending").toBool());
+        client.write(test::networkFrame(QByteArray(1,char(0x11)),0x10,0x81));
+        QTRY_COMPARE(finished.size(),1);QVERIFY(finished[0][1].toBool());
+        QCOMPARE(finished[0][2].toJsonObject(),values);QCOMPARE(adapter.confirmedMethodParameters(),values);
+        QVERIFY(!adapter.statusDetails().value("methodPending").toBool());
+        auto unsafe=values;unsafe.insert("source",1);QVERIFY(!adapter.validateMethodParameters(unsafe).allowed);
+    }
     void pressureConversionUsesUnsignedBigEndianAnd65535() {
         NetworkProtocol decoder; const auto frames=decoder.feed(test::networkFrame(QByteArray::fromHex("00008000ffff"),0x20,0x82));
         QCOMPARE(frames.size(),1);QVector<double> values;

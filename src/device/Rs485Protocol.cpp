@@ -12,6 +12,28 @@ QByteArray Rs485Protocol::statusQuery() {
     return QByteArray::fromHex("558830000101aa");
 }
 
+QByteArray Rs485Protocol::controlCommand(quint8 command, const QByteArray &payload) {
+    if (payload.isEmpty() || payload.size() > 1024) return {};
+    QByteArray wire;
+    wire.reserve(payload.size() + 6);
+    wire.append(char(0x55)); wire.append(char(0x88)); wire.append(char(command));
+    wire.append(char((payload.size() >> 8) & 0xff));
+    wire.append(char(payload.size() & 0xff));
+    wire.append(payload); wire.append(char(0xaa));
+    return wire;
+}
+
+bool Rs485Protocol::decodeAcknowledgement(const Rs485Frame &frame, quint8 expectedCommand,
+                                          bool *success) {
+    if (!success || frame.command != expectedCommand
+        || (frame.payload.size() != 1 && frame.payload.size() != 2)) return false;
+    const quint8 result = quint8(frame.payload[0]);
+    if ((result != 0x11 && result != 0x12)
+        || (frame.payload.size() == 2 && quint8(frame.payload[1]) != 0x00)) return false;
+    *success = result == 0x11;
+    return true;
+}
+
 QVector<Rs485Frame> Rs485Protocol::feed(const QByteArray &bytes) {
     QVector<Rs485Frame> frames;
     // Process bytewise so even a very large caller input cannot grow the cache.

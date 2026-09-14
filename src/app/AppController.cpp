@@ -336,8 +336,9 @@ void AppController::bindInstrumentSignals() {
             const bool activated = acknowledged && workspace_
                 && workspace_->activateMethod(methodId, sessionOperator_, &storageError);
             if (workspace_) workspace_->appendAudit(sessionOperator_,
-                activated ? "SIM_METHOD_CONFIRMED" : "SIM_METHOD_FAILED", methodId,
-                id + "; " + (error.isEmpty() ? storageError : error).left(300));
+                activated ? "DEVICE_METHOD_CONFIRMED" : "DEVICE_METHOD_FAILED", methodId,
+                id + "; " + (instrument_->descriptor().simulation ? "simulation; " : "hardware; ")
+                    + (error.isEmpty() ? storageError : error).left(300));
             if (activated) emit methodsChanged();
             emit notice(activated ? "方法参数已确认，当前方法已更新"
                 : "方法未激活：" + (error.isEmpty() ? QString("参数回读不一致") : error));
@@ -924,14 +925,48 @@ bool AppController::createMethodDraft(const QString &name, const QJsonObject &pa
     QString error;
     if (!MethodDraft::validate(parameters,&error)) {emit notice(error);return false;}
     const bool simulation = instrument_->descriptor().simulation;
+    const bool mappedFullscan=!simulation
+        && parameters.value("scan_mode").toString().compare("Fullscan",Qt::CaseInsensitive)==0
+        && parameters.value("source").isDouble() && parameters.value("source").toDouble()==0.0;
     const auto method=workspace_->createMethodVersion(name,
         {{"data_scope", simulation ? "DEMO_SIMULATION" : "OFFLINE_DRAFT"},
-         {"instrument_contract", simulation ? "sim-contract-1" : "UNMAPPED"},
+         {"instrument_contract", simulation ? "sim-contract-1" : mappedFullscan ? "vendor-fullscan-0x81+rs485-v2.1" : "UNMAPPED"},
          {"method_parameters",parameters}},sessionOperator_,&error);
     if(method.id.isEmpty()){emit notice("保存失败："+error);return false;}
     emit methodsChanged();emit notice(simulation
         ? "方法已保存"
-        : "方法参数已保存，尚未映射或下发真实仪器");return true;
+        : mappedFullscan ? "方法已保存；设为当前方法时下发仪器" : "方法已保存；当前参数尚无完整下发映射");return true;
+}
+bool AppController::updateMethodDraft(const QString &methodId,const QString &name,const QJsonObject &parameters) {
+    if (!workspace_ || !AuthorizationPolicy::allows(sessionRole_,Permission::ManageMethods)) {
+        emit notice("无方法编辑权限或仓库不可用");return false;
+    }
+    if (phase_==Phase::Acquiring || phase_==Phase::Analyzing) {emit notice("检测中不能修改方法");return false;}
+    QString error;if(!MethodDraft::validate(parameters,&error)){emit notice(error);return false;}
+    MethodDefinition existing;for(const auto &method:methods())if(method.id==methodId){existing=method;break;}
+    if(existing.id.isEmpty()){emit notice("所选方法已不存在");return false;}
+    QJsonObject envelope=existing.parameters;
+    envelope.insert("method_parameters",parameters);
+    envelope.insert("data_scope",instrument_->descriptor().simulation?"DEMO_SIMULATION":"OFFLINE_DRAFT");
+    const bool mappedFullscan=!instrument_->descriptor().simulation
+        && parameters.value("scan_mode").toString().compare("Fullscan",Qt::CaseInsensitive)==0
+        && parameters.value("source").toDouble(-1)==0.0;
+    envelope.insert("instrument_contract",instrument_->descriptor().simulation?"sim-contract-1":
+        mappedFullscan?"vendor-fullscan-0x81+rs485-v2.1":"UNMAPPED");
+    if(!workspace_->updateMethodVersion(methodId,name,envelope,sessionOperator_,&error)){
+        emit notice("保存失败："+error);return false;
+    }
+    emit methodsChanged();emit notice(existing.active?"方法已保存，请重新设为当前方法":"方法已保存");return true;
+}
+bool AppController::deleteMethod(const QString &methodId) {
+    if (!workspace_ || !AuthorizationPolicy::allows(sessionRole_,Permission::ManageMethods)) {
+        emit notice("无方法删除权限或仓库不可用");return false;
+    }
+    if(phase_==Phase::Acquiring || phase_==Phase::Analyzing){emit notice("检测中不能删除方法");return false;}
+    QString error;if(!workspace_->deleteMethodVersion(methodId,sessionOperator_,&error)){
+        emit notice(error=="active method cannot be deleted"?"当前方法不能删除，请先切换到其他方法":"删除失败："+error);return false;
+    }
+    emit methodsChanged();emit notice("方法已删除");return true;
 }
 void AppController::activateMethod(const QString &methodId) {
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) {
@@ -942,11 +977,8 @@ void AppController::activateMethod(const QString &methodId) {
     }
     QString error;
     for(const auto &method:methods()) if(method.id==methodId) {
-        if(method.parameters.value("data_scope")=="OFFLINE_DRAFT") {
-            emit notice("此方法尚未验证；扫描参数与仪器协议映射未确认，不能用于采集");return;
-        }
         const QJsonObject parameters = method.parameters.value("method_parameters").toObject();
-        if (instrument_->descriptor().simulation && !parameters.isEmpty()) {
+        if (!parameters.isEmpty()) {
             if (!pendingMethodRequestId_.isEmpty()) { emit notice("请等待上一套方法参数确认完成"); return; }
             const auto validation = instrument_->validateMethodParameters(parameters);
             if (!validation.allowed) { emit notice("方法参数校验未通过：" + validation.reason); return; }

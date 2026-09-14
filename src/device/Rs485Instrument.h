@@ -37,9 +37,18 @@ public:
     bool exportFrames(const QString &path, QString *error) const { return pump_.exportFrames(path, statusDetails(), error); }
     QString portName() const { return portName_; }
     bool portOpen() const { return transport_->isOpen(); }
+    CommandValidation validateBasicMethodParameters(const QJsonObject &parameters) const;
+    bool requestBasicMethodParameters(const QString &requestId, const QJsonObject &parameters,
+                                      QString *error = nullptr);
+    void cancelBasicMethodParameters(const QString &requestId);
+signals:
+    void basicMethodParametersFinished(const QString &requestId, bool success,
+                                       const QJsonObject &parameters, const QString &error);
 private:
     void query();
     void receive();
+    void sendNextBasicParameter();
+    void finishBasicParameters(bool success, const QString &error = {});
     void fail(const QString &message);
     void clearReadings();
     void clearMainReadings();
@@ -56,5 +65,9 @@ private:
     QString portName_, message_ = "485未连接 · 只读状态";
     QDateTime lastReadback_;
     bool pending_ = false, closing_ = false;
+    QVector<QPair<quint8,QByteArray>> basicQueue_;
+    int basicIndex_ = -1;
+    QString basicRequestId_;
+    QJsonObject basicParameters_;
 };
 } // namespace qitest

@@ -76,6 +76,9 @@ public:
         const QString &targetId, const QString &detail, QString *error = nullptr);
     MethodDefinition createMethodVersion(const QString &name, const QJsonObject &parameters,
         const QString &actor, QString *error = nullptr);
+    bool updateMethodVersion(const QString &methodId, const QString &name,
+        const QJsonObject &parameters, const QString &actor, QString *error = nullptr);
+    bool deleteMethodVersion(const QString &methodId, const QString &actor, QString *error = nullptr);
     QVector<MethodDefinition> methods() const;
     bool activateMethod(const QString &methodId, const QString &actor, QString *error = nullptr);
     MethodDefinition activeMethod() const;

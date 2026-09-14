@@ -2261,10 +2261,13 @@ QWidget *MainWindow::createMethodPage() {
     create->setObjectName("editMethodParameters");
     create->setProperty("sciRole", "primary");
     auto *activate = new QPushButton("激活所选版本");
+    auto *remove = new QPushButton("删除");
+    remove->setObjectName("deleteMethodVersion");
     editorLayout->addWidget(methodName_, 1);
     methodRevisionNote_->setParent(editor);methodRevisionNote_->hide();
     editorLayout->addWidget(create);
     editorLayout->addWidget(activate);
+    editorLayout->addWidget(remove);
     layout->addWidget(editor);
 
     methodTable_ = new QTableWidget(0, 6);
@@ -2290,6 +2293,7 @@ QWidget *MainWindow::createMethodPage() {
     activate->setText("设为当前方法");
     activate->setToolTip("将所选版本用于下一次检测，不会立即开始采集");
     activate->setEnabled(false);
+    remove->setEnabled(false);
     layout->addWidget(methodTable_, 1);
     connect(create, &QPushButton::clicked, this, [this] {
         if (methodName_->text().trimmed().size() < 2) {
@@ -2308,19 +2312,33 @@ QWidget *MainWindow::createMethodPage() {
         }
         auto *dialog=new MethodEditorDialog(name,values,[this,baseId](const QString &title,const QJsonObject &parameters){
             return controller_->createMethodDraft(title,parameters,baseId);
-        },this,controller_->fullMethodAccess()); dialog->open();
+        },this,controller_->fullMethodAccess(),baseId.isEmpty()?std::function<bool(const QString &,const QJsonObject &)>{}:
+            std::function<bool(const QString &,const QJsonObject &)>([this,baseId](const QString &title,const QJsonObject &parameters){
+                return controller_->updateMethodDraft(baseId,title,parameters);
+            })); dialog->open();
     });
-    connect(methodTable_, &QTableWidget::itemSelectionChanged, this, [this, activate] {
+    connect(methodTable_, &QTableWidget::itemSelectionChanged, this, [this, activate, remove] {
         const int row = methodTable_->currentRow();
         const auto *item = row >= 0 ? methodTable_->item(row, 0) : nullptr;
         const bool valid = item && !item->data(Qt::UserRole).toString().isEmpty();
         const bool alreadyActive = item && item->data(Qt::UserRole + 1).toBool();
         activate->setEnabled(valid && !alreadyActive);
+        remove->setEnabled(valid && !alreadyActive);
         if (valid && methodName_) {
             const QString methodId = item->data(Qt::UserRole).toString();
             for (const auto &method : controller_->methods())
                 if (method.id == methodId) { methodName_->setText(method.name); break; }
         }
+    });
+    connect(remove,&QPushButton::clicked,this,[this,remove]{
+        const int row=methodTable_->currentRow();const auto *item=row>=0?methodTable_->item(row,0):nullptr;
+        const QString methodId=item?item->data(Qt::UserRole).toString():QString{};
+        if(methodId.isEmpty()||item->data(Qt::UserRole+1).toBool()){remove->setEnabled(false);return;}
+        QString label;
+        if(auto *nameItem=methodTable_->item(row,1))label=nameItem->text();
+        if(QMessageBox::question(this,"删除方法","删除“"+label+"”？",QMessageBox::Yes|QMessageBox::No,QMessageBox::No)!=QMessageBox::Yes)return;
+        methodTable_->clearSelection();methodTable_->setCurrentItem(nullptr);remove->setEnabled(false);
+        controller_->deleteMethod(methodId);
     });
     connect(activate, &QPushButton::clicked, this, [this, activate] {
         const int row = methodTable_->currentRow();

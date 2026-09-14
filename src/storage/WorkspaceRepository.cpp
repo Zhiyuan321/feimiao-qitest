@@ -433,6 +433,44 @@ MethodDefinition WorkspaceRepository::createMethodVersion(const QString &name,
     return {id, trimmedName, version, parameters, checksum, actor, createdAt, false};
 }
 
+bool WorkspaceRepository::updateMethodVersion(const QString &methodId,const QString &name,
+    const QJsonObject &parameters,const QString &actor,QString *error) {
+    const QString trimmedName=name.trimmed();
+    if (methodId.isEmpty() || trimmedName.isEmpty()) {if(error)*error="method id or name is empty";return false;}
+    QSqlQuery current(database_); current.prepare("SELECT active,version FROM methods WHERE id=?");
+    current.addBindValue(methodId);
+    if (!current.exec() || !current.next()) {if(error)*error="method not found";return false;}
+    const QByteArray json=QJsonDocument(parameters).toJson(QJsonDocument::Compact);
+    const QString checksum=QString::fromLatin1(QCryptographicHash::hash(json,QCryptographicHash::Sha256).toHex());
+    if(!database_.transaction()){if(error)*error=database_.lastError().text();return false;}
+    QSqlQuery update(database_);
+    // Editing the current method makes it inactive. It must pass the normal
+    // device acknowledgement gate again before it can be used for acquisition.
+    update.prepare("UPDATE methods SET name=?,parameters_json=?,checksum=?,active=0 WHERE id=?");
+    update.addBindValue(trimmedName);update.addBindValue(QString::fromUtf8(json));update.addBindValue(checksum);update.addBindValue(methodId);
+    if (!update.exec() || update.numRowsAffected()!=1) {
+        if(error)*error=update.lastError().text().isEmpty()?"method not found":update.lastError().text();database_.rollback();return false;
+    }
+    if(!appendAudit(actor,"METHOD_VERSION_UPDATED",methodId,
+        QString("%1 v%2 sha256=%3 reactivation_required=%4").arg(trimmedName).arg(current.value(1).toInt()).arg(checksum)
+            .arg(current.value(0).toBool()),error)){
+        database_.rollback();return false;
+    }
+    if(!database_.commit()){if(error)*error=database_.lastError().text();return false;}return true;
+}
+
+bool WorkspaceRepository::deleteMethodVersion(const QString &methodId,const QString &actor,QString *error) {
+    QSqlQuery current(database_);current.prepare("SELECT name,version,active FROM methods WHERE id=?");current.addBindValue(methodId);
+    if(!current.exec()||!current.next()){if(error)*error="method not found";return false;}
+    if(current.value(2).toBool()){if(error)*error="active method cannot be deleted";return false;}
+    const QString detail=QString("%1 v%2").arg(current.value(0).toString()).arg(current.value(1).toInt());
+    if(!database_.transaction()){if(error)*error=database_.lastError().text();return false;}
+    QSqlQuery remove(database_);remove.prepare("DELETE FROM methods WHERE id=?");remove.addBindValue(methodId);
+    if(!remove.exec()||remove.numRowsAffected()!=1){if(error)*error=remove.lastError().text();database_.rollback();return false;}
+    if(!appendAudit(actor,"METHOD_VERSION_DELETED",methodId,detail,error)){database_.rollback();return false;}
+    if(!database_.commit()){if(error)*error=database_.lastError().text();return false;}return true;
+}
+
 QVector<MethodDefinition> WorkspaceRepository::methods() const {
     QVector<MethodDefinition> result;
     QSqlQuery query(database_);

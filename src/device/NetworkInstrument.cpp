@@ -7,6 +7,12 @@ namespace qitest {
 NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QObject *parent)
     : IInstrumentAdapter(parent), serial_(serial ? std::move(serial) : std::make_unique<Rs485Instrument>()) {
     connect(serial_.get(), &IInstrumentAdapter::stateChanged, this, &IInstrumentAdapter::stateChanged);
+    connect(serial_.get(), &Rs485Instrument::basicMethodParametersFinished, this,
+        [this](const QString &id,bool success,const QJsonObject &,const QString &error) {
+            if (id!=methodRequestId_ || id.isEmpty()) return;
+            if (!success) { finishMethod(false,error); return; }
+            sendFullscanMethod();
+        });
     server_.setMaxPendingConnections(1);
     connect(&server_, &QTcpServer::newConnection, this, &NetworkInstrument::acceptConnection);
     staleTimer_.setSingleShot(true);
@@ -23,6 +29,11 @@ NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QO
         tuningPending_=false;
         closePeer("调谐指令应答超时，设备状态未知；已隔离旧连接，请重连后核对");
         tuningMessage_="调谐应答超时，设备可能仍在运行；重连后可发送结束"; emit stateChanged();
+    });
+    methodTimer_.setSingleShot(true); methodTimer_.setInterval(3000);
+    connect(&methodTimer_,&QTimer::timeout,this,[this]{
+        finishMethod(false,"方法设置应答超时，设备状态未知；已关闭网口连接");
+        closePeer("方法设置应答超时，等待仪器重新连接");
     });
     // Raw spectra can arrive rapidly; keep GUI refresh bounded to 10 Hz.
     updateTimer_.setSingleShot(true); updateTimer_.setInterval(100);
@@ -61,7 +72,12 @@ bool NetworkInstrument::startListening(const QString &address, quint16 port, int
 }
 void NetworkInstrument::closePeer(const QString &message) {
     pressureTimer_.stop(); pressureVolts_.clear(); pressureFrameIndex_=pressureFrameTotal_=0;
+    confirmedMethodParameters_={};
     tuningTimer_.stop(); tuningPending_=false; tuningMessage_="连接已关闭，调谐状态未知";
+    if (!methodRequestId_.isEmpty()) {
+        serial_->cancelBasicMethodParameters(methodRequestId_);
+        finishMethod(false,"网口连接中断，方法设置未确认");
+    }
     staleTimer_.stop(); decoder_.reset(); fresh_ = false; status_ = {}; lastReadback_ = {};
     if (peer_) {
         recordConnectionEvent("closed", peer_);
@@ -139,12 +155,16 @@ void NetworkInstrument::receive() {
                 ? (tuningTarget_ ? "设备已应答调谐开启成功；RF曲线换算待确认" : "设备已应答调谐关闭成功")
                 : "设备拒绝调谐指令，实际状态未知";
         }
+        bool methodSucceeded=false;
+        const bool methodAck=NetworkProtocol::decodeCommandAcknowledgement(frame,0x81,&methodSucceeded);
+        if (methodAck && !methodRequestId_.isEmpty())
+            finishMethod(methodSucceeded,methodSucceeded?QString{}:"设备拒绝 Fullscan 方法参数");
         if (decoded) {
             status_ = next; fresh_ = true; lastReadback_ = QDateTime::currentDateTime();
-            staleTimer_.start(); message_ = "网口状态回读正常；已支持调谐启停，其他控制未开放";
-        } else if(!pressureDecoded && !tuningAck) ++unparsedFrames_;
+            staleTimer_.start(); message_ = "网口状态回读正常；Fullscan 方法与调谐可用";
+        } else if(!pressureDecoded && !tuningAck && !methodAck) ++unparsedFrames_;
         recentFrames_.append(QJsonObject{{"time", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
-            {"peer", peerAddress_}, {"direction", "RX"}, {"decodedStatus", decoded}, {"decodedPressure", pressureDecoded}, {"tuningAck", tuningAck},
+            {"peer", peerAddress_}, {"direction", "RX"}, {"decodedStatus", decoded}, {"decodedPressure", pressureDecoded}, {"tuningAck", tuningAck}, {"methodAck",methodAck},
             {"action", frame.action}, {"command", frame.command}, {"frameCount", frame.count},
             {"frameIndex", frame.index}, {"hex", QString::fromLatin1(frame.wire.toHex(' '))}});
         if (recentFrames_.size() > 256) recentFrames_.removeFirst();
@@ -155,7 +175,7 @@ void NetworkInstrument::receive() {
 bool NetworkInstrument::requestTuning(bool enabled, QString *error) {
     const auto fail=[error](const QString &message){if(error)*error=message;return false;};
     if(!peer_ || peer_->state()!=QAbstractSocket::ConnectedState) return fail("请先连接网口仪器");
-    if(tuningPending_) return fail("正在等待上一条调谐指令应答");
+    if(tuningPending_ || !methodRequestId_.isEmpty()) return fail("正在等待上一条设备指令应答");
     if(enabled && (!fresh_ || status_.experimentRunning)) return fail("需有效网口状态且实验已停止，才能开始调谐");
     tuningTarget_=enabled; tuningPending_=true; tuningMessage_=enabled?"等待设备确认调谐开启":"等待设备确认调谐关闭";
     const auto wire=NetworkProtocol::tuningCommand(enabled);
@@ -168,8 +188,51 @@ bool NetworkInstrument::requestTuning(bool enabled, QString *error) {
     }
     emit stateChanged();return true;
 }
+CommandValidation NetworkInstrument::validateMethodParameters(const QJsonObject &parameters) const {
+    if (!peer_ || peer_->state()!=QAbstractSocket::ConnectedState || !fresh_)
+        return {false,"网口尚未收到有效状态回读"};
+    if (status_.experimentRunning) return {false,"检测运行中不能修改方法"};
+    if (tuningPending_ || !methodRequestId_.isEmpty()) return {false,"正在等待上一条设备指令应答"};
+    QString error;
+    if (NetworkProtocol::fullscanMethodCommand(parameters,&error).isEmpty()) return {false,error};
+    const auto serialValidation=serial_->validateBasicMethodParameters(parameters);
+    if (!serialValidation.allowed) return serialValidation;
+    return {true,{}};
+}
+void NetworkInstrument::requestMethodParameters(const QString &requestId,const QJsonObject &parameters) {
+    const auto validation=validateMethodParameters(parameters);
+    if (requestId.isEmpty() || !validation.allowed) {
+        emit methodParametersFinished(requestId,false,{},requestId.isEmpty()?"方法请求号为空":validation.reason); return;
+    }
+    QString error; const auto wire=NetworkProtocol::fullscanMethodCommand(parameters,&error);
+    if (wire.isEmpty()) { emit methodParametersFinished(requestId,false,{},error); return; }
+    methodRequestId_=requestId; pendingMethodParameters_=parameters; pendingMethodWire_=wire;
+    if (!serial_->requestBasicMethodParameters(requestId,parameters,&error)) finishMethod(false,error);
+}
+void NetworkInstrument::sendFullscanMethod() {
+    if (methodRequestId_.isEmpty() || !peer_ || peer_->state()!=QAbstractSocket::ConnectedState
+        || !fresh_ || status_.experimentRunning) {
+        finishMethod(false,"网口状态已失效或检测已经开始，Fullscan 参数未发送"); return;
+    }
+    recentFrames_.append(QJsonObject{{"time",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {"direction","TX"},{"peer",peerAddress_},{"action",0x10},{"command",0x81},
+        {"hex",QString::fromLatin1(pendingMethodWire_.toHex(' '))}});
+    if (recentFrames_.size()>256) recentFrames_.removeFirst();
+    methodTimer_.start();
+    if (peer_->write(pendingMethodWire_)!=pendingMethodWire_.size()) {
+        finishMethod(false,"Fullscan 方法参数发送失败"); closePeer("方法参数发送失败，等待仪器重连");
+    }
+}
+void NetworkInstrument::finishMethod(bool success,const QString &error) {
+    if (methodRequestId_.isEmpty()) return;
+    const QString id=methodRequestId_; const QJsonObject values=pendingMethodParameters_;
+    methodTimer_.stop(); methodRequestId_.clear(); pendingMethodParameters_={}; pendingMethodWire_.clear();
+    if (success) confirmedMethodParameters_=values;
+    emit methodParametersFinished(id,success,success?values:QJsonObject{},error);
+    emit stateChanged();
+}
 InstrumentDescriptor NetworkInstrument::descriptor() const {
-    return {"便携式质谱 · 网口/485", {}, "tcp-20260910-pressure82-tuning20+rs485-status23", false};
+    return {"便携式质谱 · 网口/485", {}, "tcp-v1.4-fullscan81+rs485-v2.1-method", false};
 }
 InstrumentHealth NetworkInstrument::health() const {
     auto value = serial_->health();
@@ -210,6 +273,7 @@ QVariantMap NetworkInstrument::statusDetails() const {
     data.insert("pressureFrames",pressureFrameCount_); data.insert("pressurePoints",pressureVolts_.size());
     data.insert("pressureFrameIndex",pressureFrameIndex_);data.insert("pressureFrameTotal",pressureFrameTotal_);
     data.insert("tuningPending",tuningPending_);data.insert("tuningMessage",tuningMessage_);
+    data.insert("methodPending",!methodRequestId_.isEmpty());
     if (lastReadback_.isValid()) data.insert("lastReadback", lastReadback_.toString("HH:mm:ss"));
     if (fresh_) {
         data.insert("multiplierVoltageV", status_.multiplierVoltageV);

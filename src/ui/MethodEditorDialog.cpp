@@ -21,7 +21,8 @@
 
 namespace qitest {
 MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObject &initial,
-        std::function<bool(const QString &,const QJsonObject &)> persist,QWidget *parent,bool fullAccess):QDialog(parent) {
+        std::function<bool(const QString &,const QJsonObject &)> persist,QWidget *parent,bool fullAccess,
+        std::function<bool(const QString &,const QJsonObject &)> update):QDialog(parent) {
     setObjectName("methodParameterEditor"); setAttribute(Qt::WA_DeleteOnClose); setWindowTitle("方法参数");
     const auto available = QGuiApplication::primaryScreen()->availableGeometry();
     resize(qMin(940, available.width() - 24), qMin(690, available.height() - 48));
@@ -38,7 +39,7 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
     name->setReadOnly(!fullAccess);
     titleRow->addWidget(name,1); layout->addLayout(titleRow);
     if (!fullAccess) {
-        auto *notice=new QLabel("普通账号只可另存扫描模式和进样时间；其他参数沿用管理员方法。");
+        auto *notice=new QLabel("仅可修改扫描模式和进样时间");
         notice->setObjectName("methodDraftHint"); notice->setWordWrap(true); layout->addWidget(notice);
     }
     QJsonObject displayed=fullAccess ? MethodDraft::defaultParameters() : initial;
@@ -79,9 +80,14 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
     connect(mode,&QComboBox::currentTextChanged,this,[=](const QString &value){dirty_=true;updateMode(value);});
     auto *feedback=new QLabel; feedback->setWordWrap(true); feedback->setObjectName("methodDraftFeedback"); layout->addWidget(feedback);
     auto *row=new QHBoxLayout; layout->addLayout(row);
-    auto *load=new QPushButton("打开文件"); load->setObjectName("loadMethodDraft"); auto *exportButton=new QPushButton("导出文件"); exportButton->setObjectName("exportMethodDraft"); auto *save=new QPushButton("保存新版本"); auto *cancel=new QPushButton("取消");
-    save->setObjectName("saveMethodDraft"); save->setProperty("sciRole","primary");
-    for(auto *b:{load,exportButton,save,cancel}) { b->setMinimumHeight(44); row->addWidget(b); }
+    auto *load=new QPushButton("打开文件"); load->setObjectName("loadMethodDraft");
+    auto *exportButton=new QPushButton("导出文件"); exportButton->setObjectName("exportMethodDraft");
+    auto *saveCurrent=new QPushButton("保存"); saveCurrent->setObjectName("updateMethodDraft");
+    auto *save=new QPushButton("另存版本"); auto *cancel=new QPushButton("取消");
+    save->setObjectName("saveMethodDraft");
+    (update?saveCurrent:save)->setProperty("sciRole","primary");
+    saveCurrent->setVisible(bool(update)); saveCurrent->setEnabled(bool(update));
+    for(auto *b:{load,exportButton,saveCurrent,save,cancel}) { b->setMinimumHeight(44); row->addWidget(b); }
     connect(name,&QLineEdit::textChanged,this,[this]{dirty_=true;});
     const auto collect=[=](QJsonObject *values) {
         if(name->text().trimmed().size()<2) {feedback->setText("请填写 2–16 字的方法名称");return false;}
@@ -100,6 +106,7 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
         *values=result; return true;
     };
     connect(save,&QPushButton::clicked,this,[=]{QJsonObject values;if(collect(&values) && persist(name->text().trimmed(),values)){dirty_=false;accept();}});
+    connect(saveCurrent,&QPushButton::clicked,this,[=]{QJsonObject values;if(update && collect(&values) && update(name->text().trimmed(),values)){dirty_=false;accept();}});
     connect(cancel,&QPushButton::clicked,this,&QDialog::reject);
     connect(exportButton,&QPushButton::clicked,this,[=]{
         QJsonObject values;if(!collect(&values))return;
@@ -120,7 +127,7 @@ MethodEditorDialog::MethodEditorDialog(const QString &initialName,const QJsonObj
         if(fullAccess) name->setText(title);
         mode->setCurrentText(values.value("scan_mode").toString());
         for(auto i=edits.cbegin();i!=edits.cend();++i)i.value()->setText(values.contains(i.key())?QString::number(values.value(i.key()).toDouble(),'g',17):QString{});
-        dirty_=false;feedback->setText(fullAccess ? "方法已载入；编辑后可保存为新版本" : "仅载入扫描模式和进样时间；其他参数保留原方法值");
+        dirty_=false;feedback->setText(fullAccess ? "方法已载入" : "已载入可调整参数");
     });
 }
 void MethodEditorDialog::reject(){

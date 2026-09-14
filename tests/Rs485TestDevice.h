@@ -3,6 +3,7 @@
 #include <QTimer>
 #include <QList>
 #include <cstring>
+#include <functional>
 
 namespace qitest::test {
 inline QByteArray statusPayload() {
@@ -25,6 +26,7 @@ class FakeSerial final : public QIODevice {
 public:
     QByteArray input, reply;
     QList<QByteArray> writes;
+    std::function<QByteArray(const QByteArray &)> responder;
     bool failWrite = false;
     bool isSequential() const override { return true; }
     qint64 bytesAvailable() const override { return input.size() + QIODevice::bytesAvailable(); }
@@ -36,10 +38,10 @@ protected:
         return length;
     }
     qint64 writeData(const char *data, qint64 size) override {
-        writes << QByteArray(data, int(size));
+        const QByteArray request(data,int(size));writes << request;
         if (failWrite) return -1;
-        if (!reply.isEmpty()) {
-            const auto captured = reply;
+        const auto captured=responder?responder(request):reply;
+        if (!captured.isEmpty()) {
             QTimer::singleShot(0, this, [this, captured] { if (isOpen()) deliver(captured); });
         }
         return size;

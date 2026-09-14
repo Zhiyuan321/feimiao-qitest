@@ -1,6 +1,7 @@
 #include "device/Rs485Instrument.h"
 #include <QSerialPort>
 #include <QSerialPortInfo>
+#include <cmath>
 
 namespace qitest {
 Rs485Instrument::Rs485Instrument(QObject *parent)
@@ -18,6 +19,9 @@ Rs485Instrument::Rs485Instrument(QIODevice *transport, QObject *parent)
     timeout_.setInterval(1500);
     connect(&pollTimer_, &QTimer::timeout, this, &Rs485Instrument::query);
     connect(&timeout_, &QTimer::timeout, this, [this] {
+        if (!basicRequestId_.isEmpty()) {
+            fail("485参数应答超时，已停止后续下发并关闭串口"); return;
+        }
         if (activeQuery_ >= 0) {
             pending_ = false; pumpEnabled_ = false; nextQuery_ = -1;
             pump_.record("EVENT", {}, "分子泵查询超时 " + QString::fromLatin1(PumpProtocol::parameter(activeQuery_)));
@@ -32,7 +36,10 @@ Rs485Instrument::Rs485Instrument(QIODevice *transport, QObject *parent)
     if (serial_) {
         serial_->setReadBufferSize(4096);
         connect(serial_, &QSerialPort::errorOccurred, this, [this](QSerialPort::SerialPortError error) {
-            if (!closing_ && pending_ && error != QSerialPort::NoError)
+            if (!closing_ && !basicRequestId_.isEmpty() && error != QSerialPort::NoError) {
+                const QString message="485串口错误："+serial_->errorString();
+                finishBasicParameters(false,message);fail(message);
+            } else if (!closing_ && pending_ && error != QSerialPort::NoError)
                 fail("485串口错误：" + serial_->errorString());
             else if (!closing_ && serial_->isOpen() && error == QSerialPort::ResourceError)
                 fail("485设备已断开：" + serial_->errorString());
@@ -84,6 +91,7 @@ void Rs485Instrument::clearReadings() {
     pumpEnabled_ = false; nextQuery_ = activeQuery_ = -1;
     pump_.invalidate("485已断开，分子泵读数已失效");
     clearMainReadings();
+    basicQueue_.clear(); basicIndex_=-1; basicRequestId_.clear(); basicParameters_={};
 }
 void Rs485Instrument::clearMainReadings() {
     health_ = unavailableRs485Health();
@@ -96,6 +104,7 @@ void Rs485Instrument::closePort() { fail("485未连接 · 只读状态"); }
 
 void Rs485Instrument::fail(const QString &message) {
     if (closing_) return;
+    const QString interruptedRequest=basicRequestId_;
     closing_ = true;
     pollTimer_.stop(); timeout_.stop(); mainFreshTimer_.stop();
     if (transport_->isOpen()) transport_->close();
@@ -103,10 +112,12 @@ void Rs485Instrument::fail(const QString &message) {
     message_ = message;
     closing_ = false;
     emit stateChanged();
+    if(!interruptedRequest.isEmpty())
+        emit basicMethodParametersFinished(interruptedRequest,false,{},message);
 }
 
 void Rs485Instrument::query() {
-    if (!transport_->isOpen() || pending_) return;
+    if (!transport_->isOpen() || pending_ || !basicRequestId_.isEmpty()) return;
     decoder_.reset(); pump_.resetDecoder();
     // Drop unsolicited / late bytes accumulated before this query.
     if (serial_) serial_->clear(QSerialPort::Input);
@@ -122,6 +133,22 @@ void Rs485Instrument::receive() {
     if (!transport_->isOpen()) return;
     const auto bytes = transport_->read(4096);
     pump_.record("RX", bytes, "共用485接收字节块");
+    if (!basicRequestId_.isEmpty()) {
+        for (const auto &frame : decoder_.feed(bytes)) {
+            if (basicIndex_<0 || basicIndex_>=basicQueue_.size()) continue;
+            bool success=false;
+            if (!Rs485Protocol::decodeAcknowledgement(frame,basicQueue_[basicIndex_].first,&success)) continue;
+            timeout_.stop();
+            if (!success) { finishBasicParameters(false,"485设备拒绝基本设置，后续参数未发送"); return; }
+            ++basicIndex_;
+            if (basicIndex_>=basicQueue_.size()) finishBasicParameters(true);
+            else QTimer::singleShot(40,this,&Rs485Instrument::sendNextBasicParameter);
+            return;
+        }
+        if (transport_->isOpen() && transport_->bytesAvailable()>0)
+            QTimer::singleShot(0,this,&Rs485Instrument::receive);
+        return;
+    }
     if (!pending_) return;
     if (activeQuery_ >= 0) {
         if (pump_.consume(bytes, activeQuery_)) {
@@ -158,6 +185,73 @@ void Rs485Instrument::receive() {
     }
     if (transport_->isOpen() && transport_->bytesAvailable() > 0)
         QTimer::singleShot(0, this, &Rs485Instrument::receive);
+}
+
+CommandValidation Rs485Instrument::validateBasicMethodParameters(const QJsonObject &values) const {
+    if (!transport_->isOpen() || !health_.connected) return {false,"485尚未收到有效状态回读"};
+    if (!basicRequestId_.isEmpty()) return {false,"485正在处理上一套参数"};
+    const auto exact=[&values](const char *key,double minimum,double maximum,int scale=1) {
+        const auto value=values.value(QLatin1String(key)); const double number=value.toDouble(-1);
+        return value.isDouble() && std::isfinite(number) && number>=minimum && number<=maximum
+            && std::abs(number*scale-std::round(number*scale))<1e-6;
+    };
+    if (!exact("carrier",0,50,1000)) return {false,"载气流速需为 0～50 mL/min，分辨率 0.001"};
+    if (!exact("extraction",0,100) || !exact("inlet",0,100))
+        return {false,"抽气与进气流速需为 0～100 的整数百分比"};
+    if (!exact("td",0,65535) || !exact("trap",0,65535))
+        return {false,"TD 与离子阱温度需为协议范围内的整数"};
+    if (!exact("source",0,0))
+        return {false,"当前485协议未定义离子源电压写命令，请将其保持为 0"};
+    return {true,{}};
+}
+
+bool Rs485Instrument::requestBasicMethodParameters(const QString &requestId,
+                                                   const QJsonObject &values, QString *error) {
+    const auto validation=validateBasicMethodParameters(values);
+    if (requestId.isEmpty() || !validation.allowed) {
+        if (error) *error=requestId.isEmpty()?"方法请求号为空":validation.reason;
+        return false;
+    }
+    const auto u16=[](int value){QByteArray b;b.append(char(value>>8));b.append(char(value&0xff));return b;};
+    // Deterministic order: stop on the first negative/timeout ACK.
+    basicQueue_={{0x02,u16(int(std::llround(values.value("td").toDouble())))},
+                 {0x13,u16(int(std::llround(values.value("trap").toDouble())))},
+                 {0x12,u16(int(std::llround(values.value("carrier").toDouble()*1000.0)))},
+                 {0x04,u16(int(std::llround(values.value("extraction").toDouble())))},
+                 {0x14,u16(int(std::llround(values.value("inlet").toDouble())))}};
+    pollTimer_.stop(); timeout_.stop(); pending_=false; decoder_.reset();
+    if (serial_) serial_->clear(QSerialPort::Input); else transport_->readAll();
+    basicRequestId_=requestId; basicParameters_=values; basicIndex_=0;
+    sendNextBasicParameter();
+    return true;
+}
+
+void Rs485Instrument::cancelBasicMethodParameters(const QString &requestId) {
+    if(requestId.isEmpty() || requestId!=basicRequestId_)return;
+    timeout_.stop();basicRequestId_.clear();basicParameters_={};basicQueue_.clear();basicIndex_=-1;
+    decoder_.reset();pending_=false;
+    if(transport_->isOpen())pollTimer_.start(200);
+}
+
+void Rs485Instrument::sendNextBasicParameter() {
+    if (basicRequestId_.isEmpty() || basicIndex_<0 || basicIndex_>=basicQueue_.size()
+        || !transport_->isOpen()) return;
+    decoder_.reset();
+    const auto item=basicQueue_[basicIndex_]; const auto wire=Rs485Protocol::controlCommand(item.first,item.second);
+    pump_.record("TX",wire,QString("主控板参数设置 0x%1").arg(item.first,2,16,QLatin1Char('0')));
+    timeout_.start();
+    if (transport_->write(wire)!=wire.size()) {
+        const QString message="485参数发送失败，后续参数未发送";
+        finishBasicParameters(false,message);fail(message);
+    }
+}
+
+void Rs485Instrument::finishBasicParameters(bool success, const QString &error) {
+    const QString id=basicRequestId_; const QJsonObject values=basicParameters_;
+    timeout_.stop(); basicRequestId_.clear(); basicParameters_={}; basicQueue_.clear(); basicIndex_=-1;
+    decoder_.reset();
+    emit basicMethodParametersFinished(id,success,success?values:QJsonObject{},error);
+    if (transport_->isOpen()) pollTimer_.start(200);
 }
 
 InstrumentTelemetry Rs485Instrument::telemetry() const {

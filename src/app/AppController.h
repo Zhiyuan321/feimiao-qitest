@@ -104,6 +104,8 @@ public slots:
     void markCurrentRunReviewed();
     void createDemoMethodVersion(const QString &name, const QString &revisionNote);
     bool createMethodDraft(const QString &name, const QJsonObject &parameters, const QString &baseMethodId = {});
+    bool updateMethodDraft(const QString &methodId, const QString &name, const QJsonObject &parameters);
+    bool deleteMethod(const QString &methodId);
     void activateMethod(const QString &methodId);
     void loadStoredRun(const QString &runId);
     void exportCurrentArchive();

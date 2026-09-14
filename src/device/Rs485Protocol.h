@@ -34,6 +34,9 @@ struct Rs485Status {
 class Rs485Protocol {
 public:
     static QByteArray statusQuery();
+    static QByteArray controlCommand(quint8 command, const QByteArray &payload);
+    static bool decodeAcknowledgement(const Rs485Frame &frame, quint8 expectedCommand,
+                                      bool *success);
     static bool decodeStatus(const QByteArray &payload, Rs485Status *result);
     // Handles fragmented/coalesced reads; rejects oversized lengths and bad tails.
     QVector<Rs485Frame> feed(const QByteArray &bytes);
