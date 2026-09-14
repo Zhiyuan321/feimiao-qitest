@@ -2,6 +2,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QFileInfo>
 
 namespace qitest {
 NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QObject *parent)
@@ -158,7 +159,8 @@ void NetworkInstrument::receive() {
         bool methodSucceeded=false;
         const bool methodAck=NetworkProtocol::decodeCommandAcknowledgement(frame,0x81,&methodSucceeded);
         if (methodAck && !methodRequestId_.isEmpty())
-            finishMethod(methodSucceeded,methodSucceeded?QString{}:"设备拒绝 Fullscan 方法参数");
+            finishMethod(methodSucceeded, methodSucceeded ? QString{} : quint8(frame.payload[0]) == 0x29
+                ? "设备返回0x29：冷却时间错误，方法设置失败" : "设备拒绝 Fullscan 方法参数");
         if (decoded) {
             status_ = next; fresh_ = true; lastReadback_ = QDateTime::currentDateTime();
             staleTimer_.start(); message_ = "网口状态回读正常；Fullscan 方法与调谐可用";
@@ -286,10 +288,40 @@ QVariantMap NetworkInstrument::statusDetails() const {
 bool NetworkInstrument::exportFrames(const QString &path, QString *error) const {
     QJsonArray frames; for (const auto &frame : recentFrames_) frames.append(frame);
     QJsonArray events; for (const auto &event : connectionEvents_) events.append(event);
-    const QByteArray bytes = QJsonDocument(QJsonObject{{"protocol", "质谱网口通讯协议(2).pdf · 2026-09-09 · 状态数据21字节，实验状态01/00"},
-        {"note", "最近256条CRC有效接收帧/调谐发送帧及64条连接事件；同IP新连接接替旧连接；不是完整采集记录"},
+    QByteArray bytes = QJsonDocument(QJsonObject{{"protocol", "质谱网口通讯协议(2).pdf · 2026-09-09 · 状态数据21字节，实验状态01/00"},
+        {"note", "最近256条CRC有效接收帧/方法及调谐发送记录和64条连接事件；同IP新连接接替旧连接；不是完整采集记录"},
         {"connectionEvents", events},
         {"status", QJsonObject::fromVariantMap(statusDetails())}, {"frames", frames}}).toJson();
+    if (QFileInfo(path).suffix().compare("txt", Qt::CaseInsensitive) == 0) {
+        QString text = "网口十六进制收发记录\r\n";
+        text += "时间为UTC；TX=上位机提交发送（不代表设备接收或执行成功）；RX=下位机返回（CRC有效）。\r\n";
+        text += "仅保留最近256条收发记录和64条连接事件；重新监听会清空。\r\n";
+        text += "导出时间：" + QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) + "\r\n";
+        text += "当前状态：" + QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(statusDetails())).toJson(QJsonDocument::Compact)) + "\r\n\r\n";
+        text += "[收发报文]\r\n";
+        if (recentFrames_.isEmpty()) text += "没有保留的收发报文。\r\n";
+        for (const auto &frame : recentFrames_) {
+            const auto hex = frame.value("hex").toString().toUpper();
+            const auto wire = QByteArray::fromHex(hex.toLatin1());
+            text += QString("[%1] %2 peer=%3 action=0x%4 command=0x%5 bytes=%6\r\n")
+                .arg(frame.value("time").toString(), frame.value("direction").toString(), frame.value("peer").toString())
+                .arg(frame.value("action").toInt(), 2, 16, QLatin1Char('0'))
+                .arg(frame.value("command").toInt(), 2, 16, QLatin1Char('0')).arg(wire.size());
+            text += hex + "\r\n";
+            if (frame.value("direction").toString() == "RX" && frame.value("action").toInt() == 0x10
+                && frame.value("command").toInt() == 0x81 && wire.size() == 11) {
+                const auto code = quint8(wire[7]);
+                text += QString("方法返回值：0x%1；%2\r\n").arg(code, 2, 16, QLatin1Char('0'))
+                    .arg(code == 0x11 ? "协议定义成功" : code == 0x12 ? "协议定义失败" : code == 0x29 ? "冷却时间错误，设置失败" : "含义未确认");
+            }
+            text += "\r\n";
+        }
+        text += "[连接事件]\r\n";
+        for (const auto &event : connectionEvents_)
+            text += QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact)) + "\r\n";
+        // BOM lets the Win7 Notepad open Chinese text as UTF-8.
+        bytes = QByteArray::fromHex("efbbbf") + text.toUtf8();
+    }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
         if (error) *error = file.errorString(); return false;

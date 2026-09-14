@@ -89,7 +89,8 @@ QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QSt
         return fail("扫描时间超出协议范围");
     const int scanTime=int(scanTimeRaw); // supplied workstation code truncates to int
     constexpr int rfFastScanTime=30, rfLowVoltageDuration=50;
-    if (injection + scanTime + rfFastScanTime + rfLowVoltageDuration + 1000 > period)
+    // The supplied sum_time includes slot 8 (cooling), not slot 13 (injection).
+    if (cooling + scanTime + rfFastScanTime + rfLowVoltageDuration + 1000 > period)
         return fail("扫描各阶段时间和不得超过总周期");
     constexpr double acK=0.01921598770176787, acB=544.8501152959262;
     const int acLow=int(acK*(low*2)+acB), acHigh=int(acK*(high*2)+acB);
@@ -100,10 +101,12 @@ QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QSt
     // same workstation build. Slots 25-44 are MS-N-only and remain zero.
     int data[45]{};
     data[0]=1; data[1]=1; data[2]=period; data[3]=rf; data[4]=3000;
-    data[5]=storage; data[6]=low; data[7]=high; data[8]=injection; data[9]=scanTime;
-    data[10]=acLow; data[11]=acHigh; data[12]=ac; data[13]=263; data[14]=0;
+    data[5]=storage; data[6]=low; data[7]=high; data[8]=cooling; data[9]=scanTime;
+    data[10]=acLow; data[11]=acHigh; data[12]=ac; data[13]=injection; data[14]=0;
     data[15]=20; data[16]=20; data[17]=500; data[18]=500; data[19]=500;
-    data[20]=1; data[21]=cooling; data[22]=multiplier;
+    // User confirmed 2026-09-14: injection 380 sends 380, without x100 scaling.
+    // Opening count/interval are a separate fixed pair, independent of cooling.
+    data[20]=1; data[21]=5000; data[22]=multiplier;
     data[23]=rfFastScanTime; data[24]=rfLowVoltageDuration;
     QByteArray payload; payload.reserve(86);
     for (int i=0;i<45;++i) {
@@ -119,7 +122,8 @@ bool NetworkProtocol::decodeCommandAcknowledgement(const NetworkFrame &frame, qu
     if (!success || frame.action!=0x10 || frame.command!=expectedCommand || frame.count!=1
         || frame.index!=1 || frame.payload.size()!=1) return false;
     const quint8 result=quint8(frame.payload[0]);
-    if (result!=0x11 && result!=0x12) return false;
+    // The updated 16-page protocol defines method error 0x29 as COOL_TIME_ERROR.
+    if (result!=0x11 && result!=0x12 && !(expectedCommand==0x81 && result==0x29)) return false;
     *success=result==0x11; return true;
 }
 quint16 NetworkProtocol::crc16(const QByteArray &bytes) {

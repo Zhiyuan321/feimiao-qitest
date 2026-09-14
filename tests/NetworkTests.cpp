@@ -28,6 +28,38 @@ private slots:
         auto invalid=values;invalid.insert("scan_mode","SIM");QVERIFY(NetworkProtocol::fullscanMethodCommand(invalid,&error).isEmpty());
         invalid=values;invalid.insert("period",1000);QVERIFY(NetworkProtocol::fullscanMethodCommand(invalid,&error).isEmpty());
     }
+    void fullscanConfirmedTimingSlotsRemainIndependent() {
+        auto values=MethodDraft::defaultParameters(); QString error;
+        auto wire=NetworkProtocol::fullscanMethodCommand(values,&error);
+        QVERIFY2(!wire.isEmpty(),qPrintable(error));
+        // Absolute wire offsets include the seven-byte header. Slots 20/21 have
+        // mixed U8/U16 widths; slot indices are not byte offsets.
+        QCOMPARE(wire.mid(21,2),QByteArray::fromHex("1388")); // data[8]: cooling 5000
+        QCOMPARE(wire.mid(31,2),QByteArray::fromHex("017c")); // data[13]: injection 380
+        QCOMPARE(wire.mid(44,3),QByteArray::fromHex("011388")); // data[20]=1, data[21]=5000
+        const auto baseline=wire;
+        values.insert("cooling",5100);
+        wire=NetworkProtocol::fullscanMethodCommand(values,&error);
+        QCOMPARE(wire.mid(21,2),QByteArray::fromHex("13ec"));
+        QCOMPARE(wire.mid(31,2),baseline.mid(31,2));
+        QCOMPARE(wire.mid(44,3),baseline.mid(44,3));
+        values.insert("injection",400);
+        wire=NetworkProtocol::fullscanMethodCommand(values,&error);
+        QCOMPARE(wire.mid(31,2),QByteArray::fromHex("0190"));
+        QCOMPARE(wire.mid(21,2),QByteArray::fromHex("13ec"));
+        QCOMPARE(wire.mid(44,3),baseline.mid(44,3));
+        NetworkProtocol codec; QCOMPARE(codec.feed(wire).size(),1); // new CRC remains valid
+        // sum_time = cooling + scan(325) + RF(30+50) + guard(1000).
+        values=MethodDraft::defaultParameters(); values.insert("period",6405);
+        QVERIFY2(!NetworkProtocol::fullscanMethodCommand(values,&error).isEmpty(),qPrintable(error));
+        values.insert("period",6404);
+        QVERIFY(NetworkProtocol::fullscanMethodCommand(values,&error).isEmpty());
+        QVERIFY(error.contains("总周期"));
+        values.insert("period",6405); values.insert("injection",600);
+        QVERIFY2(!NetworkProtocol::fullscanMethodCommand(values,&error).isEmpty(),qPrintable(error));
+        values.insert("injection",380.5); // no silent truncation or invented decimal scaling
+        QVERIFY(NetworkProtocol::fullscanMethodCommand(values,&error).isEmpty());
+    }
     void fullscanWaitsForFiveRs485AcksThenNetworkAck() {
         test::FakeSerial port;
         port.responder=[](const QByteArray &request){
@@ -45,15 +77,49 @@ private slots:
         QSignalSpy finished(&adapter,&IInstrumentAdapter::methodParametersFinished);
         adapter.requestMethodParameters("method-1",values);
         QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,2000);
-        QString error;QCOMPARE(client.readAll(),NetworkProtocol::fullscanMethodCommand(values,&error));
+        QString error; const auto actualWire=client.readAll();
+        QCOMPARE(actualWire,NetworkProtocol::fullscanMethodCommand(values,&error));
+        QCOMPARE(actualWire.mid(21,2),QByteArray::fromHex("1388"));
+        QCOMPARE(actualWire.mid(31,2),QByteArray::fromHex("017c"));
+        QCOMPARE(actualWire.mid(44,3),QByteArray::fromHex("011388"));
         QVector<int> controls;for(const auto &wire:port.writes)if(wire.size()>2&&quint8(wire[2])!=0x30)controls<<quint8(wire[2]);
         QCOMPARE(controls,QVector<int>({0x02,0x13,0x12,0x04,0x14}));
         QVERIFY(adapter.statusDetails().value("methodPending").toBool());
+        const auto unknownReply=test::networkFrame(QByteArray(1,char(0x7f)),0x10,0x81);
+        client.write(unknownReply);
+        QTRY_COMPARE(adapter.statusDetails().value("unparsedFrames").toInt(),1);
+        QCOMPARE(finished.size(),0); // Export must not turn an unknown response into success.
+        QTemporaryDir exportDirectory;
+        const auto textPath=exportDirectory.filePath("method.TXT");
+        QVERIFY(adapter.exportFrames(textPath,&error));
+        QFile textFile(textPath); QVERIFY(textFile.open(QIODevice::ReadOnly));
+        const auto exported=textFile.readAll();
+        QVERIFY(exported.startsWith(QByteArray::fromHex("efbbbf")));
+        QVERIFY(exported.contains(actualWire.toHex(' ').toUpper()+"\r\n"));
+        QVERIFY(exported.contains(unknownReply.toHex(' ').toUpper()+"\r\n"));
+        QVERIFY(exported.contains(" TX peer=127.0.0.1 action=0x10 command=0x81 bytes=96"));
+        QVERIFY(exported.contains(" RX peer=127.0.0.1 action=0x10 command=0x81 bytes=11"));
+        QVERIFY(QString::fromUtf8(exported).contains("方法返回值：0x7f；含义未确认"));
+        QVERIFY(!adapter.exportFrames(exportDirectory.filePath("missing/method.txt"),&error));
         client.write(test::networkFrame(QByteArray(1,char(0x11)),0x10,0x81));
         QTRY_COMPARE(finished.size(),1);QVERIFY(finished[0][1].toBool());
         QCOMPARE(finished[0][2].toJsonObject(),values);QCOMPARE(adapter.confirmedMethodParameters(),values);
         QVERIFY(!adapter.statusDetails().value("methodPending").toBool());
         auto unsafe=values;unsafe.insert("source",1);QVERIFY(!adapter.validateMethodParameters(unsafe).allowed);
+        // Replayed real 0x29 response: fail promptly, preserve connection and confirmed method.
+        auto changed=values;changed.insert("cooling",5100);
+        adapter.requestMethodParameters("method-cooling-error",changed);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,2000); client.readAll();
+        client.write(QByteArray::fromHex("55108100030101291a85aa"));
+        QTRY_COMPARE(finished.size(),2);
+        QVERIFY(!finished[1][1].toBool());
+        QVERIFY(finished[1][3].toString().contains("冷却时间错误"));
+        QVERIFY(!adapter.statusDetails().value("methodPending").toBool());
+        QVERIFY(adapter.statusDetails().value("tcpConnected").toBool());
+        QCOMPARE(adapter.confirmedMethodParameters(),values);
+        QVERIFY(adapter.exportFrames(exportDirectory.filePath("cooling-error.txt"),&error));
+        QFile coolingFile(exportDirectory.filePath("cooling-error.txt")); QVERIFY(coolingFile.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(coolingFile.readAll()).contains("方法返回值：0x29；冷却时间错误，设置失败"));
     }
     void pressureConversionUsesUnsignedBigEndianAnd65535() {
         NetworkProtocol decoder; const auto frames=decoder.feed(test::networkFrame(QByteArray::fromHex("00008000ffff"),0x20,0x82));

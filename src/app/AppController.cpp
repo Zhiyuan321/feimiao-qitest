@@ -17,6 +17,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QFile>
+#include <QSaveFile>
 #include <QDir>
 #include <QSysInfo>
 #include <QJsonObject>
@@ -550,9 +551,25 @@ void AppController::stopNetworkListening() {
 }
 bool AppController::exportNetworkFrames(const QString &path) {
     auto *adapter = networkEndpoint();
-    if (!adapter || path.isEmpty()) return false;
+    if (path.isEmpty()) return false;
     QString error;
-    const bool saved = adapter->exportFrames(path, &error);
+    bool saved = false;
+    if (adapter) {
+        saved = adapter->exportFrames(path, &error);
+    } else {
+        // A diagnostic export must also work before any TCP endpoint exists.
+        auto bytes = QJsonDocument(QJsonObject{
+            {"note", "尚未建立网口诊断会话；没有保留报文，不代表设备已连接"},
+            {"status", QJsonObject{{"listening", false}, {"tcpConnected", false},
+                {"connected", false}, {"receivedBytes", 0}, {"validFrames", 0},
+                {"message", "尚未监听或诊断会话已结束"}}},
+            {"frames", QJsonArray{}}, {"connectionEvents", QJsonArray{}}}).toJson();
+        if (QFileInfo(path).suffix().compare("txt", Qt::CaseInsensitive) == 0)
+            bytes = QByteArray::fromHex("efbbbf") + QString("网口十六进制收发记录\r\n尚未监听或诊断会话已结束；没有保留的收发报文。\r\n").toUtf8();
+        QSaveFile file(path);
+        saved = file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
+        if (!saved) error = file.errorString();
+    }
     emit notice(saved ? "已导出最近网口报文：" + path : "报文导出失败：" + error);
     return saved;
 }

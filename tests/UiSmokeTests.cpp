@@ -250,6 +250,16 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     }
     QVERIFY(!table->showGrid());
     QCOMPARE(table->selectionMode(), QAbstractItemView::ExtendedSelection);
+    QVERIFY(exportButton->isEnabled());
+    QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp-not-started.txt")));
+    QFile initialText(directory.filePath("tcp-not-started.txt")); QVERIFY(initialText.open(QIODevice::ReadOnly));
+    QVERIFY(QString::fromUtf8(initialText.readAll()).contains("没有保留的收发报文"));
+    QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp-not-started.json")));
+    QFile initialExport(directory.filePath("tcp-not-started.json")); QVERIFY(initialExport.open(QIODevice::ReadOnly));
+    const auto initialDiagnostic = QJsonDocument::fromJson(initialExport.readAll()).object();
+    QVERIFY(!initialDiagnostic.value("status").toObject().value("listening").toBool());
+    QVERIFY(initialDiagnostic.value("frames").toArray().isEmpty());
+    QVERIFY(!controller.exportNetworkFrames(directory.filePath("missing/tcp.json")));
     QTcpServer reservation; QVERIFY(reservation.listen(QHostAddress::LocalHost));
     const auto portNumber = reservation.serverPort(); reservation.close();
     address->setCurrentText("127.0.0.1"); tcpPort->setValue(portNumber); listen->click();
@@ -257,6 +267,25 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QVERIFY2(portEditor->fontMetrics().horizontalAdvance(QString::number(portNumber)) < portEditor->width(),
         "TCP端口数字未被完整容纳");
     QVERIFY(controller.networkStatus().value("listening").toBool());
+    QVERIFY(exportButton->isEnabled());
+    auto *networkStatusLabel = window.findChild<QLabel *>("networkConnectionStatus");
+    auto *networkCounts = window.findChild<QLabel *>("networkFrameCounts");
+    QVERIFY(networkStatusLabel && networkStatusLabel->isVisibleTo(&window));
+    QVERIFY(networkCounts && networkCounts->isVisibleTo(&window));
+    QVERIFY(networkStatusLabel->text().contains("等待仪器连接"));
+    QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp-no-frames.txt")));
+    QFile waitingText(directory.filePath("tcp-no-frames.txt")); QVERIFY(waitingText.open(QIODevice::ReadOnly));
+    const auto waitingExport=QString::fromUtf8(waitingText.readAll());
+    QVERIFY(waitingExport.contains("等待仪器连接"));
+    QVERIFY(waitingExport.contains("没有保留的收发报文"));
+    QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp-no-frames.json")));
+    QFile emptyExport(directory.filePath("tcp-no-frames.json")); QVERIFY(emptyExport.open(QIODevice::ReadOnly));
+    const auto emptyDiagnostic = QJsonDocument::fromJson(emptyExport.readAll()).object();
+    QVERIFY(emptyDiagnostic.value("frames").toArray().isEmpty());
+    QVERIFY(emptyDiagnostic.value("status").toObject().value("listening").toBool());
+    QVERIFY(!emptyDiagnostic.value("status").toObject().value("tcpConnected").toBool());
+    const auto emptyCapture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    if (!emptyCapture.isEmpty()) QVERIFY(window.grab().save(emptyCapture + "/network-no-frames.png"));
     QVERIFY(controller.rs485Status().value("connected").toBool());
     QVERIFY(controller.instrumentReadOnly()); QVERIFY(!controller.instrumentDescriptor().simulation);
     QCOMPARE(table->item(0, 1)->text(), QString("—"));
@@ -272,6 +301,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     auto *pressurePlot = window.findChild<QWidget *>("pressureVoltagePlot");
     QVERIFY(pressurePlot);
     QTRY_COMPARE(pressurePlot->property("sampleCount").toInt(), 5);
+    window.statusBar()->clearMessage(); // Clear the explicit diagnostic export notice.
     QVERIFY(!window.statusBar()->isVisibleTo(&window));
     const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
     QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
@@ -297,6 +327,11 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QVERIFY(window.rect().contains(QRect(listen->mapTo(&window, QPoint()), listen->size())));
     QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
     if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/network-readback.png"));
+    window.resize(1024, 700); QCoreApplication::processEvents();
+    for (QWidget *widget : QList<QWidget *>{networkStatusLabel, networkCounts, exportButton, table})
+        QVERIFY(window.rect().contains(QRect(widget->mapTo(&window, QPoint()), widget->size())));
+    if (!capture.isEmpty()) QVERIFY(window.grab().save(capture + "/network-readback-700.png"));
+    window.resize(1024, 768); QCoreApplication::processEvents();
     QVERIFY(controller.exportNetworkFrames(directory.filePath("tcp.json")));
     QCOMPARE(tabs->count(), 2);
     tabs->setCurrentIndex(0);

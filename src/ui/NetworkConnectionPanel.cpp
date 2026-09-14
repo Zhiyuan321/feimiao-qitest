@@ -3,6 +3,7 @@
 #include "app/AppController.h"
 #include <QComboBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -50,7 +51,7 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
     stop->setToolTip("开始监听后可停止");
-    save->setToolTip("收到有效网口报文后可导出");
+    save->setToolTip("保存TXT十六进制收发记录或JSON诊断；没有有效报文也可导出");
     auto *addressLabel = new QLabel("IP");
     addressLabel->setToolTip("本机监听地址");
     endpointRow->addWidget(addressLabel); endpointRow->addWidget(addresses, 1);
@@ -64,7 +65,8 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     stale->setValue(preferences.value("network/staleMs", 5000).toInt() / 1000); stale->setSuffix(" 秒");
     stale->setToolTip("上位机读数失效时间，可按实际状态上传周期调整；不是固件协议参数。");
     stale->hide();
-    auto *status = new QLabel(this); status->setObjectName("networkConnectionStatus"); status->hide();
+    auto *status = new QLabel(this); status->setObjectName("networkConnectionStatus");
+    status->setWordWrap(true); layout->addWidget(status);
     auto *table = new QTableWidget(4, 3); table->setObjectName("networkReadings");
     table->setHorizontalHeaderLabels({"网口回读项目", "当前值", "说明"});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -78,14 +80,23 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
     table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
     table->verticalHeader()->setDefaultSectionSize(30);
     table->setMinimumHeight(165); table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding); layout->addWidget(table, 1);
-    auto *counts = new QLabel(this); counts->setObjectName("networkFrameCounts"); counts->hide();
+    auto *counts = new QLabel(this); counts->setObjectName("networkFrameCounts");
+    counts->setWordWrap(true); layout->addWidget(counts);
+    auto *exportResult = new QLabel(this); exportResult->setObjectName("networkExportResult");
+    exportResult->setWordWrap(true); exportResult->hide(); layout->addWidget(exportResult);
     connect(start, &QPushButton::clicked, this, [=] {
         controller->startNetworkListening(addresses->currentText(), quint16(port->value()), stale->value() * 1000);
     });
     connect(stop, &QPushButton::clicked, controller, &AppController::stopNetworkListening);
-    connect(save, &QPushButton::clicked, this, [this, controller] {
-        const auto path = QFileDialog::getSaveFileName(this, "导出最近256条CRC有效网口报文", "网口报文.json", "JSON (*.json)");
-        if (!path.isEmpty()) controller->exportNetworkFrames(path);
+    connect(save, &QPushButton::clicked, this, [this, controller, exportResult] {
+        QString selectedFilter;
+        auto path = QFileDialog::getSaveFileName(this, "导出十六进制收发报文", "网口报文.txt",
+            "十六进制文本 (*.txt);;JSON诊断 (*.json)", &selectedFilter);
+        if (path.isEmpty()) return;
+        if (QFileInfo(path).suffix().isEmpty()) path += selectedFilter.startsWith("JSON") ? ".json" : ".txt";
+        const bool saved = controller->exportNetworkFrames(path);
+        exportResult->setText(saved ? "已导出：" + path : "导出失败，请检查保存位置是否可写：" + path);
+        exportResult->show();
     });
     const auto update = [=] {
         const auto data = controller->networkStatus();
@@ -93,10 +104,10 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
         const bool busy = controller->phase() == AppController::Phase::Acquiring || controller->phase() == AppController::Phase::Analyzing;
         start->setEnabled(!listening && !busy); stop->setEnabled(listening);
         addresses->setEnabled(!listening); port->setEnabled(!listening); stale->setEnabled(!listening);
-        save->setEnabled(data.value("retainedFrames").toInt() > 0);
+        save->setEnabled(true);
         start->setToolTip(listening ? "网口正在监听" : "开始监听仪器的TCP连接");
         stop->setToolTip(listening ? "停止当前网口监听" : "开始监听后可停止");
-        save->setToolTip(save->isEnabled() ? "导出已接收的网口报文" : "收到有效网口报文后可导出");
+
         status->setText(data.isEmpty() ? "尚未监听。可与485同时回读，调谐启停在射频页操作。" : data.value("message").toString()
             + (data.value("connected").toBool() ? " · 更新于" + data.value("lastReadback").toString() : QString()));
         addresses->setToolTip(status->text());
@@ -113,7 +124,7 @@ NetworkConnectionPanel::NetworkConnectionPanel(AppController *controller, QWidge
             if (!item) { item = new QTableWidgetItem; table->setItem(r, c, item); }
             item->setText(rows[r][c]); item->setToolTip(rows[r][c]);
         }
-        counts->setText(QString("接收 %1 字节 · CRC有效 %2 帧 · 未解析 %3 帧 · 丢弃 %4 字节\n保留最近256条收发帧供导出；气压曲线与调谐启停已接入，完整谱图采集未开放。")
+        counts->setText(QString("接收 %1 字节 · 有效 %2 帧 · 未解析 %3 帧 · 丢弃 %4 字节")
             .arg(data.value("receivedBytes", 0).toString()).arg(data.value("validFrames", 0).toString())
             .arg(data.value("unparsedFrames", 0).toString()).arg(data.value("rejectedBytes", 0).toString()));
     };
