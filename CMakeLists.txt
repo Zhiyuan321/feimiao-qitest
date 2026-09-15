@@ -145,6 +145,7 @@ set(QITEST_APP_SOURCES
     src/ui/ChatTranscript.cpp
     src/ui/SpectrumPlot.cpp
     src/ui/ChromatogramDialog.cpp
+    src/ui/ResultSpectrumDialog.cpp
     src/ui/CalibrationPage.cpp
     src/ui/UserStandardsPage.cpp
     src/ui/StandardComparisonDialog.cpp
@@ -253,6 +254,7 @@ add_executable(qitest_ui_tests
     src/ui/ChatTranscript.cpp
     src/ui/SpectrumPlot.cpp
     src/ui/ChromatogramDialog.cpp
+    src/ui/ResultSpectrumDialog.cpp
     src/ui/scientz/theme/ScientzTheme.cpp
     src/ui/scientz/models/ScientzActionRegistry.cpp
 )

@@ -2,6 +2,7 @@
 #include "storage/RunArchiveCodec.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
+#include <limits>
 
 namespace qitest {
 
@@ -28,7 +29,14 @@ void ArchiveImportWorker::run() {
                     QCryptographicHash::Sha256).toHex());
                 if (repository.containsRun(id)) { ++skipped; outcome = "已存在，跳过"; lastRunId_ = id; }
                 else {
-                    const auto result = engine_.analyze(archive.rawSpectrum, health_);
+                    const bool rawOnly=archive.sampleInfo.value("screening_status").toString()=="NOT_CONFIGURED";
+                    AnalysisResult result;
+                    if(rawOnly) {
+                        result.processedSpectrum.points=archive.rawSpectrum;
+                        for(const auto &point:archive.rawSpectrum) result.processedSpectrum.totalIonCurrent+=point.intensity;
+                        result.engineVersion="tcp-fullscan-raw-1";result.libraryVersion="未配置实机筛查库";
+                        result.quality.level=QualityLevel::Review;
+                    } else result = engine_.analyze(archive.rawSpectrum, health_);
                     if (isInterruptionRequested()) break;
                     const QString quality = result.quality.level == QualityLevel::Pass ? "PASS"
                         : result.quality.level == QualityLevel::Review ? "REVIEW" : "FAIL";
@@ -36,8 +44,11 @@ void ArchiveImportWorker::run() {
                         example ? "公开示例 · OpenMS BSA" : (archive.scans.isEmpty() ? "导入谱图分析" : "扫描序列·首个有效 MS1 分析"),
                         example ? "PUBLIC_EXAMPLE" : "IMPORTED_UNVALIDATED", quality, result.quality.score,
                         static_cast<int>(result.candidates.size()), "PENDING_REVIEW", {}, archive.sampleInfo};
-                    if (repository.saveCompletedRun(summary, archive.rawSpectrum, result, telemetry_, &error, archive.scans)) {
-                        ++imported; outcome = "已导入，待复核"; lastRunId_ = id;
+                    const double unknown=std::numeric_limits<double>::quiet_NaN();
+                    const InstrumentTelemetry noTelemetry{unknown,unknown,unknown,unknown,unknown,"未提供",
+                        unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown};
+                    if (repository.saveCompletedRun(summary, archive.rawSpectrum, result, rawOnly?noTelemetry:telemetry_, &error, archive.scans)) {
+                        ++imported; outcome = rawOnly?"已导入原始谱，筛查未配置":"已导入"; lastRunId_ = id;
                     } else { ++failed; outcome = "保存失败：" + error; }
                 }
             }

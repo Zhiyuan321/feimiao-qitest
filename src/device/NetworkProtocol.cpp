@@ -4,6 +4,11 @@
 
 namespace qitest {
 namespace {
+// Fullscan profile supplied in datafit.json on 2026-09-15. Both directions
+// must use this one profile; never change only the displayed mass axis.
+constexpr double fullscanA = 0.00013517703930585604;
+constexpr double fullscanB = 5.882440951161457;
+constexpr double fullscanC = 8.575019905095814;
 quint16 u16(const QByteArray &bytes, int offset) {
     return (quint16(quint8(bytes[offset])) << 8) | quint8(bytes[offset + 1]);
 }
@@ -34,11 +39,8 @@ bool exactInteger(const QJsonObject &values, const char *key, int minimum, int m
     *result = int(std::llround(number)); return true;
 }
 bool calibratedVoltage(double mass, quint16 *result, QString *error) {
-    // Coefficients are from the instrument vendor's Fullscan datafit profile
-    // supplied with QitVenture 6.1.0.1; the user's code applies this polynomial / 2.
-    constexpr double a = -6.988023031577528e-05;
-    constexpr double b = 5.813283558573496;
-    constexpr double c = -21.41114811567877;
+    // The supplied method code applies the Fullscan polynomial / 2.
+    constexpr double a = fullscanA, b = fullscanB, c = fullscanC;
     const double raw = (c + b * mass + a * mass * mass) / 2.0;
     if (!std::isfinite(raw) || raw < 0 || raw > 65535) {
         if (error) *error = "质量数超出当前仪器 Fullscan 校准范围";
@@ -53,7 +55,7 @@ double NetworkProtocol::vacuumMbarFromRaw(quint16 value) {
 }
 bool NetworkProtocol::decodePressure(const NetworkFrame &frame, QVector<double> *volts) {
     if (!volts || frame.action != 0x20 || frame.command != 0x82
-        || frame.payload.isEmpty() || frame.payload.size() > 1000 || frame.payload.size() % 2) return false;
+        || frame.payload.isEmpty() || frame.payload.size() > MaximumWaveformPayload || frame.payload.size() % 2) return false;
     QVector<double> values; values.reserve(frame.payload.size()/2);
     // Exact conversion supplied by the user on 2026-09-10; not the vacuum formula.
     for(int i=0;i<frame.payload.size();i+=2) values.append(u16(frame.payload,i) / 65535.0 * 2.5 * 5.7);
@@ -61,6 +63,42 @@ bool NetworkProtocol::decodePressure(const NetworkFrame &frame, QVector<double> 
 }
 QByteArray NetworkProtocol::tuningCommand(bool enabled) {
     return controlFrame(0x20, QByteArray(1, enabled ? char(0x22) : char(0x23)));
+}
+QByteArray NetworkProtocol::detectionCommand(bool enabled) {
+    return controlFrame(0x15,QByteArray(1,enabled ? char(0x22) : char(0x23)));
+}
+QByteArray NetworkProtocol::heartbeatCommand() {
+    // User-confirmed 2026-09-15: TCP 0x30 is heartbeat, payload remains 0x22.
+    return controlFrame(0x30,QByteArray(1,char(0x22)));
+}
+QJsonObject NetworkProtocol::fullscanCalibrationProfile() {
+    return {{"source","datafit.json"},{"section","Fullscan"},
+        {"source_sha256","f84190db1ebd30dc63eafcc8f69c726f3cefa73b65f07130378e79229b8e2233"},
+        {"calibrate_a",fullscanA},{"calibrate_b",fullscanB},{"calibrate_c",fullscanC}};
+}
+QVector<double> NetworkProtocol::fullscanMassAxis(const QJsonObject &parameters, QString *error) {
+    const auto wire=fullscanMethodCommand(parameters,error);
+    if(wire.isEmpty()) return {};
+    const auto fail=[error](const QString &message){if(error)*error=message;return QVector<double>{};};
+    // Use the exact transmitted (truncated) slots and the same calibration as method setting.
+    const int count=int(u16(wire,11))*int(u16(wire,23))/10;
+    if(count<2 || count>127500) return fail("采样点数超出单周期分包容量");
+    const double low=u16(wire,17)*2.0, high=u16(wire,19)*2.0;
+    const double lowMass=parameters.value("low_mass").toDouble(),highMass=parameters.value("high_mass").toDouble();
+    QVector<double> axis;axis.reserve(count);
+    for(int i=0;i<count;++i) {
+        const double voltage=low+(high-low)*i/(count-1);
+        const double discriminant=fullscanB*fullscanB-4*fullscanA*(fullscanC-voltage);
+        if(discriminant<0) return fail("质量轴校准反算失败");
+        const double roots[]{(-fullscanB+std::sqrt(discriminant))/(2*fullscanA),
+                            (-fullscanB-std::sqrt(discriminant))/(2*fullscanA)};
+        double mz=0;
+        for(double root:roots) if(root>lowMass-2 && root<highMass+2) {mz=root;break;}
+        if(!std::isfinite(mz) || mz<=0 || (!axis.isEmpty() && mz<=axis.last()))
+            return fail("质量轴不是有效递增序列，请核对校准文件");
+        axis.append(mz);
+    }
+    return axis;
 }
 QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QString *error) {
     const auto fail = [error](const QString &message) { if (error) *error = message; return QByteArray{}; };
@@ -79,6 +117,10 @@ QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QSt
     const double storageMass=values.value("storage_mass").toDouble(-1);
     const double lowMass=values.value("low_mass").toDouble(-1);
     const double highMass=values.value("high_mass").toDouble(-1);
+    // The vendor method selects separate profiles above these mass ranges.
+    if(highMass>801) return fail(highMass>1001
+        ? "此质量范围需要 datafit_2000.json 校准文件，当前未配置"
+        : "此质量范围需要 datafit_1000.json 校准文件，当前未配置");
     if (!std::isfinite(storageMass) || !std::isfinite(lowMass) || !std::isfinite(highMass)
         || storageMass < 0 || lowMass < 0 || highMass <= lowMass) return fail("Fullscan 质量数范围无效");
     quint16 storage=0, low=0, high=0;
@@ -137,26 +179,50 @@ quint16 NetworkProtocol::crc16(const QByteArray &bytes) {
 }
 QVector<NetworkFrame> NetworkProtocol::feed(const QByteArray &bytes) {
     QVector<NetworkFrame> frames;
+    lastFeedRejection_={};
+    const auto recordRejection=[this](const QString &reason) {
+        if(!lastFeedRejection_.isEmpty()) return;
+        lastFeedRejection_={{"reason",reason},{"bufferedBytes",buffer_.size()},
+            {"candidateHex",QString::fromLatin1(buffer_.left(1034).toHex(' '))}};
+        if(buffer_.size()>=5) lastFeedRejection_.insert("declaredLength",int(u16(buffer_,3)));
+        if(buffer_.size()>=3) lastFeedRejection_.insert("command",quint8(buffer_[2]));
+        if(buffer_.size()>=7) lastFeedRejection_.insert("cycleIndex",int(u16(buffer_,5)));
+    };
     // Bytewise accumulation bounds the cache even for hostile or corrupt streams.
     for (char byte : bytes) {
         buffer_.append(byte);
         for (;;) {
+            if(buffer_.isEmpty()) break;
             const int start = buffer_.indexOf(char(0x55));
-            if (start < 0) { rejectedBytes_ += buffer_.size(); buffer_.clear(); break; }
-            if (start > 0) { rejectedBytes_ += start; buffer_.remove(0, start); }
+            if (start < 0) { recordRejection("no_frame_header"); rejectedBytes_ += buffer_.size(); buffer_.clear(); break; }
+            if (start > 0) { recordRejection("bytes_before_header"); rejectedBytes_ += start; buffer_.remove(0, start); }
             if (buffer_.size() < 5) break;
             const int length = u16(buffer_, 3);
             const int size = length + 8;
-            if (length < 3 || length > 1026) {
+            const bool waveform=quint8(buffer_[1])==0x20
+                && (quint8(buffer_[2])==0x81 || quint8(buffer_[2])==0x82);
+            if (length < 3 || length > (waveform ? MaximumWaveformPayload+2 : 1026)) {
+                recordRejection("length_out_of_range");
                 ++rejectedBytes_; buffer_.remove(0, 1); continue;
             }
             if (buffer_.size() < size) break;
+            const quint16 receivedCrc=u16(buffer_,size-3);
+            const quint16 calculatedCrc=crc16(buffer_.mid(1,size-4));
+            // User-confirmed legacy receiver compatibility: only uploaded waveforms
+            // record CRC without using it as an acceptance condition. Control ACKs
+            // and status frames remain strictly checked, including command 0x81/action 0x10.
             if (quint8(buffer_[size - 1]) != 0xaa
-                || u16(buffer_, size - 3) != crc16(buffer_.mid(1, size - 4))) {
+                || (!waveform && receivedCrc!=calculatedCrc)) {
+                recordRejection(quint8(buffer_[size-1])!=0xaa ? "frame_tail_mismatch" : "crc_mismatch");
+                if(lastFeedRejection_.value("candidateHex").toString()==QString::fromLatin1(buffer_.left(1034).toHex(' '))) {
+                    lastFeedRejection_.insert("receivedCrc",int(u16(buffer_,size-3)));
+                    lastFeedRejection_.insert("calculatedCrc",int(crc16(buffer_.mid(1,size-4))));
+                }
                 ++rejectedBytes_; buffer_.remove(0, 1); continue;
             }
             frames.push_back({quint8(buffer_[1]), quint8(buffer_[2]),
-                quint8(buffer_[5]), quint8(buffer_[6]), buffer_.mid(7, length - 2), buffer_.left(size)});
+                quint8(buffer_[5]), quint8(buffer_[6]), buffer_.mid(7, length - 2), buffer_.left(size),
+                receivedCrc,calculatedCrc,!waveform});
             buffer_.remove(0, size);
         }
     }

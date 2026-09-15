@@ -2,6 +2,7 @@
 #include "device/VendorControlCatalog.h"
 #include "device/SimulatedInstrument.h"
 #include "device/Rs485Instrument.h"
+#include "device/NetworkInstrument.h"
 #include "Rs485TestDevice.h"
 #include "NetworkTestFrames.h"
 #include <QTcpServer>
@@ -13,6 +14,7 @@
 #include <QSqlQuery>
 #include <QtTest>
 #include "core/MethodDraft.h"
+#include "storage/RunArchiveCodec.h"
 using namespace qitest;
 
 // Contract fixture, not a vendor implementation. Intentionally withholds ACK.
@@ -479,6 +481,102 @@ private slots:
         QCOMPARE(notices.last().at(0).toString(), QString("方法设置成功"));
         qunsetenv("QITEST_OPERATOR_ROLE");
         qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void networkDetectionUsesPresetTimeAndPersistsRawScans() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("network-run.sqlite").toUtf8());
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
+            ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),c);};
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);
+        auto adapter=std::make_unique<NetworkInstrument>(std::move(serial));auto *network=adapter.get();
+        AppController controller(std::move(adapter));
+        QSignalSpy captureNotices(&controller,&AppController::notice);
+        bool heartbeatPausedAtMethodNotice=false;
+        connect(&controller,&AppController::notice,this,[&](const QString &notice){
+            if(notice=="方法设置成功") heartbeatPausedAtMethodNotice=
+                !network->statusDetails()["heartbeatActive"].toBool();
+        });
+        QVERIFY(network->startListening("127.0.0.1",0,10000));
+        QTcpSocket client;client.connectToHost(QHostAddress::LocalHost,network->statusDetails().value("port").toUInt());
+        QTRY_VERIFY(network->statusDetails().value("tcpConnected").toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
+        QTRY_VERIFY(network->statusDetails().value("connected").toBool());
+        QVERIFY(controller.createMethodDraft("网口采集回归",MethodDraft::defaultParameters()));
+        QString id;for(const auto &m:controller.methods())if(m.name=="网口采集回归")id=m.id;
+        QVERIFY(!id.isEmpty());controller.activateMethod(id);
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QTRY_COMPARE(controller.activeMethod().id,id);
+        QVERIFY(heartbeatPausedAtMethodNotice);
+        QVERIFY(network->statusDetails()["heartbeatActive"].toBool());
+        // Local active method remains after reconnect, but a fresh hardware ACK is required.
+        client.disconnectFromHost();
+        QTRY_VERIFY(!network->statusDetails().value("tcpConnected").toBool());
+        client.connectToHost(QHostAddress::LocalHost,network->statusDetails().value("port").toUInt());
+        QTRY_VERIFY(network->statusDetails().value("tcpConnected").toBool());
+        client.write(test::networkFrame(status));QTRY_VERIFY(network->statusDetails().value("connected").toBool());
+        QCOMPARE(controller.activeMethod().id,id);
+        QVERIFY(!network->statusDetails().value("methodConfirmed").toBool());
+        controller.startDetection();QVERIFY(controller.phase()!=AppController::Phase::Acquiring);
+        QVERIFY(captureNotices.last()[0].toString().contains("网口连接变化"));
+        QCOMPARE(client.bytesAvailable(),qint64(0));
+        controller.activateMethod(id); // Reapply exactly the same active version.
+        QTRY_VERIFY(client.bytesAvailable()>0);
+        QCOMPARE(client.readAll(),NetworkProtocol::fullscanMethodCommand(MethodDraft::defaultParameters()));
+        QVERIFY(!network->statusDetails().value("methodConfirmed").toBool());
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QTRY_VERIFY(network->statusDetails().value("methodConfirmed").toBool());
+        auto preset=controller.instrumentPreset();const auto before=preset;
+        preset["detectionTimeSeconds"]=1;QVERIFY(controller.saveInstrumentPreset(preset));
+        controller.startDetection();QCOMPARE(controller.phase(),AppController::Phase::Acquiring);
+        QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(true));
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));
+        QTest::qWait(20);
+        const auto axis=NetworkProtocol::fullscanMassAxis(MethodDraft::defaultParameters());
+        QByteArray bytes;for(int i=0;i<axis.size();++i)bytes.append(QByteArray::fromHex("0102"));
+        auto wholeCycle=test::networkFrame(bytes,0x20,0x81,0,0);
+        wholeCycle[wholeCycle.size()-3]=0;wholeCycle[wholeCycle.size()-2]=0;
+        client.write(wholeCycle.left(1460));client.write(wholeCycle.mid(1460));
+        QTRY_COMPARE(controller.scans().size(),1);
+        QCOMPARE(controller.liveSpectrum()[0].intensity,258.0);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,1800);
+        QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
+        QCOMPARE(controller.phase(),AppController::Phase::Acquiring);QVERIFY(controller.currentRun().id.isEmpty());
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));
+        QTRY_VERIFY_WITH_TIMEOUT(controller.phase()!=AppController::Phase::Acquiring && controller.phase()!=AppController::Phase::Analyzing,3000);
+        QVERIFY2(controller.phase()==AppController::Phase::ResultReady,
+            captureNotices.isEmpty()?"no notice":qPrintable(captureNotices.last()[0].toString()));
+        QCOMPARE(controller.currentRun().dataScope,QString("DEVICE_UNVALIDATED"));
+        QCOMPARE(controller.currentRun().sampleInfo.value("detection_time_seconds").toInt(),1);
+        QCOMPARE(controller.currentRun().sampleInfo.value("mass_axis_profile").toObject(),NetworkProtocol::fullscanCalibrationProfile());
+        QCOMPARE(controller.currentRun().sampleInfo.value("waveform_crc_policy").toString(),QString("record_only"));
+        QCOMPARE(network->statusDetails()["waveformCrcMismatches"].toInt(),1);
+        QVERIFY(controller.result().candidates.isEmpty());QVERIFY(controller.result().screeningItems.isEmpty());
+        QCOMPARE(controller.result().processedSpectrum.points[0].intensity,258.0);
+        QCOMPARE(controller.result().processedSpectrum.totalIonCurrent,axis.size()*258.0);
+        const auto runId=controller.currentRun().id;controller.loadStoredRun(runId);
+        QCOMPARE(controller.currentRun().sampleInfo.value("waveform_crc_policy").toString(),QString("record_only"));
+        QCOMPARE(controller.scans().size(),1);QCOMPARE(controller.scans()[0].points[0].intensity,258.0);
+        // Cancel waits for a real stop reply; an unanswered stop is a failure.
+        controller.startDetection();QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));QTest::qWait(60);
+        controller.cancelDetection();QCOMPARE(controller.phase(),AppController::Phase::Acquiring);
+        QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
+        QTRY_COMPARE_WITH_TIMEOUT(controller.phase(),AppController::Phase::Failed,4000);
+        QCOMPARE(controller.recentRuns().size(),1);
+        const auto exportedPath=dir.filePath("raw-detection.qit.json");
+        controller.exportRunArchive(runId,exportedPath);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(exportedPath),3000);
+        const auto archive=RunArchiveCodec::read(exportedPath);QVERIFY2(archive.valid,qPrintable(archive.error));
+        QCOMPARE(archive.sampleInfo.value("mass_axis_profile").toObject(),NetworkProtocol::fullscanCalibrationProfile());
+        QCOMPARE(archive.scans.size(),1);QCOMPARE(archive.rawSpectrum[0].intensity,258.0);
+        QSignalSpy imported(&controller,&AppController::importFinished);
+        controller.importRunArchives({exportedPath});QTRY_COMPARE_WITH_TIMEOUT(imported.size(),1,3000);
+        QCOMPARE(controller.result().processedSpectrum.points[0].intensity,258.0);
+        QVERIFY(controller.result().candidates.isEmpty());QVERIFY(controller.result().screeningItems.isEmpty());
+        QCOMPARE(controller.scans().size(),1);
+        QVERIFY(controller.saveInstrumentPreset(before));qunsetenv("QITEST_WORKSPACE_DB");
     }
 };
 QTEST_GUILESS_MAIN(InstrumentControlTests)

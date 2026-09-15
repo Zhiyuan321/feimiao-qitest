@@ -20,6 +20,7 @@ private slots:
     void simulatorRefusesHardwareCriticalCommands();
     void quantitationFitsVerifiedCalibrationPoints();
     void timeTracesSeparateLevelsAndIntegrateMeasuredTime();
+    void ticSumsEachOneSecondSpectrumWithoutMassWeighting();
     void internalStandardUsesPairedRatiosAndPreservesSafetyBounds();
     void userSpectraComparisonIsBoundedAndDoesNotReusePeaks();
 };
@@ -177,6 +178,20 @@ void CoreTests::timeTracesSeparateLevelsAndIntegrateMeasuredTime() {
     bad = scans; bad[0].points[0].intensity = std::numeric_limits<double>::infinity();
     QVERIFY(!ChromatogramEngine::validate(bad));
     QVERIFY(ChromatogramEngine::trace(scans, ChromatogramEngine::Kind::Eic, 1,100,-1).isEmpty());
+}
+
+void CoreTests::ticSumsEachOneSecondSpectrumWithoutMassWeighting() {
+    // Synthetic complete scans, not captured packets. Unequal mass spacing catches
+    // accidental m/z integration; unequal sums catch accumulation across cycles.
+    const QVector<SpectrumScan> scans{
+        {0,1,{{40,10},{41,20},{300,30}}},
+        {1,1,{{40,1},{41,2},{300,3}}},
+        {2,1,{{40,0},{41,0},{300,0}}}};
+    const auto tic = ChromatogramEngine::trace(scans, ChromatogramEngine::Kind::Tic);
+    QCOMPARE(tic.size(), 3);
+    QCOMPARE(tic[0].mz, 0.0); QCOMPARE(tic[0].intensity, 60.0);
+    QCOMPARE(tic[1].mz, 1.0); QCOMPARE(tic[1].intensity, 6.0);
+    QCOMPARE(tic[2].mz, 2.0); QCOMPARE(tic[2].intensity, 0.0);
 }
 
 QTEST_APPLESS_MAIN(CoreTests)

@@ -13,7 +13,7 @@
 
 namespace qitest {
 namespace {
-// A packet is never joined to another packet until cycle boundaries/time parameters are known.
+// Display the most recent complete pressure cycle without inventing intra-cycle times.
 class VoltagePlot final : public QWidget {
 public:
     explicit VoltagePlot(bool tuning):tuning_(tuning) {
@@ -98,8 +98,8 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
             status->setText(data.value("tuningMessage","请先连接网口仪器").toString());
         } else {
             const auto values=controller->pressureVolts();plot->setValues(values);
-            QString text=QString("已接收 %1 帧气压数据；当前单包 %2 点。时间参数和周期边界待确认，暂不拼接周期。")
-                .arg(data.value("pressureFrames",0).toULongLong()).arg(values.size());
+            QString text=QString("已接收 %1 帧气压数据；当前周期 %2，共 %3 点。显示本周期采样点。")
+                .arg(data.value("pressureFrames",0).toULongLong()).arg(data.value("pressureCycle",-1).toInt()).arg(values.size());
             if(!values.isEmpty()) {
                 const auto high=*std::max_element(values.cbegin(),values.cend());
                 text+=QString(" 单包峰值 %1 V，纵轴已自动适配。").arg(high,0,'f',2);

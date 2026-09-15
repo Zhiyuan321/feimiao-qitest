@@ -102,6 +102,82 @@ private slots:
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
         QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDirectory_.path());
     }
+    void extendedPresetsPersistAndFitSmallScreen() {
+        QTemporaryDir dir;
+        qputenv("QITEST_WORKSPACE_DB",dir.filePath("presets.sqlite").toUtf8());
+        AppController controller(std::make_unique<SimulatedInstrument>());
+        const auto previous=controller.instrumentPreset();
+        const auto hardware=controller.instrumentSettings();
+        QVariantMap expected;
+        {
+            MainWindow window(&controller); window.show(); window.resize(1024,700);
+            QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),5000);
+            window.findChild<QAction *>("OpenSettings")->trigger();
+            auto *tree=window.findChild<QTreeWidget *>("settingsTree"); QVERIFY(tree);
+            for(int i=0;i<tree->topLevelItemCount();++i) {
+                auto *item=tree->topLevelItem(i);
+                if(item->data(0,Qt::UserRole+1).toString()=="参数预设")
+                    QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem*,item),Q_ARG(int,0));
+            }
+            auto *page=window.findChild<QWidget *>("instrumentPresetPage"); QVERIFY(page);
+            auto *scroll=window.findChild<QScrollArea *>("instrumentPresetScroll"); QVERIFY(scroll);
+            auto *save=window.findChild<QPushButton *>("saveInstrumentPreset"); QVERIFY(save);
+            auto *duration=page->findChild<QSpinBox *>("preset_detectionTimeSeconds"); QVERIFY(duration);
+            duration->setValue(37);
+            for(auto *input:page->findChildren<QDoubleSpinBox *>())
+                if(input->objectName().startsWith("preset_")) input->setValue(12.25);
+            for(const auto &key:QStringList{"libraryPath","maintenanceMethodPath","baseDataPath"}) {
+                auto *input=page->findChild<QLineEdit *>("preset_"+key); QVERIFY(input);
+                input->setText(dir.filePath("中文路径-"+key+".json"));
+                QVERIFY(page->findChild<QPushButton *>("browsePreset_"+key));
+            }
+            auto *mode=page->findChild<QComboBox *>("preset_quantitationMode"); QVERIFY(mode); mode->setCurrentText("内标");
+            auto *device=page->findChild<QComboBox *>("preset_deviceConfiguration"); QVERIFY(device); device->setCurrentText("测试配置");
+            for(auto *label:page->findChildren<QLabel *>()) {
+                QVERIFY(!label->text().contains("毛发")); QVERIFY(!label->text().contains("定容量"));
+            }
+            QCOMPARE(controller.instrumentPreset(),previous); // Editing is not saving.
+            save->click(); expected=controller.instrumentPreset();
+            QCOMPARE(expected.size(),19); QCOMPARE(expected.value("detectionTimeSeconds").toInt(),37);
+            QCOMPARE(expected.value("correctionValue").toDouble(),12.25);
+            QCOMPARE(expected.value("quantitationMode").toString(),QString("内标"));
+            QCOMPARE(controller.instrumentSettings(),hardware);
+            auto bad=expected; bad["detectionTimeSeconds"]=0;
+            QVERIFY(!controller.saveInstrumentPreset(bad)); QCOMPARE(controller.instrumentPreset(),expected);
+            bad=expected; bad["signalToNoiseRatio"]=qQNaN();
+            QVERIFY(!controller.saveInstrumentPreset(bad)); QCOMPARE(controller.instrumentPreset(),expected);
+            bad=expected; bad["quantitationMode"]="未知";
+            QVERIFY(!controller.saveInstrumentPreset(bad)); QCOMPARE(controller.instrumentPreset(),expected);
+            save->click();
+            const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+            if(!capture.isEmpty()) QVERIFY(QDir().mkpath(capture));
+            for(int height:{700,768}) {
+                window.resize(1024,height); QTest::qWait(100);
+                QCOMPARE(window.size(),QSize(1024,height));
+                QVERIFY(scroll->isVisibleTo(&window)); QVERIFY(scroll->verticalScrollBar()->maximum()>0);
+                QVERIFY(page->width()<=scroll->viewport()->width());
+                scroll->verticalScrollBar()->setValue(0); QTest::qWait(30);
+                if(!capture.isEmpty()) QVERIFY(window.grab().save(capture+QString("/presets-top-%1.png").arg(height)));
+                scroll->verticalScrollBar()->setValue(duration->y()-100); QTest::qWait(30);
+                if(!capture.isEmpty()) QVERIFY(window.grab().save(capture+QString("/presets-middle-%1.png").arg(height)));
+                scroll->ensureWidgetVisible(save); QTest::qWait(30);
+                QVERIFY(scroll->viewport()->rect().contains(save->mapTo(scroll->viewport(),save->rect().center())));
+                if(!capture.isEmpty()) QVERIFY(window.grab().save(capture+QString("/presets-bottom-%1.png").arg(height)));
+            }
+            duration->setValue(99); // Unsaved edits must not survive reopening.
+        }
+        {
+            AppController reopened(std::make_unique<SimulatedInstrument>());
+            QCOMPARE(reopened.instrumentPreset(),expected);
+            MainWindow window(&reopened); window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QSpinBox *>("preset_detectionTimeSeconds"),5000);
+            QCOMPARE(window.findChild<QSpinBox *>("preset_detectionTimeSeconds")->value(),37);
+            QCOMPARE(window.findChild<QComboBox *>("preset_deviceConfiguration")->currentText(),QString("测试配置"));
+            QCOMPARE(window.findChild<QLineEdit *>("preset_baseDataPath")->text(),expected.value("baseDataPath").toString());
+        }
+        QVERIFY(controller.saveInstrumentPreset(previous));
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void restrictedMethodPageAndPressureView() {
         const QJsonObject base{{"scan_mode","Fullscan"},{"injection",12.34},{"source",4.9}};QJsonObject saved;
         auto *editor=new MethodEditorDialog("管理员方法",base,[&](const QString &,const QJsonObject &p){saved=p;return true;},nullptr,false);
@@ -161,6 +237,7 @@ private slots:
     void bundledSamplesImportWithoutDuplicates();
     void externalArchivePreview();
     void customerResultReviewWorkflow();
+    void reportLoadsLatestAndViewsFrozenSpectra();
     void fixedLandscapeNavigation();
     void professionalOfflineToolsValidateAndRemainUsable();
     void instrumentPowerButtonsReflectPartialState();
@@ -495,6 +572,71 @@ void UiSmokeTests::foreignSavedPathFallsBackToLocalDocuments() {
     settings.remove("sampleSaveFolder");
 }
 
+void UiSmokeTests::reportLoadsLatestAndViewsFrozenSpectra() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir dir; const QString db=dir.filePath("report-latest.sqlite");
+    qputenv("QITEST_WORKSPACE_DB",db.toUtf8());
+    const auto archive=RunArchiveCodec::read(":/public-ms/openms_bsa.scan.csv");
+    QVERIFY2(archive.valid,qPrintable(archive.error));
+    const auto analysis=AnalysisEngine(demoReferences(),"test-reference").analyze(archive.rawSpectrum,InstrumentHealth{});
+    {
+        WorkspaceRepository repo(db);QString error;QVERIFY(repo.open(&error));
+        RunSummary run;run.id="older";run.completedAt=QDateTime::currentDateTimeUtc().addDays(-1);
+        run.operatorName="test";run.methodName="test method";run.dataScope="PUBLIC_EXAMPLE";
+        run.reviewStatus="PENDING";
+        QVERIFY(repo.saveCompletedRun(run,archive.rawSpectrum,analysis,InstrumentTelemetry{},&error));
+        run.id="latest";run.completedAt=run.completedAt.addDays(1);
+        QVERIFY(repo.saveCompletedRun(run,archive.rawSpectrum,analysis,InstrumentTelemetry{},&error,archive.scans));
+    }
+    AppController controller(std::make_unique<SimulatedInstrument>());
+    MainWindow window(&controller);window.resize(1024,700);window.show();
+    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRun().id,QString("latest"),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenReport")->isVisibleTo(&window),5000);
+    window.findChild<QAction *>("OpenReport")->trigger();
+    QVERIFY(!window.findChild<QWidget *>("reportSummaryStrip"));
+    QVERIFY(!visibleWidgetWithText<QPushButton>(window,"完成复核"));
+    QVERIFY(!visibleWidgetWithText<QLabel>(window,"质量检查"));
+    QVERIFY(!window.findChild<QDialog *>("detectionCompletedDialog"));
+    auto *table=window.findChild<QTableWidget *>("reportScreeningResults");
+    QCOMPARE(table->rowCount(),analysis.candidates.size());
+    auto *pdf=visibleWidgetWithText<QPushButton>(window,"生成 PDF");QVERIFY(pdf && pdf->isEnabled());
+    QSignalSpy generated(&controller,&AppController::reportGenerated);
+    QSignalSpy exportNotices(&controller,&AppController::notice);pdf->click();
+    QStringList notices;for(const auto &event:exportNotices)notices<<event[0].toString();
+    QVERIFY2(generated.size()==1,qPrintable(notices.join("; ")));QCOMPARE(controller.currentRun().reviewStatus,QString("PENDING"));
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    if(!capture.isEmpty()) QFile::copy(generated[0][0].toString(),capture+"/current-report.pdf");
+    auto *view=window.findChild<QPushButton *>("viewResultSpectrum");QVERIFY(view && view->isEnabled());
+    view->click();auto *dialog=window.findChild<QDialog *>("resultSpectrumDialog");QVERIFY(dialog);
+    auto *tic=dialog->findChild<SpectrumPlot *>("resultTicPlot");
+    auto *ms=dialog->findChild<SpectrumPlot *>("resultMsPlot");
+    auto *eic=dialog->findChild<SpectrumPlot *>("resultEicPlot");QVERIFY(tic && ms && eic);
+    const auto trace=ChromatogramEngine::trace(archive.scans,ChromatogramEngine::Kind::Tic);
+    QCOMPARE(tic->points().size(),trace.size());QCOMPARE(tic->points().first().intensity,trace.first().intensity);
+    const auto last=archive.scans.last();tic->pointActivated(last.timeSeconds);
+    QCOMPARE(ms->points().size(),last.points.size());QCOMPARE(ms->points().first().intensity,last.points.first().intensity);
+    ms->pointActivated(418.201348);
+    const auto expected=ChromatogramEngine::trace(archive.scans,ChromatogramEngine::Kind::Eic,1,418.201348,0.5);
+    QCOMPARE(eic->points().size(),expected.size());QCOMPARE(eic->points().first().intensity,expected.first().intensity);
+    for(const QSize size:{QSize(1024,768),QSize(1024,700)}) {
+        window.resize(size);dialog->resize(960,640);QTest::qWait(80);
+        for(auto *plot:{tic,ms,eic}) QVERIFY(dialog->rect().contains(QRect(plot->mapTo(dialog,QPoint()),plot->size())));
+        if(!capture.isEmpty()) {
+            QVERIFY(window.grab().save(capture+QString("/report-%1.png").arg(size.height())));
+            QVERIFY(dialog->grab().save(capture+QString("/spectra-%1.png").arg(size.height())));
+        }
+    }
+    controller.loadStoredRun("older");
+    QCOMPARE(table->property("displayedRunId").toString(),QString("older"));
+    QCOMPARE(tic->points().size(),trace.size()); // existing popup retains its record snapshot
+    dialog->close();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    view->click();dialog=window.findChild<QDialog *>("resultSpectrumDialog");QVERIFY(dialog);
+    QVERIFY(dialog->findChild<SpectrumPlot *>("resultTicPlot")->points().isEmpty());
+    QVERIFY(!dialog->findChild<SpectrumPlot *>("resultMsPlot")->points().isEmpty());
+    QVERIFY(!dialog->findChild<QPushButton *>("resultTraceAnalysis")->isEnabled());
+    dialog->close();qunsetenv("QITEST_WORKSPACE_DB");
+}
+
 void UiSmokeTests::customerResultReviewWorkflow() {
     QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir directory;
@@ -574,15 +716,16 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     }
 
     window.findChild<QAction *>("OpenReport")->trigger();
-    QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "结果复核与报告"), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "报告生成与查看"), 1000);
     auto *openSaved = window.findChild<QPushButton *>("openSavedResult");
     auto *details = window.findChild<QPushButton *>("screeningDetails");
-    auto *reviewView = window.findChild<QPushButton *>("reportReviewView");
+    auto *spectrumView = window.findChild<QPushButton *>("viewResultSpectrum");
     auto *previewView = window.findChild<QPushButton *>("reportPreviewView");
     QVERIFY(openSaved && openSaved->isVisibleTo(&window));
     QVERIFY(details && details->isVisibleTo(&window));
-    QVERIFY(reviewView && previewView);
-    QCOMPARE(reviewView->parentWidget(), openSaved->parentWidget());
+    QVERIFY(spectrumView && previewView);
+    QVERIFY(!window.findChild<QPushButton *>("reportReviewView"));
+    QCOMPARE(spectrumView->parentWidget(), openSaved->parentWidget());
     QCOMPARE(previewView->parentWidget(), openSaved->parentWidget());
     QVERIFY(!window.findChild<QWidget *>("embeddedReportNavigation"));
     details->click();
@@ -610,7 +753,7 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     sampleDialog->findChild<QLineEdit *>("sampleFileName")->setText("customer-result");
     sampleDialog->findChild<QPushButton *>("confirmSampleStart")->click();
     QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "结果复核与报告"), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "报告生成与查看"), 1000);
     auto *completed=window.findChild<QDialog *>("detectionCompletedDialog");QVERIFY(completed);
     completed->findChild<QPushButton *>("confirmDetectionCompleted")->click();
     QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
@@ -1162,11 +1305,10 @@ void UiSmokeTests::reportSelectionSurvivesPageRoundTrips() {
         QVERIFY(table->isVisible());
         QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
         auto *preview = window.findChild<QPushButton *>("reportPreviewView");
-        auto *review = window.findChild<QPushButton *>("reportReviewView");
         QTest::mouseClick(preview, Qt::LeftButton);
         QVERIFY(!table->isVisible());
         QVERIFY(window.findChild<QWidget *>("reportPreviewWorkspace")->isVisible());
-        QTest::mouseClick(review, Qt::LeftButton);
+        QTest::mouseClick(preview, Qt::LeftButton);
         QVERIFY(table->isVisible());
         QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
     }
@@ -1263,7 +1405,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     auto *send = visibleWidgetWithText<QPushButton>(*assistantRail, "发送");
     QVERIFY(send);
     QTest::mouseClick(send, Qt::LeftButton);
-    QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "结果复核与报告"), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "报告生成与查看"), 1000);
 
     auto *monitorScroll = window.findChild<QWidget *>("monitorScroll");
     QVERIFY(monitorScroll);
@@ -1397,7 +1539,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QCOMPARE(editMethodParameters->text(), QString("编辑参数"));
     auto *activateMethod = visibleWidgetWithText<QPushButton>(window, "设为当前方法");
     QVERIFY(activateMethod);
-    QVERIFY(!activateMethod->isEnabled());
+    QCOMPARE(activateMethod->isEnabled(),methodTable->currentRow()>=0);
     auto *deleteMethod = window.findChild<QPushButton *>("deleteMethodVersion");
     QVERIFY(deleteMethod);QVERIFY(deleteMethod->isVisibleTo(&window));QVERIFY(!deleteMethod->isEnabled());
     controller.createDemoMethodVersion("删除回归方法","UI 删除回归");
@@ -1446,6 +1588,15 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QTRY_VERIFY_WITH_TIMEOUT(methodsChanged.count() >= 1, 1000);
     QCOMPARE(controller.activeMethod().name, QString("激活回归方法"));
     QCOMPARE(methodTable->currentRow(), -1);
+    QTest::qWait(220);
+    int activeRow=-1;
+    for(int row=0;row<methodTable->rowCount();++row)
+        if(methodTable->item(row,0)->data(Qt::UserRole+1).toBool()) activeRow=row;
+    QVERIFY(activeRow>=0);methodTable->selectRow(activeRow);
+    QVERIFY(activateMethod->isEnabled());QVERIFY(!deleteMethod->isEnabled());
+    const int appliedBefore=methodsChanged.count();
+    activateMethod->click();QTRY_VERIFY(methodsChanged.count()>appliedBefore);
+    QCOMPARE(controller.activeMethod().name,QString("激活回归方法"));
     QTest::qWait(220);
 
     // Exercise the macOS crash path repeatedly while Accessibility traverses
@@ -1769,7 +1920,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QVERIFY(!controller.liveSpectrum().isEmpty());
     QVERIFY(!controller.result().processedSpectrum.points.isEmpty());
     auto *sourceNotice = window.findChild<QLabel *>("resultDataSource");
-    QVERIFY(sourceNotice && sourceNotice->text().contains("来源：预览"));
+    QVERIFY(sourceNotice && sourceNotice->text().contains("预览数据"));
     auto *screeningResults = window.findChild<QTableWidget *>("reportScreeningResults");
     QVERIFY(screeningResults && screeningResults->rowCount() > 0);
     QCOMPARE(screeningResults->item(0, 3)->text(), QString("可疑"));
@@ -1841,12 +1992,9 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QCOMPARE(screeningResults->horizontalHeaderItem(1)->text(), QString("浓度 (μg/mL)"));
     QVERIFY(!screeningResults->horizontalHeaderItem(1)->text().contains('\n'));
     auto *reportSummary = window.findChild<QWidget *>("reportSummaryStrip");
-    QVERIFY(reportSummary);
-    QVERIFY(reportSummary->isVisibleTo(&window));
-    auto *review = visibleWidgetWithText<QPushButton>(window, "完成复核");
-    QVERIFY(review);
-    if (review->isEnabled()) QTest::mouseClick(review, Qt::LeftButton);
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRun().reviewStatus, QString("REVIEWED"), 1000);
+    QVERIFY(!reportSummary);
+    QVERIFY(!visibleWidgetWithText<QPushButton>(window, "完成复核"));
+    QVERIFY(controller.currentRun().reviewStatus != "REVIEWED");
     auto *generatePdf = visibleWidgetWithText<QPushButton>(window, "生成 PDF");
     QVERIFY(generatePdf);
     QTRY_VERIFY_WITH_TIMEOUT(generatePdf->isEnabled(), 1000);

@@ -293,6 +293,27 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
 }
 
 void AppController::bindInstrumentSignals() {
+    if(auto *network=qobject_cast<NetworkInstrument *>(instrument_.get())) {
+        connect(network,&NetworkInstrument::acquisitionStarted,this,[this] {
+            detectionClock_.start(); setPhase(Phase::Acquiring,"正在检测");
+        });
+        connect(network,&NetworkInstrument::acquisitionScan,this,[this](const SpectrumScan &scan) {
+            if(phase_!=Phase::Acquiring) return;
+            scans_.append(scan);pendingSpectrum_=scan.points;liveSpectrum_=scan.points;
+            const int seconds=activeSampleInfo_.value("detection_time_seconds").toInt(20);
+            progress_=std::min(99,int(scans_.size()*100/std::max(1,seconds)));
+            emit spectrumChanged(liveSpectrum_);emit scanSeriesChanged();emit progressChanged(progress_);
+        });
+        connect(network,&NetworkInstrument::acquisitionFinished,this,[this](bool success,bool cancelled,const QString &error) {
+            if(phase_!=Phase::Acquiring) return;
+            if(success) {progress_=100;emit progressChanged(progress_);finishAcquisition();return;}
+            if(workspace_ && !activeAcquisitionSessionId_.isEmpty())
+                workspace_->finishAcquisitionSession(activeAcquisitionSessionId_,cancelled?"CANCELLED":"FAILED",error);
+            activeAcquisitionSessionId_.clear();
+            setPhase(cancelled?Phase::Ready:Phase::Failed,cancelled?"检测已取消":"检测未完成");
+            emit notice(error.isEmpty()?"检测已取消":error);
+        });
+    }
     connect(instrument_.get(), &IInstrumentAdapter::stateChanged,
             this, &AppController::refreshInstrumentReadback);
     connect(instrument_.get(), &IInstrumentAdapter::settingFinished, this,
@@ -655,15 +676,51 @@ bool AppController::updateInstrumentSetting(const QString &key, const QVariant &
 
 QString AppController::aiSummary() const { return aiBridge_->statusSummary(); }
 
+QVariantMap AppController::instrumentPreset() const {
+    QVariantMap values{{"trapTemperatureC",85}, {"inletFlowPercent",50},
+        {"pumpFlowPercent",0}, {"efcMlMin",1.0}, {"correctionValue",0.0},
+        {"intensityThreshold",0.0}, {"libraryPath",QString()}, {"backgroundSubtraction",0.0},
+        {"detectionTimeSeconds",20}, {"quantitationMode",QString("外标")},
+        {"maintenanceMethodPath",QString()}, {"maintenanceIntervalHours",1.0},
+        {"maintenanceDurationSeconds",0}, {"gasAssistDelaySeconds",5},
+        {"pressureStandardValue",0.0}, {"deviceConfiguration",QString("NONEG100C")},
+        {"backgroundNoise",30.0}, {"signalToNoiseRatio",3.0}, {"baseDataPath",QString()}};
+    QSettings settings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
+    for (auto it=values.begin(); it!=values.end(); ++it)
+        it.value()=settings.value("preset/"+it.key(),it.value());
+    return values;
+}
+
 bool AppController::saveInstrumentPreset(const QVariantMap &preset) {
     // A saved preset is a desired configuration, never an acknowledged device state.
     const QVariantMap maxima{{"trapTemperatureC", 999.0}, {"inletFlowPercent", 100.0},
                             {"pumpFlowPercent", 100.0}, {"efcMlMin", 50.0}};
-    if (preset.size() != maxima.size()) { emit notice("预设参数不完整"); return false; }
+    const auto known = instrumentPreset();
+    const QStringList textKeys{"libraryPath", "maintenanceMethodPath", "baseDataPath",
+        "deviceConfiguration", "quantitationMode"};
+    const QStringList integerKeys{"detectionTimeSeconds", "maintenanceDurationSeconds", "gasAssistDelaySeconds"};
+    // Keep the original four-field caller compatible; expanded saves are complete snapshots.
+    if (preset.size()!=maxima.size() && preset.size()!=known.size()) {
+        emit notice("预设参数不完整"); return false;
+    }
+    for (auto it=maxima.begin(); it!=maxima.end(); ++it)
+        if (!preset.contains(it.key())) { emit notice("预设参数不完整"); return false; }
     for (auto it = preset.begin(); it != preset.end(); ++it) {
+        if (!known.contains(it.key())) { emit notice("预设参数不合法"); return false; }
+        if (textKeys.contains(it.key())) {
+            if (it.value().type()!=QVariant::String || it.value().toString().size()>4096
+                || (it.key()=="quantitationMode" && it.value().toString()!="外标" && it.value().toString()!="内标")) {
+                emit notice("预设文本参数不合法"); return false;
+            }
+            continue;
+        }
         bool ok = false;
         const double value = it.value().toDouble(&ok);
-        if (!maxima.contains(it.key()) || !ok || !(value >= 0 && value <= maxima.value(it.key()).toDouble())) {
+        const double minimum = it.key()=="correctionValue" ? -1e9 : (it.key()=="detectionTimeSeconds" ? 1 : 0);
+        const double maximum = maxima.contains(it.key()) ? maxima.value(it.key()).toDouble()
+            : (integerKeys.contains(it.key()) ? 2147483647.0 : 1e9);
+        if (!ok || !std::isfinite(value) || value<minimum || value>maximum
+            || (integerKeys.contains(it.key()) && std::floor(value)!=value)) {
             emit notice("预设参数不合法"); return false;
         }
     }
@@ -672,7 +729,7 @@ bool AppController::saveInstrumentPreset(const QVariantMap &preset) {
     preferences.sync();
     if (preferences.status() != QSettings::NoError) { emit notice("预设保存失败"); return false; }
     if (workspace_) workspace_->appendAudit(sessionOperator_, "PRESET_SAVED", "instrument", "desired settings only");
-    emit notice("预设已保存，尚未应用到仪器。");
+    emit notice("预设已保存；检测时间将在下次开始检测时读取。");
     return true;
 }
 
@@ -878,7 +935,10 @@ void AppController::exportSelectedReport(const QVector<int> &candidateRows) {
         emit notice("尚无可导出的检测结果");
         return;
     }
-    const QString directory = PlatformPaths::documentsSubdirectory("飞秒质谱报告");
+    // Qt test mode does not redirect DocumentsLocation on Windows. Keep test PDFs temporary.
+    const QString directory = QStandardPaths::isTestModeEnabled()
+        ? QDir(QDir::tempPath()).filePath("qitest-report-tests")
+        : PlatformPaths::documentsSubdirectory("飞秒质谱报告");
     if (!QDir().mkpath(directory)) { emit notice("无法创建报告目录"); return; }
     // 姓名优先、样本编号兜底；过滤 Windows 禁止字符并保留既有报告。
     const QString path = reportPathForRun(directory, currentRun_);
@@ -892,22 +952,6 @@ void AppController::exportSelectedReport(const QVector<int> &candidateRows) {
     emit reportGenerated(path);
     emit recordsChanged();
     emit notice(tracked ? "报告已生成" : "PDF 已生成，但记录关联保存失败：" + error);
-}
-
-void AppController::markCurrentRunReviewed() {
-    if (!AuthorizationPolicy::allows(sessionRole_, Permission::ReviewResult)) {
-        emit notice("当前角色无权记录人工复核"); return;
-    }
-    if (currentRun_.id.isEmpty()) { emit notice("尚无可复核记录"); return; }
-    QString error;
-    if (!workspace_ || !workspace_->setReviewStatus(currentRun_.id, "REVIEWED", sessionOperator_, &error)) {
-        emit notice("复核状态保存失败：" + error);
-        return;
-    }
-    currentRun_.reviewStatus = "REVIEWED";
-    emit runSaved(currentRun_);
-    emit recordsChanged();
-    emit notice("已记录人工复核");
 }
 
 void AppController::createDemoMethodVersion(const QString &name, const QString &revisionNote) {
@@ -1147,7 +1191,7 @@ void AppController::importRunArchives(const QStringList &paths) {
         if (!exampleId.isEmpty()) {
             loadStoredRun(exampleId);
             if (wasExample) emit notice({});
-            else emit notice("已载入导入谱图，结果待复核");
+            else emit notice("已载入导入谱图，可查看结果");
         }
     });
     emit importProgress(0, paths.size(), "正在导入；可继续浏览页面，停止会保留已完成的记录");
@@ -1208,7 +1252,10 @@ void AppController::startSampleDetection(const QJsonObject &sampleInfo, const QS
         return;
     }
     startDetection();
-    if (phase_ == Phase::Acquiring) { activeSampleInfo_ = sampleInfo; activeSamplePath_ = savePath; }
+    if (phase_ == Phase::Acquiring) {
+        for(auto it=sampleInfo.begin();it!=sampleInfo.end();++it) activeSampleInfo_.insert(it.key(),it.value());
+        activeSamplePath_ = savePath;
+    }
 }
 
 void AppController::startDetection() {
@@ -1217,6 +1264,43 @@ void AppController::startDetection() {
     activeSampleInfo_ = {}; activeSamplePath_.clear();
     detectionClock_.invalidate();
     detectionDurationMs_ = -1;
+    if(auto *network=qobject_cast<NetworkInstrument *>(instrument_.get())) {
+        if(!workspace_) {emit notice("数据目录不可用，无法开始检测");return;}
+        const auto method=activeMethod();
+        const auto parameters=method.parameters.value("method_parameters").toObject();
+        QString methodError;
+        if(method.id.isEmpty()) methodError="尚未选择当前方法，请在“方法选择”中选择并设置方法";
+        else if(parameters.isEmpty()) methodError="当前方法缺少完整参数，请编辑并保存方法后重新设置";
+        else if(network->confirmedMethodParameters().isEmpty())
+            methodError=network->statusDetails().value("methodConfirmationReason").toString()
+                +"。请在“方法选择”选中当前方法，再点击“设为当前方法”";
+        else if(parameters!=network->confirmedMethodParameters())
+            methodError="当前方法参数与仪器已确认参数不一致，请重新点击“设为当前方法”";
+        if(!methodError.isEmpty()) {
+            workspace_->appendAudit(sessionOperator_,"DETECTION_START_BLOCKED",method.id,
+                QJsonDocument(QJsonObject{{"reason",methodError},{"active_parameters",parameters},
+                    {"confirmed_parameters",network->confirmedMethodParameters()}}).toJson(QJsonDocument::Compact));
+            emit notice(methodError);return;
+        }
+        const auto preset=instrumentPreset();
+        const int seconds=preset.value("detectionTimeSeconds").toInt();
+        QString error;
+        activeAcquisitionSessionId_=workspace_->beginAcquisitionSession(sessionOperator_,"DEVICE_UNVALIDATED",&error);
+        if(activeAcquisitionSessionId_.isEmpty()) {emit notice("无法建立采集记录："+error);return;}
+        activeSampleInfo_.insert("detection_time_seconds",seconds);
+        activeSampleInfo_.insert("preset_snapshot",QJsonObject::fromVariantMap(preset));
+        activeSampleInfo_.insert("screening_status","NOT_CONFIGURED");
+        activeSampleInfo_.insert("mass_axis_profile",NetworkProtocol::fullscanCalibrationProfile());
+        activeSampleInfo_.insert("waveform_crc_policy","record_only");
+        currentRun_={};result_={};scans_.clear();pendingSpectrum_.clear();liveSpectrum_.clear();progress_=0;
+        emit spectrumChanged(liveSpectrum_);emit scanSeriesChanged();emit progressChanged(0);
+        setPhase(Phase::Acquiring,"等待仪器确认检测开启");
+        if(!network->startAcquisition(seconds,&error) && phase_==Phase::Acquiring) {
+            workspace_->finishAcquisitionSession(activeAcquisitionSessionId_,"FAILED",error);
+            activeAcquisitionSessionId_.clear();setPhase(Phase::Failed,"检测未开始");emit notice(error);
+        }
+        return;
+    }
     if (!instrument_->descriptor().simulation) {
         emit notice("真实采集需完成厂家原始谱图协议与分析验证；当前交付仅开放受控接口，不生成伪装的真实结果。");
         return;
@@ -1272,6 +1356,9 @@ void AppController::cancelDetection() {
                                               : "当前没有可取消的采集");
         return;
     }
+    if(auto *network=qobject_cast<NetworkInstrument *>(instrument_.get())) {
+        network->stopAcquisition(); emit notice("已请求关闭检测，等待仪器确认");return;
+    }
     acquisitionTimer_.stop();
     if (instrument_->validate({"CancelAcquisition", CommandRisk::Routine, {}}).allowed)
         instrument_->cancel();
@@ -1305,7 +1392,8 @@ void AppController::finishAcquisition() {
         : QString("%1 v%2 [%3]").arg(method.name).arg(method.version).arg(method.checksum.left(8));
     RunSummary summary{QUuid::createUuid().toString(QUuid::WithoutBraces).left(12),
         QDateTime::currentDateTimeUtc(), sessionOperator_, methodLabel,
-        activeSampleInfo_.contains("reanalysis_source_run") ? "IMPORTED_UNVALIDATED" : "DEMO_SIMULATION",
+        activeSampleInfo_.contains("reanalysis_source_run") ? "IMPORTED_UNVALIDATED"
+            : (!instrument_->descriptor().simulation ? "DEVICE_UNVALIDATED" : "DEMO_SIMULATION"),
         {}, 0, 0, "PENDING_REVIEW", {}};
     summary.sampleInfo = activeSampleInfo_;
     auto *worker = new AnalysisWorker(engine_, pendingSpectrum_, scans_, instrument_->health(),
@@ -1336,7 +1424,8 @@ void AppController::finishAcquisition() {
                 return;
             }
             setPhase(Phase::ResultReady,
-                result_.quality.level == QualityLevel::Pass ? "质量通过" : "结果需要复核");
+                currentRun_.dataScope=="DEVICE_UNVALIDATED" ? "采集已完成，筛查未配置"
+                : result_.quality.level == QualityLevel::Pass ? "分析完成" : "分析完成，部分质量检查未通过");
             emit spectrumChanged(liveSpectrum_);
             emit analysisCompleted(result_);
             emit runSaved(currentRun_);

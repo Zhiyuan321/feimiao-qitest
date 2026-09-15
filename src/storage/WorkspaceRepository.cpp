@@ -1,4 +1,4 @@
-#include "storage/WorkspaceRepository.h"
+﻿#include "storage/WorkspaceRepository.h"
 #include "storage/ScanSeriesCodec.h"
 #include <QJsonArray>
 #include "core/ChromatogramEngine.h"
@@ -10,6 +10,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
+#include <cmath>
+#include <limits>
 
 namespace qitest {
 namespace {
@@ -133,12 +135,12 @@ bool WorkspaceRepository::initializeSchema(QString *error) {
         "run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, baseline REAL NOT NULL, "
         "noise_mad REAL NOT NULL, total_ion_current REAL NOT NULL)",
         "CREATE TABLE IF NOT EXISTS instrument_telemetry("
-        "run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, molecular_pump_rpm REAL NOT NULL, "
-        "molecular_pump_current_a REAL NOT NULL, molecular_pump_voltage_v REAL NOT NULL, "
-        "molecular_pump_temperature_c REAL NOT NULL, vacuum_mbar REAL NOT NULL, carrier_gas_mode TEXT NOT NULL, "
-        "carrier_gas_pressure_torr REAL NOT NULL, carrier_gas_flow_ml_min REAL NOT NULL, "
-        "ion_trap_temperature_c REAL NOT NULL, td_temperature_c REAL NOT NULL, ion_source_voltage_v REAL NOT NULL, "
-        "multiplier_voltage_v REAL NOT NULL, extraction_flow_percent REAL NOT NULL, syringe_remaining_percent REAL NOT NULL)",
+        "run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, molecular_pump_rpm REAL, "
+        "molecular_pump_current_a REAL, molecular_pump_voltage_v REAL, "
+        "molecular_pump_temperature_c REAL, vacuum_mbar REAL, carrier_gas_mode TEXT NOT NULL, "
+        "carrier_gas_pressure_torr REAL, carrier_gas_flow_ml_min REAL, "
+        "ion_trap_temperature_c REAL, td_temperature_c REAL, ion_source_voltage_v REAL, "
+        "multiplier_voltage_v REAL, extraction_flow_percent REAL, syringe_remaining_percent REAL)",
         "CREATE TABLE IF NOT EXISTS detected_peaks("
         "run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, mz REAL NOT NULL, "
         "relative_intensity REAL NOT NULL, signal_to_noise REAL NOT NULL, PRIMARY KEY(run_id,ordinal))",
@@ -167,6 +169,26 @@ bool WorkspaceRepository::initializeSchema(QString *error) {
         "CREATE INDEX IF NOT EXISTS idx_acquisition_status ON acquisition_sessions(status,started_at DESC)"
     };
     for (const auto &statement : statements) if (!exec(query, statement, error)) return false;
+    // Older workspaces required every telemetry value, which rejects real adapters'
+    // unknown (NaN) readings. Preserve old rows while permitting SQL NULL for unknowns.
+    bool migrateTelemetry=false;
+    if(!query.exec("PRAGMA table_info(instrument_telemetry)")) return false;
+    while(query.next()) if(query.value(1).toString()=="molecular_pump_rpm") migrateTelemetry=query.value(3).toBool();
+    query.finish();
+    if(migrateTelemetry) {
+        if(!database_.transaction()) {if(error)*error=database_.lastError().text();return false;}
+        QString schema;
+        for(const auto &statement:statements)
+            if(statement.startsWith("CREATE TABLE IF NOT EXISTS instrument_telemetry(")) schema=statement;
+        schema.replace("IF NOT EXISTS instrument_telemetry(","instrument_telemetry_nullable(");
+        for(const auto &sql:QStringList{schema,
+            "INSERT INTO instrument_telemetry_nullable SELECT * FROM instrument_telemetry",
+            "DROP TABLE instrument_telemetry",
+            "ALTER TABLE instrument_telemetry_nullable RENAME TO instrument_telemetry"}) {
+            if(!exec(query,sql,error)) {database_.rollback();return false;}
+        }
+        if(!database_.commit()) {if(error)*error=database_.lastError().text();return false;}
+    }
     return true;
 }
 
@@ -182,7 +204,8 @@ bool WorkspaceRepository::saveCompletedRun(const RunSummary &summary,
     run.prepare("INSERT INTO runs(id,completed_at,operator_name,method_name,instrument_id,data_scope,quality_level,"
                 "quality_score,engine_version,library_version,candidate_count,review_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)");
     const QList<QVariant> values{summary.id, summary.completedAt.toUTC().toString(Qt::ISODateWithMs),
-        summary.operatorName, summary.methodName, "QITEST-01-SIMULATOR", summary.dataScope,
+        summary.operatorName, summary.methodName,
+        summary.dataScope=="DEVICE_UNVALIDATED" ? "TCP-FULLSCAN" : "QITEST-01-SIMULATOR", summary.dataScope,
         levelName(result.quality.level), result.quality.score, result.engineVersion, result.libraryVersion,
         result.candidates.size(), summary.reviewStatus};
     for (const auto &value : values) run.addBindValue(value);
@@ -344,13 +367,10 @@ StoredRunDetail WorkspaceRepository::loadRun(const QString &runId) const {
         "FROM instrument_telemetry WHERE run_id=?");
     telemetryQuery.addBindValue(runId);
     if (telemetryQuery.exec() && telemetryQuery.next()) {
-        detail.telemetry = {telemetryQuery.value(0).toDouble(), telemetryQuery.value(1).toDouble(),
-            telemetryQuery.value(2).toDouble(), telemetryQuery.value(3).toDouble(),
-            telemetryQuery.value(4).toDouble(), telemetryQuery.value(5).toString(),
-            telemetryQuery.value(6).toDouble(), telemetryQuery.value(7).toDouble(),
-            telemetryQuery.value(8).toDouble(), telemetryQuery.value(9).toDouble(),
-            telemetryQuery.value(10).toDouble(), telemetryQuery.value(11).toDouble(),
-            telemetryQuery.value(12).toDouble(), telemetryQuery.value(13).toDouble()};
+        const auto number=[&telemetryQuery](int i) { return telemetryQuery.value(i).isNull()
+            ? std::numeric_limits<double>::quiet_NaN() : telemetryQuery.value(i).toDouble(); };
+        detail.telemetry = {number(0),number(1),number(2),number(3),number(4),telemetryQuery.value(5).toString(),
+            number(6),number(7),number(8),number(9),number(10),number(11),number(12),number(13)};
     }
     QSqlQuery peaks(database_);
     peaks.prepare("SELECT mz,relative_intensity,signal_to_noise FROM detected_peaks WHERE run_id=? ORDER BY ordinal"); peaks.addBindValue(runId);

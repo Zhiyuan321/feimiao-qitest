@@ -21,6 +21,7 @@ class QTimer;
 class QTreeWidget;
 class QGridLayout;
 class QResizeEvent;
+class QCloseEvent;
 class QDoubleSpinBox;
 
 namespace Scientz::Ui {
@@ -37,6 +38,7 @@ public:
     explicit MainWindow(AppController *controller, QWidget *parent = nullptr);
 
 protected:
+    void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
 
 private:
@@ -124,17 +126,11 @@ private:
     QLabel *reportStatus_ = nullptr;
     QLabel *reportMeta_ = nullptr;
     QLabel *reportSelectionHint_ = nullptr;
-    QLabel *reportQualityValue_ = nullptr;
-    QLabel *reportCandidateCount_ = nullptr;
-    QLabel *reportReviewState_ = nullptr;
-    QLabel *reportScope_ = nullptr;
     QLabel *reportEvidenceDetail_ = nullptr;
-    QLabel *reportQualityChecks_ = nullptr;
     QTableWidget *reportCandidateTable_ = nullptr;
     QLineEdit *reportCandidateSearch_ = nullptr;
-    QPushButton *reportReviewButton_ = nullptr;
+    QPushButton *reportSpectrumButton_ = nullptr;
     QPushButton *reportExportButton_ = nullptr;
-    QPushButton *reportReviewViewButton_ = nullptr;
     QPushButton *reportPreviewViewButton_ = nullptr;
     bool reportPreviewVisible_ = false;
     QLineEdit *librarySearch_ = nullptr;

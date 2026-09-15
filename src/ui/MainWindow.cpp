@@ -14,6 +14,7 @@
 #include "core/QuantitationEngine.h"
 #include "core/ChromatogramEngine.h"
 #include "ui/ChromatogramDialog.h"
+#include "ui/ResultSpectrumDialog.h"
 #include "core/QtCompat.h"
 #include "core/PlatformPaths.h"
 #include "ui/scientz/models/ScientzActionRegistry.h"
@@ -59,6 +60,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QCloseEvent>
 #include <QTabBar>
 #include <QStyle>
 #include <QTableWidget>
@@ -435,7 +437,7 @@ QWidget *MainWindow::createWorkspacePage() {
     auto *method = createCommandButton("OpenMethod", "方法选择", commandIcon("method"));
     runMethod->setToolTip("打开运行工作区；不会开始或停止检测");
     method->setToolTip("编辑、保存和启用检测方法版本");
-    report->setToolTip("复核结果并生成报告");
+    report->setToolTip("查看结果并生成报告");
     runMethod->setFixedWidth(78);
     method->setFixedWidth(78);
     report->setFixedWidth(78);
@@ -647,7 +649,10 @@ QWidget *MainWindow::createWorkspacePage() {
         if (reportExportButton_) {
             reportExportButton_->setText("已生成");
             QTimer::singleShot(1600, this, [this] {
-                if (reportExportButton_) reportExportButton_->setText("生成 PDF");
+                if (reportExportButton_) {
+                    reportExportButton_->setText("生成 PDF");
+                    reportExportButton_->setEnabled(!controller_->currentRun().id.isEmpty());
+                }
             });
         }
         if (!QStandardPaths::isTestModeEnabled())
@@ -655,6 +660,13 @@ QWidget *MainWindow::createWorkspacePage() {
     });
     connect(controller_, &AppController::methodsChanged, this, [this] {
         if (methodRefreshTimer_) methodRefreshTimer_->start();
+    });
+    QTimer::singleShot(0, this, [this] {
+        if (!controller_->currentRun().id.isEmpty()) { refreshReport(controller_->currentRun()); return; }
+        if (controller_->phase() == AppController::Phase::Acquiring
+            || controller_->phase() == AppController::Phase::Analyzing || controller_->importInProgress()) return;
+        const auto recent = controller_->recentRuns(1);
+        if (!recent.isEmpty()) controller_->loadStoredRun(recent.first().id);
     });
     return page;
 }
@@ -675,7 +687,7 @@ QWidget *MainWindow::createHomePage() {
     contextLayout->addWidget(makeLabel("●", "healthy"));
     contextLayout->addWidget(phaseLabel_);
     contextLayout->addStretch();
-    workflowLabel_ = makeLabel("● 准备  ›  采集  ›  分析  ›  复核/报告", "metadata");
+    workflowLabel_ = makeLabel("● 准备  ›  采集  ›  分析  ›  报告", "metadata");
     contextLayout->addWidget(workflowLabel_);
     layout->addWidget(context);
 
@@ -1437,8 +1449,10 @@ QWidget *MainWindow::createSettingsPage() {
     });
 
     auto *presetPage = new QWidget;
+    presetPage->setObjectName("instrumentPresetPage");
     auto *presetLayout = new QVBoxLayout(presetPage);
     presetLayout->setContentsMargins(0, 0, 0, 0);
+    presetLayout->addWidget(makeLabel("仪器参数", "sectionTitle"));
     auto *presetForm = new QFormLayout;
     presetForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     presetForm->setHorizontalSpacing(18);
@@ -1486,16 +1500,99 @@ QWidget *MainWindow::createSettingsPage() {
     if (savedEfc >= 0 && savedEfc <= 50.0) efc->setValue(savedEfc);
     else efc->setToolTip("旧预设超过协议规定的 0–50 mL/min，未载入；请核对后重新保存。未下发仪器。");
     presetLayout->addLayout(presetForm);
+    const auto defaults = controller_->instrumentPreset();
+    QMap<QString,QDoubleSpinBox *> presetNumbers;
+    QMap<QString,QSpinBox *> presetIntegers;
+    QMap<QString,QLineEdit *> presetTexts;
+    QMap<QString,QComboBox *> presetChoices;
+    auto *extraForm = new QFormLayout;
+    extraForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    extraForm->setHorizontalSpacing(18);
+    extraForm->setVerticalSpacing(10);
+    const auto number = [&](const QString &key,const QString &label,int decimals=2,bool signedValue=false) {
+        auto *input=new QDoubleSpinBox;
+        input->setObjectName("preset_"+key); input->setAccessibleName(label);
+        input->setRange(signedValue ? -1e9 : 0,1e9); input->setDecimals(decimals);
+        input->setKeyboardTracking(false); input->setValue(defaults.value(key).toDouble());
+        extraForm->addRow(label,input); presetNumbers.insert(key,input);
+    };
+    const auto integer = [&](const QString &key,const QString &label,int minimum=0) {
+        auto *input=new QSpinBox;
+        input->setObjectName("preset_"+key); input->setAccessibleName(label);
+        input->setRange(minimum,2147483647); input->setKeyboardTracking(false);
+        input->setValue(defaults.value(key).toInt());
+        extraForm->addRow(label,input); presetIntegers.insert(key,input);
+    };
+    const auto path = [&](const QString &key,const QString &label,const QString &filter) {
+        auto *row=new QWidget; auto *layout=new QHBoxLayout(row);
+        layout->setContentsMargins(0,0,0,0); layout->setSpacing(6);
+        auto *input=new QLineEdit(defaults.value(key).toString());
+        input->setObjectName("preset_"+key); input->setAccessibleName(label);
+        input->setMinimumWidth(0); input->setMaxLength(4096); input->setPlaceholderText("选择文件或输入路径");
+        auto *browse=new QPushButton("浏览"); browse->setObjectName("browsePreset_"+key);
+        browse->setAccessibleName("选择"+label); browse->setFixedWidth(64);
+        layout->addWidget(input,1); layout->addWidget(browse);
+        connect(browse,&QPushButton::clicked,this,[this,input,label,filter] {
+            const auto file=QFileDialog::getOpenFileName(this,"选择"+label,input->text(),filter);
+            if(!file.isEmpty()) input->setText(QDir::toNativeSeparators(file));
+        });
+        extraForm->addRow(label,row); presetTexts.insert(key,input);
+    };
+    const auto choice = [&](const QString &key,const QString &label,const QStringList &items,bool editable) {
+        auto *input=new QComboBox; input->addItems(items); input->setEditable(editable);
+        input->setObjectName("preset_"+key); input->setAccessibleName(label);
+        input->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        input->setMinimumContentsLength(6);
+        if(editable) input->lineEdit()->setMaxLength(4096);
+        input->setCurrentText(defaults.value(key).toString());
+        extraForm->addRow(label,input); presetChoices.insert(key,input);
+    };
+    presetLayout->addWidget(makeLabel("检测与分析", "sectionTitle"));
+    number("correctionValue","校正数值",2,true);
+    number("intensityThreshold","强度阈值");
+    path("libraryPath","库路径","谱库文件 (*.lib *.json);;所有文件 (*)");
+    number("backgroundSubtraction","背景扣除");
+    integer("detectionTimeSeconds","检测时间（秒）",1);
+    choice("quantitationMode","定量方式",{"外标","内标"},false);
+    extraForm->addRow(makeLabel("维护参数", "sectionTitle"));
+    path("maintenanceMethodPath","维护方法","方法文件 (*.mth *.json);;所有文件 (*)");
+    number("maintenanceIntervalHours","定期时间（时）");
+    integer("maintenanceDurationSeconds","维护持续时间（秒）");
+    integer("gasAssistDelaySeconds","气体辅助延时（秒）");
+    extraForm->addRow(makeLabel("设备与数据", "sectionTitle"));
+    number("pressureStandardValue","气压标准值");
+    choice("deviceConfiguration","设备配置",{"NONEG100C"},true);
+    number("backgroundNoise","背景噪音");
+    number("signalToNoiseRatio","信噪比");
+    path("baseDataPath","基数据","基数据文件 (*.xml *.json *.csv);;所有文件 (*)");
+    presetLayout->addLayout(extraForm);
+    auto *presetStatus=makeLabel("预设保存在本机；保存不会立即启动检测或维护。");
+    presetStatus->setObjectName("presetSaveStatus"); presetStatus->setWordWrap(true);
+    presetLayout->addWidget(presetStatus);
     auto *savePreset = new QPushButton("保存预设");
+    savePreset->setObjectName("saveInstrumentPreset");
     savePreset->setProperty("sciRole", "primary");
     presetLayout->addWidget(savePreset, 0, Qt::AlignLeft);
     presetLayout->addStretch();
-    settingsDetailStack_->addWidget(presetPage);
+    auto *presetScroll = new QScrollArea;
+    presetScroll->setObjectName("instrumentPresetScroll");
+    presetScroll->setWidgetResizable(true);
+    presetScroll->setFrameShape(QFrame::NoFrame);
+    presetScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    presetScroll->verticalScrollBar()->setSingleStep(30);
+    presetScroll->setWidget(presetPage);
+    settingsDetailStack_->addWidget(presetScroll);
     connect(savePreset, &QPushButton::clicked, this,
-        [this, trapTemperature, inletFlow, pumpFlow, efc] {
-            controller_->saveInstrumentPreset({{"trapTemperatureC", trapTemperature->value()},
+        [this, trapTemperature, inletFlow, pumpFlow, efc, presetNumbers, presetIntegers, presetTexts, presetChoices, presetStatus] {
+            QVariantMap values{{"trapTemperatureC", trapTemperature->value()},
                 {"inletFlowPercent", inletFlow->value()}, {"pumpFlowPercent", pumpFlow->value()},
-                {"efcMlMin", efc->value()}});
+                {"efcMlMin", efc->value()}};
+            for(auto it=presetNumbers.begin();it!=presetNumbers.end();++it) { it.value()->interpretText(); values.insert(it.key(),it.value()->value()); }
+            for(auto it=presetIntegers.begin();it!=presetIntegers.end();++it) { it.value()->interpretText(); values.insert(it.key(),it.value()->value()); }
+            for(auto it=presetTexts.begin();it!=presetTexts.end();++it) values.insert(it.key(),it.value()->text().trimmed());
+            for(auto it=presetChoices.begin();it!=presetChoices.end();++it) values.insert(it.key(),it.value()->currentText().trimmed());
+            presetStatus->setText(controller_->saveInstrumentPreset(values)
+                ? "预设已保存，下次打开自动载入。" : "保存失败，请检查参数后重试。");
         });
 
     auto *powerPage = new QWidget;
@@ -1640,7 +1737,7 @@ QWidget *MainWindow::createSettingsPage() {
             copy->setText(guard
                 ? "界面操作已锁定。\n\n这是本软件的防误触保护，不是系统锁屏或身份验证。不会关闭仪器。点击下方按钮恢复操作。"
                 : target == "guide"
-                ? "1. 方法选择：选择并激活方法。\n\n2. 样品分析：导入已有数据，或填写样本信息后开始检测；完成后自动保存。\n\n3. 报告查看：复核结果并导出 PDF。"
+                ? "1. 方法选择：选择并激活方法。\n\n2. 样品分析：导入已有数据，或填写样本信息后开始检测；完成后自动保存。\n\n3. 报告查看：查看结果并导出 PDF。"
                 : settingsDetailDescription_->text() + "\n\n接入前需提供厂家通信协议或 SDK、接口与量程、单位、安全互锁及操作回执。资料尚缺，不会向仪器发送猜测指令。");
             body->addWidget(copy);
             auto *done = new QPushButton(guard ? "恢复操作" : "关闭");
@@ -1672,13 +1769,11 @@ QWidget *MainWindow::createReportPage() {
     auto *titleLayout = new QVBoxLayout(titles);
     titleLayout->setContentsMargins(0, 0, 0, 0);
     titleLayout->setSpacing(1);
-    titleLayout->addWidget(makeLabel("结果复核与报告", "pageTitle"));
+    titleLayout->addWidget(makeLabel("报告生成与查看", "pageTitle"));
     header->addWidget(titles);
     header->addStretch();
-    reportReviewButton_ = new QPushButton("完成复核");
+    reportSpectrumButton_ = new QPushButton("谱图查看");
     reportExportButton_ = new QPushButton("生成 PDF");
-    reportReviewViewButton_ = new QPushButton("复核");
-    reportReviewViewButton_->setObjectName("reportReviewView");
     reportPreviewViewButton_ = new QPushButton("预览");
     reportPreviewViewButton_->setObjectName("reportPreviewView");
     auto *openSavedData = new QPushButton("打开数据");
@@ -1686,53 +1781,24 @@ QWidget *MainWindow::createReportPage() {
     auto *screeningDetails = new QPushButton("筛查详情");
     screeningDetails->setObjectName("screeningDetails");
     reportExportButton_->setProperty("sciRole", "primary");
-    reportReviewButton_->setEnabled(false);
+    reportSpectrumButton_->setEnabled(false);
     reportExportButton_->setEnabled(false);
-    reportReviewViewButton_->setProperty("sciState", "current");
-    reportReviewViewButton_->setToolTip("查看可疑结果并进行人工复核");
     reportPreviewViewButton_->setToolTip("查看报告内容预览");
     header->addWidget(openSavedData);
-    header->addWidget(reportReviewButton_);
+    header->addWidget(reportSpectrumButton_);
     header->addWidget(reportExportButton_);
     layout->addLayout(header);
     auto *viewTools = new QHBoxLayout;
-    viewTools->addWidget(reportReviewViewButton_);
     viewTools->addWidget(reportPreviewViewButton_);
     viewTools->addStretch();
     viewTools->addWidget(screeningDetails);
     layout->addLayout(viewTools);
 
-    auto *summaryStrip = new QFrame;
-    summaryStrip->setObjectName("reportSummaryStrip");
-    summaryStrip->setProperty("sciRole", "summaryStrip");
-    auto *summaryLayout = new QHBoxLayout(summaryStrip);
-    summaryLayout->setContentsMargins(14, 10, 14, 10);
-    summaryLayout->setSpacing(0);
-    auto addMetric = [summaryLayout](const QString &title, QLabel *&value, int stretch = 1) {
-        auto *metric = new QWidget;
-        auto *metricLayout = new QVBoxLayout(metric);
-        metricLayout->setContentsMargins(10, 0, 10, 0);
-        metricLayout->setSpacing(1);
-        metricLayout->addWidget(makeLabel(title, "metadata"));
-        value = makeLabel("—", "metricValue");
-        value->setWordWrap(false);
-        metricLayout->addWidget(value);
-        summaryLayout->addWidget(metric, stretch);
-    };
-    addMetric("质量门控", reportQualityValue_);
-    summaryLayout->addWidget(separator(true));
-    addMetric("候选结果", reportCandidateCount_);
-    summaryLayout->addWidget(separator(true));
-    addMetric("人工复核", reportReviewState_);
-    summaryLayout->addWidget(separator(true));
-    addMetric("数据类型", reportScope_, 2);
-    layout->addWidget(summaryStrip);
-
     auto *body = new QSplitter;
     body->setChildrenCollapsible(false);
 
     auto *reviewWorkspace = new QWidget;
-    reviewWorkspace->setObjectName("reportReviewWorkspace");
+    reviewWorkspace->setObjectName("reportResultsWorkspace");
     auto *reviewLayout = new QVBoxLayout(reviewWorkspace);
     reviewLayout->setContentsMargins(0, 0, 10, 0);
     reviewLayout->setSpacing(10);
@@ -1803,29 +1869,13 @@ QWidget *MainWindow::createReportPage() {
     reportEvidenceDetail_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
     candidateEvidenceLayout->addWidget(reportEvidenceDetail_);
     evidenceLayout->addWidget(candidateEvidence, 1);
-    evidenceLayout->addWidget(separator(true));
-    auto *qualityEvidence = new QWidget;
-    auto *qualityEvidenceLayout = new QVBoxLayout(qualityEvidence);
-    qualityEvidenceLayout->setContentsMargins(0, 0, 0, 0);
-    qualityEvidenceLayout->setSpacing(5);
-    qualityEvidenceLayout->addWidget(makeLabel("质量检查", "sectionTitle"));
-    reportQualityChecks_ = makeLabel("完成检测后显示确定性质量门控。", "secondary");
-    reportQualityChecks_->setWordWrap(false);
-    reportQualityChecks_->setProperty("sciRole", "reportDetail");
-    reportQualityChecks_->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
-    qualityEvidenceLayout->addWidget(reportQualityChecks_);
-    evidenceLayout->addWidget(qualityEvidence, 1);
     reviewLayout->addWidget(evidencePanel);
     body->addWidget(reviewWorkspace);
 
     auto *preview = new QWidget;
     preview->setObjectName("reportPreviewWorkspace");
-    connect(reportReviewViewButton_, &QPushButton::clicked, this, [this] {
-        reportPreviewVisible_ = false;
-        updateWorkspaceLayout();
-    });
     connect(reportPreviewViewButton_, &QPushButton::clicked, this, [this] {
-        reportPreviewVisible_ = true;
+        reportPreviewVisible_ = !reportPreviewVisible_;
         updateWorkspaceLayout();
     });
     auto *previewLayout = new QVBoxLayout(preview);
@@ -1857,7 +1907,7 @@ QWidget *MainWindow::createReportPage() {
     flowLayout->setSpacing(7);
     flowLayout->addWidget(makeLabel("报告流程", "sectionTitle"));
     flowLayout->addWidget(makeLabel("① 选择需要写入报告的候选证据", "bodyStrong"));
-    flowLayout->addWidget(makeLabel("② 操作员完成人工复核并留下状态", "bodyStrong"));
+    flowLayout->addWidget(makeLabel("② 查看当前数据的谱图和筛查详情", "bodyStrong"));
     flowLayout->addWidget(makeLabel("③ 生成可追溯 PDF，不覆盖原始记录", "bodyStrong"));
     previewLayout->addWidget(flowCard);
 
@@ -1898,9 +1948,15 @@ QWidget *MainWindow::createReportPage() {
                 : "选择上方候选后，这里显示匹配分数、质量误差和碎片证据。");
         }
         reportExportButton_->setEnabled(!controller_->currentRun().id.isEmpty()
-            && controller_->currentRun().reviewStatus == "REVIEWED");
+            && !controller_->result().processedSpectrum.points.isEmpty());
     });
-    connect(reportReviewButton_, &QPushButton::clicked, controller_, &AppController::markCurrentRunReviewed);
+    reportSpectrumButton_->setObjectName("viewResultSpectrum");
+    connect(reportSpectrumButton_, &QPushButton::clicked, this, [this] {
+        if (controller_->currentRun().id.isEmpty()) return;
+        auto *dialog = new ResultSpectrumDialog(controller_->scans(), controller_->result().processedSpectrum.points,
+            recordLabel(controller_->currentRun().id) + " · " + dataScopeLabel(controller_->currentRun().dataScope), this);
+        dialog->open();
+    });
     connect(openSavedData, &QPushButton::clicked, this, [this] {
         QSettings settings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
         const QString defaultFolder = PlatformPaths::documentsSubdirectory("飞秒检测数据");
@@ -1910,7 +1966,8 @@ QWidget *MainWindow::createReportPage() {
         const QString path = QFileDialog::getOpenFileName(this, "打开已保存的检测数据", initial,
             "检测数据 (*.qit.json *.scan.csv);;全部支持文件 (*.json *.csv)");
         if (path.isEmpty()) return;
-        showReportAfterRunSaved_ = true;
+        reportPreviewVisible_ = false;
+        updateWorkspaceLayout();
         controller_->importRunArchive(path);
     });
     connect(screeningDetails, &QPushButton::clicked, this, [this] {
@@ -2041,7 +2098,8 @@ QWidget *MainWindow::createReportPage() {
         QTimer::singleShot(2500, this, [this] {
             if (!reportExportButton_ || reportExportButton_->text() != "生成中…") return;
             reportExportButton_->setText("生成 PDF");
-            reportExportButton_->setEnabled(controller_->currentRun().reviewStatus == "REVIEWED");
+            reportExportButton_->setEnabled(!controller_->currentRun().id.isEmpty()
+                && !controller_->result().processedSpectrum.points.isEmpty());
         });
     });
     return page;
@@ -2195,7 +2253,7 @@ QWidget *MainWindow::createMethodPage() {
     methodTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     methodTable_->setSelectionMode(QAbstractItemView::SingleSelection);
     activate->setText("设为当前方法");
-    activate->setToolTip("将所选版本用于下一次检测，不会立即开始采集");
+    activate->setToolTip("下发所选方法并等待仪器确认；当前活动方法也可重新下发，不会开始检测");
     activate->setEnabled(false);
     remove->setEnabled(false);
     layout->addWidget(methodTable_, 1);
@@ -2226,7 +2284,9 @@ QWidget *MainWindow::createMethodPage() {
         const auto *item = row >= 0 ? methodTable_->item(row, 0) : nullptr;
         const bool valid = item && !item->data(Qt::UserRole).toString().isEmpty();
         const bool alreadyActive = item && item->data(Qt::UserRole + 1).toBool();
-        activate->setEnabled(valid && !alreadyActive);
+        // Local active selection survives reconnects; device confirmation does not.
+        // Allow the same version to be explicitly applied again.
+        activate->setEnabled(valid);
         remove->setEnabled(valid && !alreadyActive);
         if (valid && methodName_) {
             const QString methodId = item->data(Qt::UserRole).toString();
@@ -2390,6 +2450,16 @@ void MainWindow::setInstrumentToolsVisible(bool visible) {
     updateWorkspaceLayout();
 }
 
+void MainWindow::closeEvent(QCloseEvent *event) {
+    if(controller_->phase()==AppController::Phase::Acquiring) {
+        controller_->cancelDetection();
+        statusBar()->showMessage("正在结束检测，请等待仪器关闭确认后再退出。",10000);
+        event->ignore();
+        return;
+    }
+    QMainWindow::closeEvent(event);
+}
+
 void MainWindow::resizeEvent(QResizeEvent *event) {
     QMainWindow::resizeEvent(event);
     updateWorkspaceLayout();
@@ -2414,15 +2484,12 @@ void MainWindow::updateWorkspaceLayout() {
     if(auto *sidebar=findChild<QWidget *>("settingsSidebarRight"))sidebar->setVisible(!small);
     if(auto *menu=findChild<QWidget *>("embeddedSettingsMenu"))menu->setVisible(small);
     if(auto *back=findChild<QWidget *>("embeddedSettingsBack"))back->setVisible(small);
-    if (auto *review = findChild<QWidget *>("reportReviewWorkspace"))
+    if (auto *review = findChild<QWidget *>("reportResultsWorkspace"))
         review->setVisible(!reportPreviewVisible_);
     if (auto *preview = findChild<QWidget *>("reportPreviewWorkspace"))
         preview->setVisible(reportPreviewVisible_);
-    if (reportReviewViewButton_ && reportPreviewViewButton_) {
-        reportReviewViewButton_->setProperty("sciState", reportPreviewVisible_ ? QVariant{} : QVariant("current"));
-        reportPreviewViewButton_->setProperty("sciState", reportPreviewVisible_ ? QVariant("current") : QVariant{});
-        Scientz::Ui::ThemeManager::refresh(reportReviewViewButton_);
-        Scientz::Ui::ThemeManager::refresh(reportPreviewViewButton_);
+    if (reportPreviewViewButton_) {
+        reportPreviewViewButton_->setText(reportPreviewVisible_ ? "返回结果" : "预览");
     }
     if (auto *body = findChild<QWidget *>("loginBody"))
         body->layout()->setContentsMargins(small ? 20 : 80, small ? 16 : 48, small ? 20 : 80, small ? 16 : 48);
@@ -2671,19 +2738,15 @@ void MainWindow::refreshReport(const RunSummary &run) {
     else if (reportCandidateSearch_) reportCandidateSearch_->clear();
     reportCandidateTable_->setProperty("displayedRunId", run.id);
     if (run.id.isEmpty()) {
+        resultSource_->clear();
         reportRunId_->setText("等待检测");
         reportMeta_->clear();
         reportStatus_->clear();
-        if (reportQualityValue_) reportQualityValue_->setText("等待检测");
-        if (reportCandidateCount_) reportCandidateCount_->setText("0 项");
-        if (reportReviewState_) reportReviewState_->setText("尚未开始");
-        if (reportScope_) reportScope_->setText("—");
         if (reportEvidenceDetail_)
             reportEvidenceDetail_->setText("选择候选查看匹配证据");
-        if (reportQualityChecks_) reportQualityChecks_->setText("等待检测");
         prepareTableRows(reportCandidateTable_, 0);
         reportSelectionHint_->clear();
-        reportReviewButton_->setEnabled(false);
+        reportSpectrumButton_->setEnabled(false);
         reportExportButton_->setEnabled(false);
         return;
     }
@@ -2694,27 +2757,12 @@ void MainWindow::refreshReport(const RunSummary &run) {
     reportMeta_->setText(QString("%1\n%2 · %3")
         .arg(run.completedAt.toLocalTime().toString("yyyy-MM-dd HH:mm:ss"),
             operatorLabel(run.operatorName), displayMethod));
-    reportStatus_->setText(QString("%1%2")
-        .arg(run.reviewStatus == "REVIEWED" ? "已完成人工复核" : "等待人工复核",
-            run.reportPath.isEmpty() ? QString{} : "\n已生成：" + PlatformPaths::nativeDisplay(run.reportPath)));
+    reportStatus_->setText(run.reportPath.isEmpty() ? "可生成 PDF"
+        : "已生成：" + PlatformPaths::nativeDisplay(run.reportPath));
+    resultSource_->setText(recordLabel(run.id) + " · " + run.completedAt.toLocalTime().toString("yyyy-MM-dd HH:mm:ss")
+        + " · " + dataScopeLabel(run.dataScope));
+    resultSource_->show();
     const auto &candidates = controller_->result().candidates;
-    if (reportQualityValue_)
-        reportQualityValue_->setText(QString("%1 · %2/100").arg(qualityLabel(run.qualityLevel)).arg(run.qualityScore));
-    if (reportCandidateCount_) reportCandidateCount_->setText(QString("%1 项").arg(candidates.size()));
-    if (reportReviewState_)
-        reportReviewState_->setText(run.reviewStatus == "REVIEWED" ? "已完成" : "待人工复核");
-    if (reportScope_)
-        reportScope_->setText(dataScopeLabel(run.dataScope));
-
-    QStringList qualitySummary, qualityDetails;
-    for (const auto &check : controller_->result().quality.checks) {
-        qualitySummary.append(QString("%1 %2").arg(check.passed ? "✓" : "△", check.title));
-        qualityDetails.append(QString("%1 %2：%3").arg(check.passed ? "✓" : "△", check.title, check.detail));
-    }
-    if (reportQualityChecks_) {
-        reportQualityChecks_->setText(qualitySummary.isEmpty() ? "无质量检查" : qualitySummary.join(" · "));
-        reportQualityChecks_->setToolTip(qualityDetails.join("\n"));
-    }
     prepareTableRows(reportCandidateTable_, candidates.size());
     for (int row = 0; row < candidates.size(); ++row) {
         const auto &candidate = candidates[row];
@@ -2739,9 +2787,8 @@ void MainWindow::refreshReport(const RunSummary &run) {
     reportSelectionHint_->setText(candidates.isEmpty()
         ? "本次记录没有候选结果。"
         : "选择需要写入报告的候选结果。");
-    const bool reviewed = run.reviewStatus == "REVIEWED";
-    reportExportButton_->setEnabled(reviewed);
-    reportReviewButton_->setEnabled(!reviewed);
+    reportExportButton_->setEnabled(!controller_->result().processedSpectrum.points.isEmpty());
+    reportSpectrumButton_->setEnabled(true);
     reportSelectionHint_->setText("未选择时将导出全部候选结果。");
     for (int row : selectedRows)
         if (row < reportCandidateTable_->rowCount() && !reportCandidateTable_->isRowHidden(row))
@@ -2974,7 +3021,7 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
             {"不确定度", "不可计算", "—", "需要校准与重复测量"}
         };
     } else if (module == "视图") {
-        description = "采集与分析保留 TIC、质谱图、EIC 三张曲线；候选结果统一在生成报告中复核。";
+        description = "采集与分析保留 TIC、质谱图、EIC 三张曲线；可疑结果统一在报告查看中展示。";
         rows = {
             {"TIC", "显示", "扫描序列", "无数据时为空"},
             {"质谱图", "显示", "自动适配", "矢量绘制"},
@@ -2985,12 +3032,12 @@ void MainWindow::populateSettingsDetail(const QString &module, const QString &su
         rows.prepend({"屏幕模式", isFullScreen() ? "全屏" : "窗口", "F11", "可随时切换"});
         actionText = "恢复默认布局"; target = "restoreLayout";
     } else if (module == "帮助") {
-        description = "主流程保持为准备、采集、分析、复核与报告。";
+        description = "主流程保持为方法选择、样品分析、报告查看。";
         rows = {
             {"1 准备", "检查", "设备、样品与方法", "异常会阻断检测"},
             {"2 检测", "执行", "开始检测", "按当前方法与实际设备执行"},
-            {"3 复核", "人工", "只显示可疑候选", "支持单选与多选"},
-            {"4 报告", "输出", "PDF", "复核后生成"}
+            {"3 结果", "自动", "只显示可疑物质", "筛查详情查看完整结果"},
+            {"4 报告", "输出", "PDF", "检测结果可直接生成"}
         };
         actionText = "打开操作说明"; target = "guide";
     } else if (module == "锁屏") {
@@ -3149,12 +3196,12 @@ void MainWindow::updatePhase(AppController::Phase phase, const QString &label) {
         emptyDataBanner_->setVisible(height() >= 620 && phase == AppController::Phase::Ready && controller_->liveSpectrum().isEmpty());
     if (workflowLabel_) {
         const QString marker = phase == AppController::Phase::Acquiring
-            ? "准备  ›  ● 采集  ›  分析  ›  复核/报告"
+            ? "准备  ›  ● 采集  ›  分析  ›  报告"
             : phase == AppController::Phase::Analyzing
-                ? "准备  ›  采集  ›  ● 分析  ›  复核/报告"
+                ? "准备  ›  采集  ›  ● 分析  ›  报告"
                 : phase == AppController::Phase::ResultReady
-                    ? "准备  ›  采集  ›  分析  ›  ● 复核/报告"
-                    : "● 准备  ›  采集  ›  分析  ›  复核/报告";
+                    ? "准备  ›  采集  ›  分析  ›  ● 报告"
+                    : "● 准备  ›  采集  ›  分析  ›  报告";
         workflowLabel_->setText(marker);
     }
     refreshAiContext();
@@ -3172,7 +3219,8 @@ void MainWindow::showResult(const AnalysisResult &result) {
     }
     const bool simulated = controller_->currentRun().dataScope == "DEMO_SIMULATION"
         || std::any_of(result.candidates.begin(), result.candidates.end(), [](const MatchCandidate &candidate) { return candidate.demo; });
-    if (resultSource_) resultSource_->setText(simulated ? "来源：预览" : "来源：导入");
+    if (resultSource_) resultSource_->setText(controller_->currentRun().dataScope=="DEVICE_UNVALIDATED"
+        ? "来源：实机采集，筛查未配置" : simulated ? "来源：预览" : "来源：导入");
     refreshAiContext();
 }
 

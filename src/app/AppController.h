@@ -103,7 +103,6 @@ public slots:
     void setOfflineDemoSession();
     void exportCurrentReport();
     void exportSelectedReport(const QVector<int> &candidateRows);
-    void markCurrentRunReviewed();
     void createDemoMethodVersion(const QString &name, const QString &revisionNote);
     bool createMethodDraft(const QString &name, const QJsonObject &parameters, const QString &baseMethodId = {});
     bool updateMethodDraft(const QString &methodId, const QString &name, const QJsonObject &parameters);
@@ -128,6 +127,7 @@ public slots:
     void cancelAiQuestion();
     void explainFeature(const QString &feature);
     bool saveInstrumentPreset(const QVariantMap &preset);
+    QVariantMap instrumentPreset() const;
     bool deepAiEnabled() const { return aiMode_ != AiMode::Off; }
     AiMode aiMode() const { return aiMode_; }
 

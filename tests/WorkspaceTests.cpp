@@ -16,6 +16,7 @@
 #include <QJsonArray>
 #include <QCryptographicHash>
 #include <cmath>
+#include <limits>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QtTest>
@@ -26,6 +27,7 @@ class WorkspaceTests final : public QObject {
     Q_OBJECT
 private slots:
     void persistsRunAndAudit();
+    void migratesTelemetryAndPreservesUnknownReadings();
     void writesTraceablePdf();
     void versionsAndActivatesMethods();
     void archivesAndValidatesRawSpectrum();
@@ -255,6 +257,46 @@ void WorkspaceTests::persistsRunAndAudit() {
     QCOMPARE(detail.telemetry.syringeRemainingPercent, 76.0);
     QVERIFY(repository.setReviewStatus("run-001", "REVIEWED", "reviewer", &error));
     QCOMPARE(repository.recentRuns().first().reviewStatus, QString("REVIEWED"));
+}
+
+void WorkspaceTests::migratesTelemetryAndPreservesUnknownReadings() {
+    QTemporaryDir dir; QString error;
+    const auto path=dir.filePath("old-workspace.sqlite");
+    const QVector<SpectrumPoint> raw{{100,5},{200,50}};
+    {
+        WorkspaceRepository repository(path); QVERIFY(repository.open(&error));
+        QVERIFY(repository.saveCompletedRun(fixtureRun(),raw,fixtureResult(),fixtureTelemetry(),&error));
+    }
+    // Recreate the previous NOT NULL telemetry schema, including an existing row.
+    {
+        auto db=QSqlDatabase::addDatabase("QSQLITE","legacy-telemetry-fixture");db.setDatabaseName(path);
+        QVERIFY(db.open());QSqlQuery query(db);
+        QVERIFY(query.exec("SELECT sql FROM sqlite_master WHERE name='instrument_telemetry'"));
+        QVERIFY(query.next());auto schema=query.value(0).toString();query.finish();
+        schema.replace("instrument_telemetry(","legacy_telemetry(");schema.replace(" REAL"," REAL NOT NULL");
+        QVERIFY(query.exec(schema));
+        QVERIFY(query.exec("INSERT INTO legacy_telemetry SELECT * FROM instrument_telemetry"));
+        QVERIFY(query.exec("DROP TABLE instrument_telemetry"));
+        QVERIFY(query.exec("ALTER TABLE legacy_telemetry RENAME TO instrument_telemetry"));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase("legacy-telemetry-fixture");
+    {
+        WorkspaceRepository repository(path);QVERIFY2(repository.open(&error),qPrintable(error));
+        const auto old=repository.loadRun("run-001");QVERIFY(old.valid);
+        QCOMPARE(old.telemetry.molecularPumpRpm,60000.0);QCOMPARE(old.rawSpectrum[1].intensity,50.0);
+        auto run=fixtureRun();run.id="real-unknown";run.dataScope="DEVICE_UNVALIDATED";
+        auto telemetry=fixtureTelemetry();telemetry.molecularPumpRpm=std::numeric_limits<double>::quiet_NaN();
+        telemetry.syringeRemainingPercent=std::numeric_limits<double>::quiet_NaN();
+        QVERIFY2(repository.saveCompletedRun(run,raw,fixtureResult(),telemetry,&error),qPrintable(error));
+        const auto loaded=repository.loadRun(run.id);QVERIFY(loaded.valid);
+        QVERIFY(std::isnan(loaded.telemetry.molecularPumpRpm));
+        QVERIFY(std::isnan(loaded.telemetry.syringeRemainingPercent));
+        QCOMPARE(loaded.telemetry.molecularPumpCurrentA,1.2);
+    }
+    WorkspaceRepository reopened(path);QVERIFY(reopened.open(&error));
+    QCOMPARE(reopened.recentRuns().size(),2);
+    QVERIFY(std::isnan(reopened.loadRun("real-unknown").telemetry.molecularPumpRpm));
 }
 
 void WorkspaceTests::writesTraceablePdf() {

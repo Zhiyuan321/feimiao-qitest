@@ -17,7 +17,7 @@ namespace {
 QString qualityText(QualityLevel level) {
     switch (level) {
     case QualityLevel::Pass: return "质量门控通过";
-    case QualityLevel::Review: return "需要人工复核";
+    case QualityLevel::Review: return "部分质量检查未通过";
     case QualityLevel::Fail: return "质量门控失败";
     }
     return "未知";
@@ -104,13 +104,12 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
         field("候选类型", "筛查候选");
         field("证据", candidate.evidence);
     }
-    html += "<h2>复核与适用范围</h2>";
-    field("复核状态", run.reviewStatus == "REVIEWED" ? "已复核" : "待复核");
+    html += "<h2>适用范围</h2>";
     field("重要边界", run.dataScope == "PUBLIC_EXAMPLE"
         ? "本报告来自 OpenMS BSA 公开示例，用于查看曲线和软件流程，不是客户检测结果，不用于浓度验证。"
         : run.dataScope.contains("DEMO")
-        ? "本报告须经人工复核，并按适用检测规范确认后方可形成正式结论。"
-        : "候选结果须结合实验室质控、标准物和授权复核流程后才能形成正式结论。");
+        ? "本报告来自模拟数据，仅用于软件流程演示，不是实机检测结果。"
+        : "本报告列出筛查可疑结果，未列出候选物不等于证明样品阴性。");
     html += "<p>本报告由确定性 C++ 引擎生成数值；本地大语言模型不参与数值计算。</p></body></html>";
 
     QSaveFile output(path);
