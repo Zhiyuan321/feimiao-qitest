@@ -49,6 +49,7 @@ add_library(qitest_core STATIC
     src/core/QuantitationEngine.cpp
     src/core/CalibrationModel.cpp
     src/core/ChromatogramEngine.cpp
+    src/core/IonThresholdScreening.cpp
     src/core/SpectralComparison.cpp
     src/device/SimulatedInstrument.cpp
 )
@@ -75,6 +76,7 @@ target_link_libraries(qitest_network PUBLIC qitest_rs485 Qt${QT_VERSION_MAJOR}::
 add_library(qitest_library STATIC
     src/library/SpectralLibraryRepository.cpp
     src/library/UserStandardRepository.cpp
+    src/library/LibraryFile.cpp
 )
 target_include_directories(qitest_library PUBLIC src)
 target_link_libraries(qitest_library PUBLIC Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Sql)
@@ -148,6 +150,7 @@ set(QITEST_APP_SOURCES
     src/ui/ResultSpectrumDialog.cpp
     src/ui/CalibrationPage.cpp
     src/ui/UserStandardsPage.cpp
+    src/ui/LibraryFilesPage.cpp
     src/ui/StandardComparisonDialog.cpp
     src/ui/scientz/theme/ScientzTheme.cpp
     src/ui/scientz/models/ScientzActionRegistry.cpp
@@ -245,6 +248,7 @@ add_executable(qitest_ui_tests
     src/ui/MethodEditorDialog.cpp
     tests/UiSmokeTests.cpp
     src/ui/UserStandardsPage.cpp
+    src/ui/LibraryFilesPage.cpp
     src/ui/StandardComparisonDialog.cpp
     tests/fixtures/public_ms/fixtures.qrc
     src/ui/CalibrationPage.cpp

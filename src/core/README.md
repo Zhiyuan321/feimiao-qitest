@@ -1,6 +1,8 @@
 # 科学计算与方法数据
 
 - AnalysisEngine：分析流程；ChromatogramEngine：TIC/EIC 与积分。
+
+EIC按用户确认保留每帧目标m/z±容差内的丰度和，曲线不跨帧累计，也不显示累加值。IonThresholdScreening 使用参数预设库路径指定的 .lib：qualitify_ion 的定性离子与 son_area 的同等数量一级阈值按顺序对应。每个离子以 MS1、±0.5 Da（与当前 EIC 默认窗口一致）逐帧求和，再将各帧直接相加，无时间权重、不扣基线、不归一化。所有项都严格大于对应阈值才为可疑；等于或任一项不足为未检出。离子/阈值为空、数值无效或数量不一致的条目标记未筛查，不以母离子、定量离子或二级阈值替代。sumIntensities 与 integrate 的时间梯形积分语义不同。
 - CalibrationModel / QuantitationEngine：校准拟合与定量。
 - MassAxisCalibration：质量轴离线拟合；MethodDraft：方法草案校验。
 - SpectralComparison：谱图比较；QtCompat：Qt 5/6 兼容。

@@ -14,6 +14,7 @@ inline QByteArray pumpReply(int index) {
 class FakeSharedBus final : public QIODevice {
 public:
     QByteArray input;
+    QByteArray mainPayload = statusPayload();
     QList<QByteArray> writes;
     bool respond = true, mainRespond = true, failWrite = false, overlap = false, outstanding = false;
     int openCount = 0, closeCount = 0, pumpDelayMs = 5;
@@ -31,7 +32,7 @@ protected:
         if (failWrite) return -1;
         if (outstanding) overlap = true;
         QByteArray response; int delay = 5;
-        if (request == Rs485Protocol::statusQuery() && mainRespond) response = frame(statusPayload());
+        if (request == Rs485Protocol::statusQuery() && mainRespond) response = frame(mainPayload);
         if (respond) for (int i = 0; i < 4; ++i) if (request == PumpProtocol::query(i)) {
             response = pumpReply(i); delay = pumpDelayMs;
         }

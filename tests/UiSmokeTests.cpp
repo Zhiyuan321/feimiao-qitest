@@ -16,6 +16,7 @@
 #include "ui/scientz/theme/ScientzTheme.h"
 #include "ui/CalibrationPage.h"
 #include "ui/UserStandardsPage.h"
+#include "ui/LibraryFilesPage.h"
 #include "ui/MethodEditorDialog.h"
 #include "ui/InstrumentWorkbench.h"
 #include "ui/DeviceWaveformPanel.h"
@@ -30,6 +31,7 @@
 #include "storage/RunArchiveCodec.h"
 #include "core/AnalysisEngine.h"
 #include "core/ChromatogramEngine.h"
+#include "core/IonThresholdScreening.h"
 #include <QCryptographicHash>
 #include <QCheckBox>
 #include <QJsonArray>
@@ -61,6 +63,7 @@
 #include <QScrollArea>
 #include <QStandardPaths>
 #include <QTableWidget>
+#include <QHeaderView>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QtTest>
@@ -210,12 +213,13 @@ private slots:
         client.write(test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82));
         auto *plot=pressure->findChild<QWidget *>("pressureVoltagePlot");QVERIFY(plot);
         QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
-        QCOMPARE(plot->property("yMaximum").toDouble(),15.0);
+        QCOMPARE(plot->property("yMaximum").toDouble(),6.0);
+        QCOMPARE(controller.pressureVolts().last(),14.25); // Display clipping must not change received values.
         QCOMPARE(plot->property("frameIntervalMs").toInt(),16);
         auto *pressureStatus = pressure->findChild<QLabel *>("pressureWaveformStatus");
         QVERIFY(pressureStatus);
-        QVERIFY(pressureStatus->text().contains("14.25"));
-        QVERIFY(!pressureStatus->isVisibleTo(pressure.get()));
+        QVERIFY(pressureStatus->toolTip().contains("14.25"));
+        QVERIFY(pressureStatus->isVisibleTo(pressure.get()));
         const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
         if(!capture.isEmpty()) {
             QVERIFY(QDir().mkpath(capture));
@@ -232,12 +236,100 @@ private slots:
         controller.stopNetworkListening();QTRY_COMPARE(plot->property("sampleCount").toInt(),0);
         qunsetenv("QITEST_WORKSPACE_DB");
     }
+    void pressureCurveSurvivesCompletedDetection() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("pressure-end.sqlite").toUtf8());
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &request) {
+            const quint8 cmd=quint8(request[2]);return cmd==0x30?test::frame(test::statusPayload())
+                :test::frame(QByteArray::fromHex("1100"),cmd);
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);
+        auto device=std::make_unique<NetworkInstrument>(std::move(serial));auto *adapter=device.get();
+        AppController controller(std::move(device));
+        std::unique_ptr<QWidget> page(createDeviceWaveformPanel(&controller,false));page->resize(720,440);page->show();
+        auto *plot=page->findChild<QWidget *>("pressureVoltagePlot");
+        auto *label=page->findChild<QLabel *>("pressureWaveformStatus");QVERIFY(plot && label);
+        QVERIFY(adapter->startListening("127.0.0.1",0,1000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        QTimer keepAlive;connect(&keepAlive,&QTimer::timeout,&client,[&]{client.write(test::networkFrame(status));});
+        keepAlive.start(200);client.write(test::networkFrame(status));
+        QTRY_VERIFY(adapter->statusDetails()["connected"].toBool());
+        const auto method=MethodDraft::defaultParameters();adapter->requestMethodParameters("pressure-end",method);
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
+        QTRY_COMPARE(adapter->confirmedMethodParameters(),method);
+        QSignalSpy done(adapter,&NetworkInstrument::acquisitionFinished);QString error;
+        QVERIFY(adapter->startAcquisition(1,&error));QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        const auto ack=test::networkFrame(QByteArray::fromHex("11"),0x10,0x15);
+        const auto waveform=test::networkFrame(QByteArray::fromHex("0000200040006000ffff"),0x20,0x82,0,0);
+        client.write(ack+test::networkFrame(QByteArray(3250,1),0x20,0x81,0,0)+waveform);
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,1800);client.readAll();
+        // Legacy hardware can send the last pressure cycle after the stop ACK.
+        client.write(ack+test::networkFrame(QByteArray::fromHex("100030005000ffff"),0x20,0x82,0,1));
+        QTRY_COMPARE(done.size(),1);QVERIFY(done.last()[0].toBool());
+        QTRY_VERIFY(label->text().contains("检测已结束"));
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),4);
+        QTest::qWait(1300); // Beyond the configured pressure timeout, with TCP status still fresh.
+        QCOMPARE(adapter->pressureVolts().size(),4);QVERIFY(label->text().contains("检测已结束"));
+        QVERIFY(!adapter->startAcquisition(0,&error));QCOMPARE(adapter->pressureVolts().size(),4);
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+        if(!capture.isEmpty()) {QDir().mkpath(capture);QVERIFY(page->grab().save(capture+"/pressure-completed.png"));}
+        {
+            MainWindow window(&controller);window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+            window.findChild<QAction *>("OpenHome")->trigger();
+            auto *tabs=window.findChild<QTabWidget *>("analysisViewTabs");QVERIFY(tabs);tabs->setCurrentIndex(1);
+            auto *finished=window.findChild<QLabel *>("pressureWaveformStatus");QVERIFY(finished);
+            for(int height : {768,700}) {
+                window.resize(1024,height);QTest::qWait(100);
+                QVERIFY(finished->isVisibleTo(&window));QVERIFY(finished->text().contains("检测已结束"));
+                const QRect labelRect(finished->mapTo(&window,QPoint()),finished->size());
+                QVERIFY(window.rect().contains(labelRect));QCOMPARE(window.size(),QSize(1024,height));
+                if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/pressure-ended-%1.png").arg(height)));
+            }
+        }
+        client.readAll();
+        QVERIFY(adapter->startAcquisition(1,&error));QVERIFY(adapter->pressureVolts().isEmpty());
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),0);
+        QVERIFY(!label->text().contains("检测已结束"));
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();client.write(ack+waveform);
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),5);
+        adapter->stopAcquisition(true);QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();client.write(ack);
+        QTRY_COMPARE(done.size(),2);QVERIFY(done.last()[1].toBool());
+        QVERIFY(!adapter->statusDetails()["pressureAcquisitionCompleted"].toBool());
+        QVERIFY(!label->text().contains("检测已结束"));
+        adapter->stopListening();QTRY_COMPARE(plot->property("sampleCount").toInt(),0);
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void eicMinutesPreserveSourceTimesAndFixedDuration() {
+        QTemporaryDir dir;
+        SpectrumPlot plot(SpectrumPlot::Mode::Line);
+        plot.setAxisLabels("时间 / min","面积");plot.setXAxisDisplayScale(1.0/60.0);
+        plot.setDefaultXRange(0,20);plot.setPoints({{0,10},{1,20},{2,30}});
+        QCOMPARE(plot.property("defaultXMaximum").toDouble(),20.0);
+        QCOMPARE(plot.points().last().mz,2.0);
+        plot.zoomAt(1,0.5);QVERIFY(plot.isZoomed());plot.resetView();QVERIFY(!plot.isZoomed());
+        QSignalSpy exported(&plot,&SpectrumPlot::exportFinished);
+        const auto path=dir.filePath("eic.csv");QVERIFY(plot.exportCsv(path));QTRY_COMPARE(exported.size(),1);
+        QFile file(path);QVERIFY(file.open(QIODevice::ReadOnly));const auto csv=QString::fromUtf8(file.readAll());
+        QVERIFY(csv.contains("时间 / min"));
+        const auto lines=csv.split('\n');const auto row=lines[5].split(',');
+        QVERIFY(std::abs(row[0].toDouble()-2.0/60)<1e-12);QCOMPARE(row[1].toDouble(),30.0);
+        QCOMPARE(plot.points().last().mz,2.0);
+    }
     void rs485StatusPanelReadsAndInvalidates();
     void networkPanelConnectsAlongside485();
     void bundledSamplesImportWithoutDuplicates();
     void externalArchivePreview();
     void customerResultReviewWorkflow();
     void reportLoadsLatestAndViewsFrozenSpectra();
+    void reportShowsVariableIonThresholdScreening();
+    void detectionStartListsUnmetConditions();
     void fixedLandscapeNavigation();
     void professionalOfflineToolsValidateAndRemainUsable();
     void instrumentPowerButtonsReflectPartialState();
@@ -250,6 +342,8 @@ private slots:
     void densePlotsKeepFullDataButBoundPaintingAndExportOffThread();
     void calibrationEditsPreservePrecisionAndRejectStaleWrites();
     void userStandardsPageCreatesImportsAndExports();
+    void libraryFilesCreateEditImportAndPreserveLegacyData();
+    void libraryFilesNavigationFitsSmallScreens();
     void userStandardComparisonExportsFrozenEvidence();
     void foreignSavedPathFallsBackToLocalDocuments();
 };
@@ -572,6 +666,109 @@ void UiSmokeTests::foreignSavedPathFallsBackToLocalDocuments() {
     settings.remove("sampleSaveFolder");
 }
 
+void UiSmokeTests::detectionStartListsUnmetConditions() {
+    QStandardPaths::setTestModeEnabled(true);QTemporaryDir dir;
+    qputenv("QITEST_WORKSPACE_DB",dir.filePath("start-conditions.sqlite").toUtf8());
+    AppController controller(std::make_unique<NetworkInstrument>());
+    MainWindow window(&controller);window.resize(1024,700);window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenReport")->isVisibleTo(&window),5000);
+    auto *start=window.findChild<QAction *>("StartRun");QVERIFY(start);start->trigger();
+    auto *dialog=window.findChild<QDialog *>("detectionStartBlockedDialog");QVERIFY(dialog);
+    QVERIFY(!window.findChild<QDialog *>("sampleSaveDialog"));
+    auto *message=dialog->findChild<QLabel *>("detectionStartBlockedReasons");QVERIFY(message);
+    QVERIFY(message->text().contains("当前方法"));QVERIFY(message->text().contains("离子阱温度"));
+    QVERIFY(message->text().contains("真空度"));
+    QCOMPARE(dialog->findChildren<QPushButton *>().size(),1);
+    auto *confirm=dialog->findChild<QPushButton *>("confirmDetectionStartBlocked");QVERIFY(confirm);
+    QCOMPARE(confirm->text(),QString("确认"));QVERIFY(start->isEnabled());
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    for(const QSize size:{QSize(1024,768),QSize(1024,700)}) {
+        window.resize(size);QTest::qWait(50);
+        QVERIFY(dialog->rect().contains(QRect(confirm->mapTo(dialog,QPoint()),confirm->size())));
+        if(!capture.isEmpty())QVERIFY(dialog->grab().save(capture+QString("/start-conditions-%1.png").arg(size.height())));
+    }
+    confirm->click();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    QVERIFY(!window.findChild<QDialog *>("detectionStartBlockedDialog"));
+    QVERIFY(controller.phase()!=AppController::Phase::Acquiring);
+    controller.startDetection(); // Direct calls must use the same guard.
+    dialog=window.findChild<QDialog *>("detectionStartBlockedDialog");QVERIFY(dialog);
+    dialog->findChild<QPushButton *>("confirmDetectionStartBlocked")->click();
+    qunsetenv("QITEST_WORKSPACE_DB");
+}
+
+void UiSmokeTests::reportShowsVariableIonThresholdScreening() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir dir;const auto db=dir.filePath("thresholds.sqlite");
+    qputenv("QITEST_WORKSPACE_DB",db.toUtf8());
+    QVector<SpectrumPoint> points;for(int i=0;i<30;++i)points.append({100.0+i,10});
+    const QVector<SpectrumScan> scans{{0,1,points},{1,1,points},{20,1,points}};
+    QJsonArray entries;
+    entries.append(QJsonObject{{"name","物质甲"},{"qualitify_ion","100"},{"son_area","29"}});
+    entries.append(QJsonObject{{"name","物质乙"},{"qualitify_ion","100,101"},{"son_area","29,30"}});
+    entries.append(QJsonObject{{"name","待补充物质"},{"qualitify_ion","100,101"},{"son_area","29"}});
+    entries.append(QJsonObject{{"name","物质丙"},{"qualitify_ion","100,101"},{"son_area","29,29"}});
+    const QJsonObject snapshot{{"rule",IonThresholdScreening::LegacyVersion},{"tolerance_da",0.5},{"path","test.lib"},{"entries",entries}};
+    AnalysisResult result;result.processedSpectrum.points=points;QString error;
+    QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("PARTIAL"));
+    // Simulate the previous version's skipped rows. Reopening must repair the
+    // result from the saved spectra/library snapshot without the original .lib.
+    result.candidates.clear();result.screeningItems.clear();result.engineVersion=IonThresholdScreening::LegacyVersion;
+    {
+        WorkspaceRepository repo(db);QVERIFY(repo.open(&error));
+        RunSummary run;run.id="threshold-run";run.completedAt=QDateTime::currentDateTimeUtc();
+        run.operatorName="test";run.methodName="test method";run.reviewStatus="NOT_REQUIRED";
+        run.dataScope="DEVICE_UNVALIDATED";run.candidateCount=1;
+        run.sampleInfo=QJsonObject{{"ion_screening_snapshot",snapshot},{"screening_status","PARTIAL"},{"detection_time_seconds",20}};
+        QVERIFY2(repo.saveCompletedRun(run,points,result,InstrumentTelemetry{},&error,scans),qPrintable(error));
+    }
+    AppController controller(std::make_unique<SimulatedInstrument>());
+    MainWindow window(&controller);window.resize(1024,700);window.show();
+    QTRY_COMPARE(controller.currentRun().id,QString("threshold-run"));
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenReport")->isVisibleTo(&window),5000);
+    window.findChild<QAction *>("OpenReport")->trigger();
+    auto *report=window.findChild<QTableWidget *>("reportScreeningResults");QVERIFY(report);
+    QCOMPARE(report->rowCount(),2);QCOMPARE(report->item(0,0)->text(),QString("物质甲"));
+    QCOMPARE(controller.result().candidates[0].requiredFragments,1);
+    QCOMPARE(controller.result().candidates[1].requiredFragments,2);
+    auto *details=window.findChild<QPushButton *>("screeningDetails");QVERIFY(details);details->click();
+    auto *dialog=window.findChild<QDialog *>("screeningDetailsDialog");QVERIFY(dialog);
+    QVERIFY(dialog->findChild<QLabel *>("screeningErrorMessage"));
+    auto *table=dialog->findChild<QTableWidget *>("screeningDetailsTable");QVERIFY(table);
+    QCOMPARE(table->rowCount(),4);QCOMPARE(table->horizontalHeaderItem(4)->text(),QString("累加值 / 一级阈值"));
+    QCOMPARE(table->item(0,4)->text(),QString("30 / 29"));
+    QCOMPARE(table->item(3,4)->text(),QString("30 / 29; 30 / 29"));
+    QCOMPARE(table->item(0,5)->text(),QString("可疑"));QCOMPARE(table->item(1,5)->text(),QString("未检出"));
+    QCOMPARE(table->item(2,5)->text(),QString("未筛查"));QVERIFY(!table->item(2,5)->toolTip().isEmpty());
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    for(const QSize size:{QSize(1024,768),QSize(1024,700)}) {
+        window.resize(size);QTest::qWait(80);
+        if(!capture.isEmpty()) {
+            QVERIFY(window.grab().save(capture+QString("/threshold-report-%1.png").arg(size.height())));
+            QVERIFY(dialog->grab().save(capture+QString("/threshold-details-%1.png").arg(size.height())));
+        }
+    }
+    dialog->close();QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
+    QSignalSpy generated(&controller,&AppController::reportGenerated);
+    auto *pdf=visibleWidgetWithText<QPushButton>(window,"生成 PDF");QVERIFY(pdf);pdf->click();QCOMPARE(generated.size(),1);
+    if(!capture.isEmpty())QVERIFY(QFile::copy(generated[0][0].toString(),capture+"/threshold-report.pdf"));
+    window.findChild<QPushButton *>("viewResultSpectrum")->click();
+    auto *spectra=window.findChild<QDialog *>("resultSpectrumDialog");QVERIFY(spectra);
+    spectra->findChild<SpectrumPlot *>("resultMsPlot")->pointActivated(100);
+    auto *eic=spectra->findChild<SpectrumPlot *>("resultEicPlot");QVERIFY(eic);
+    QCOMPARE(eic->points().size(),3);for(const auto &p:eic->points())QCOMPARE(p.intensity,10.0);
+    QCOMPARE(eic->property("xAxisDisplayScale").toDouble(),1.0/60.0);
+    QCOMPARE(eic->property("defaultXMaximum").toDouble(),20.0);
+    const auto archivePath=dir.filePath("legacy.qit.json");
+    controller.exportRunArchive("threshold-run",archivePath);QTRY_VERIFY(QFileInfo::exists(archivePath));
+    QSignalSpy imported(&controller,&AppController::importFinished);
+    controller.importRunArchives({archivePath});QTRY_COMPARE_WITH_TIMEOUT(imported.size(),1,5000);
+    QCOMPARE(controller.result().candidates.size(),2);
+    QCOMPARE(controller.result().screeningItems.size(),4);
+    QCOMPARE(controller.result().engineVersion,QString(IonThresholdScreening::Version));
+    QCOMPARE(controller.result().candidates[1].requiredFragments,2);
+    qunsetenv("QITEST_WORKSPACE_DB");
+}
+
 void UiSmokeTests::reportLoadsLatestAndViewsFrozenSpectra() {
     QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir dir; const QString db=dir.filePath("report-latest.sqlite");
@@ -618,6 +815,9 @@ void UiSmokeTests::reportLoadsLatestAndViewsFrozenSpectra() {
     ms->pointActivated(418.201348);
     const auto expected=ChromatogramEngine::trace(archive.scans,ChromatogramEngine::Kind::Eic,1,418.201348,0.5);
     QCOMPARE(eic->points().size(),expected.size());QCOMPARE(eic->points().first().intensity,expected.first().intensity);
+    QCOMPARE(eic->property("xAxisDisplayScale").toDouble(),1.0/60.0);
+    eic->pointActivated(last.timeSeconds);
+    QCOMPARE(ms->points().first().intensity,last.points.first().intensity);
     for(const QSize size:{QSize(1024,768),QSize(1024,700)}) {
         window.resize(size);dialog->resize(960,640);QTest::qWait(80);
         for(auto *plot:{tic,ms,eic}) QVERIFY(dialog->rect().contains(QRect(plot->mapTo(dialog,QPoint()),plot->size())));
@@ -2251,6 +2451,103 @@ void UiSmokeTests::professionalOfflineToolsValidateAndRemainUsable() {
         }
         if(!capture.isEmpty())QVERIFY(page->grab().save(capture+"/professional-"+kind+".png"));
     }
+}
+
+
+void UiSmokeTests::libraryFilesCreateEditImportAndPreserveLegacyData() {
+    QApplication::setStyle("Fusion");
+    Scientz::Ui::ThemeManager::apply(*qApp,Scientz::Ui::Density::Standard);
+    QTemporaryDir dir;QString error;
+    LibraryFilesPage page(dir.filePath("catalog.json"));page.resize(780,600);page.show();
+    const auto path=dir.filePath("我的测试库.lib");QVERIFY(page.createFile(path,&error));
+    QVERIFY(!page.createFile(path,&error));QVERIFY(page.importFile(path,&error));
+    auto *list=page.findChild<QTableWidget *>("libraryFilesTable");QCOMPARE(list->rowCount(),1);
+    QCOMPARE(list->horizontalHeaderItem(1)->text(),QString("日期"));QCOMPARE(list->horizontalHeaderItem(2)->text(),QString("操作"));
+    page.findChild<QPushButton *>("editLibraryFile")->click();
+    auto *editor=page.findChild<LibraryFileEditor *>("libraryFileEditor");QVERIFY(editor && editor->loaded());
+    editor->resize(960,610);
+    auto *entries=editor->findChild<QTableWidget *>("libraryEntriesTable");QCOMPARE(entries->columnCount(),9);
+    editor->findChild<QPushButton *>("addLibraryEntry")->click();
+    auto *dialog=editor->findChild<QDialog *>("libraryEntryDialog");QVERIFY(dialog);
+    dialog->resize(570,590);
+    dialog->findChild<QPushButton *>("acceptLibraryEntry")->click();
+    QVERIFY(!dialog->findChild<QLabel *>("libraryEntryFeedback")->text().isEmpty());
+    dialog->findChild<QLineEdit *>("lib_name")->setText("测试物质");
+    dialog->findChild<QLineEdit *>("lib_cas")->setText("76-99-3");
+    dialog->findChild<QLineEdit *>("lib_parent_ion")->setText("310");
+    dialog->findChild<QLineEdit *>("lib_qualitify_ion")->setText("265,310");
+    dialog->findChild<QLineEdit *>("lib_quantify_ion")->setText("265,310");
+    dialog->findChild<QLineEdit *>("lib_son_area")->setText("0,0,25000");
+    dialog->findChild<QLineEdit *>("lib_msms_son_area")->setText("0,0,0,2000");
+    auto *category=dialog->findChild<QComboBox *>("lib_sample_category");QCOMPARE(category->count(),3);category->setCurrentText("精神药物");
+    auto *internal=dialog->findChild<QComboBox *>("lib_internal_flag");QCOMPARE(internal->count(),2);internal->setCurrentText("是");
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    dialog->findChild<QLabel *>("libraryEntryFeedback")->clear();
+    if(!capture.isEmpty()){QDir().mkpath(capture);QTest::qWait(50);QVERIFY(dialog->grab().save(capture+"/lib-entry.png"));}
+    QPointer<QDialog> guard(dialog);dialog->findChild<QPushButton *>("acceptLibraryEntry")->click();QTRY_VERIFY(guard.isNull());
+    QCOMPARE(entries->rowCount(),1);editor->findChild<QPushButton *>("saveLibrary")->click();
+    QJsonArray loaded;QVERIFY(LibraryFile::read(path,&loaded,&error));QCOMPARE(loaded.size(),1);
+    QCOMPARE(loaded[0].toObject()["qualitify_ion"].toString(),QString("265,310"));
+    QCOMPARE(loaded[0].toObject()["son_area"].toString(),QString("0,0,25000"));
+    QCOMPARE(loaded[0].toObject()["msms_son_area"].toString(),QString("0,0,0,2000"));
+    if(!capture.isEmpty()){QTest::qWait(50);QVERIFY(editor->grab().save(capture+"/lib-editor.png"));}
+    // Export does not switch the current library; Save As registers the new file.
+    const auto exported=dir.filePath("export.lib");QVERIFY(editor->saveTo(exported,false,&error));QCOMPARE(list->rowCount(),1);
+    const auto savedAs=dir.filePath("另存.lib");QVERIFY(editor->saveTo(savedAs,true,&error));QCOMPARE(list->rowCount(),2);
+    QPointer<LibraryFileEditor> editorGuard(editor);editor->reject();QTRY_VERIFY(editorGuard.isNull());
+    // Legacy calibration and unknown fields must survive a name edit.
+    auto object=loaded[0].toObject();object["internal"]=QJsonObject{{"a",1.23456789},{"b",-0.125}};
+    object["external"]=QJsonObject{{"a",2},{"b",3}};object["opaque"]=QJsonArray{1,2,3};loaded[0]=object;
+    QVERIFY(LibraryFile::write(path,loaded,&error));page.openEditor(path);
+    editor=page.findChild<LibraryFileEditor *>("libraryFileEditor");entries=editor->findChild<QTableWidget *>("libraryEntriesTable");
+    entries->selectRow(0);editor->findChild<QPushButton *>("editLibraryEntry")->click();dialog=editor->findChild<QDialog *>("libraryEntryDialog");
+    dialog->findChild<QLineEdit *>("lib_name")->setText("改名物质");guard=dialog;
+    dialog->findChild<QPushButton *>("acceptLibraryEntry")->click();QTRY_VERIFY(guard.isNull());
+    QVERIFY(editor->saveTo(path,true,&error));QVERIFY(LibraryFile::read(path,&loaded,&error));
+    QCOMPARE(loaded[0].toObject()["internal"],object["internal"]);QCOMPARE(loaded[0].toObject()["opaque"],object["opaque"]);
+    // External changes must not be silently overwritten by this open editor.
+    const auto savedHash=LibraryFile::digest(path);auto external=loaded[0].toObject();external["name"]="外部改名";loaded[0]=external;
+    QVERIFY(LibraryFile::write(path,loaded,&error));QVERIFY(!editor->saveTo(path,true,&error));QVERIFY(error.contains("其他程序"));
+    QVERIFY(LibraryFile::digest(path)!=savedHash);
+    // Delete an entry and explicitly save the working copy to another file.
+    QTimer::singleShot(100,[] {for(auto *w:QApplication::topLevelWidgets())if(w->objectName()=="libraryConfirmDialog")w->findChild<QPushButton *>("confirmLibraryAction")->click();});
+    entries->selectRow(0);editor->findChild<QPushButton *>("deleteLibraryEntry")->click();QCOMPARE(entries->rowCount(),0);
+    QVERIFY(editor->saveTo(dir.filePath("empty-copy.lib"),true,&error));QVERIFY(LibraryFile::read(dir.filePath("empty-copy.lib"),&loaded,&error));QVERIFY(loaded.isEmpty());
+    editor->findChild<QPushButton *>("addLibraryEntry")->click();dialog=editor->findChild<QDialog *>("libraryEntryDialog");
+    dialog->findChild<QLineEdit *>("lib_name")->setText("未保存物质");guard=dialog;
+    dialog->findChild<QPushButton *>("acceptLibraryEntry")->click();QTRY_VERIFY(guard.isNull());
+    QTimer::singleShot(100,[] {for(auto *w:QApplication::topLevelWidgets())if(w->objectName()=="libraryConfirmDialog")qobject_cast<QDialog *>(w)->reject();});
+    editor->reject();QVERIFY(editor->isVisible());QCOMPARE(entries->rowCount(),1);
+    QTimer::singleShot(100,[] {for(auto *w:QApplication::topLevelWidgets())if(w->objectName()=="libraryConfirmDialog")w->findChild<QPushButton *>("discardLibraryChanges")->click();});
+    editorGuard=editor;editor->reject();QTRY_VERIFY(editorGuard.isNull());
+    QVERIFY(LibraryFile::read(dir.filePath("empty-copy.lib"),&loaded,&error));QVERIFY(loaded.isEmpty());
+    QVERIFY(page.removeFile(QFileInfo(path).canonicalFilePath(),&error));QVERIFY(QFile::exists(path));
+    LibraryFilesPage reopened(dir.filePath("catalog.json"));QCOMPARE(reopened.findChild<QTableWidget *>("libraryFilesTable")->rowCount(),2);
+}
+
+void UiSmokeTests::libraryFilesNavigationFitsSmallScreens() {
+    QTemporaryDir dir;QStandardPaths::setTestModeEnabled(true);qputenv("QITEST_WORKSPACE_DB",dir.filePath("workspace.sqlite").toUtf8());
+    AppController controller(std::make_unique<SimulatedInstrument>());MainWindow window(&controller);window.resize(1024,768);window.show();
+    QTRY_VERIFY(window.findChild<QStackedWidget *>("centralWorkspace")->isVisibleTo(&window));
+    window.findChild<QAction *>("OpenSettings")->trigger();auto *tree=window.findChild<QTreeWidget *>("settingsTree");QVERIFY(tree);
+    QTreeWidgetItemIterator it(tree);bool opened=false;
+    while(*it){if((*it)->data(0,Qt::UserRole+1).toString()=="参考谱库"){
+        opened=QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem*,*it),Q_ARG(int,0));break;}++it;}
+    QVERIFY(opened);auto *selector=window.findChild<QPushButton *>("userLibrarySelector");QVERIFY(selector);QCOMPARE(selector->text(),QString("我的谱库"));selector->click();
+    auto *page=window.findChild<LibraryFilesPage *>();QVERIFY(page);QString error;
+    QVERIFY(page->createFile(dir.filePath("农药筛查库.lib"),&error));QVERIFY(page->createFile(dir.filePath("精神药物库.lib"),&error));
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+    for(int height:{768,700}){
+        window.resize(1024,height);QTest::qWait(150);
+        auto *create=page->findChild<QPushButton *>("newLibraryFile");QVERIFY(create->isVisibleTo(&window));
+        QVERIFY(page->rect().contains(QRect(create->mapTo(page,QPoint(0,0)),create->size())));
+        auto *table=page->findChild<QTableWidget *>("libraryFilesTable");QVERIFY(table->viewport()->height()>120);
+        auto *cell=table->cellWidget(0,2);for(auto *button:cell->findChildren<QPushButton *>())QVERIFY2(cell->rect().contains(button->geometry()),
+            qPrintable(QString("cell %1x%2 button %3,%4 %5x%6").arg(cell->width()).arg(cell->height()).arg(button->x()).arg(button->y()).arg(button->width()).arg(button->height())));
+        QVERIFY(table->horizontalHeader()->length()<=table->viewport()->width()+2);
+        if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/lib-page-%1.png").arg(height)));
+    }
+    qunsetenv("QITEST_WORKSPACE_DB");
 }
 
 QTEST_MAIN(UiSmokeTests)

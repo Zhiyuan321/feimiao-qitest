@@ -1,5 +1,6 @@
 #include "library/SpectralLibraryRepository.h"
 #include "library/UserStandardRepository.h"
+#include "library/LibraryFile.h"
 #include <QSqlQuery>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -13,11 +14,91 @@ using namespace qitest;
 class LibraryTests final : public QObject {
     Q_OBJECT
 private slots:
+    void legacyLibRoundtripAndCatalog();
+    void legacyThresholdLists();
+    void externalLegacyLibSamples();
     void importsJcampWithProvenance();
     void opensImportedLibraryReadOnly();
     void searchesImportedCompounds();
     void userStandardsAreVersionedBoundedAndIsolated();
 };
+
+void LibraryTests::legacyLibRoundtripAndCatalog() {
+    QTemporaryDir dir;QString error;const auto path=dir.filePath("测试谱库.lib");
+    const QJsonObject entry{{"id","17"},{"name","测试物质"},{"cas","76-99-3"},
+        {"parent_ion","310"},{"qualitify_ion","265,310"},{"quantify_ion","265,310"},
+        {"sample_category","精神药物"},{"internal_flag","否"},{"son_area","10.25"},{"msms_son_area","20"},
+        {"internal",QJsonObject{{"a",1.23456789},{"b",2.5}}},{"external",QJsonObject{{"a",3},{"b",4}}},
+        {"vendor_extra",QJsonObject{{"keep","unchanged"}}}};
+    QJsonArray rows{entry};QVERIFY(LibraryFile::write(path,rows,&error));
+    QJsonArray read;QByteArray hash;QVERIFY(LibraryFile::read(path,&read,&error,&hash));QCOMPARE(read,rows);
+    QCOMPARE(hash,LibraryFile::digest(path));
+    auto modified=read[0].toObject();modified["name"]="修改名称";read[0]=modified;
+    const auto other=dir.filePath("另存.LIB");QVERIFY(LibraryFile::write(other,read,&error));
+    QJsonArray again;QVERIFY(LibraryFile::read(other,&again,&error));QCOMPARE(again,read);
+    QCOMPARE(again[0].toObject()["internal"],entry["internal"]);QCOMPARE(again[0].toObject()["vendor_extra"],entry["vendor_extra"]);
+    auto bad=modified;bad["parent_ion"]="nan";QVERIFY(!LibraryFile::write(other,QJsonArray{bad},&error));
+    QVERIFY(LibraryFile::read(other,&again,&error));QCOMPARE(again,read);
+    bad=modified;bad["qualitify_ion"]="1,,2";QVERIFY(!LibraryFile::validateEntry(bad,&error));
+    bad=modified;bad["son_area"]="-1";QVERIFY(!LibraryFile::validateEntry(bad,&error));
+    QVERIFY(!LibraryFile::write(dir.filePath("wrong.json"),rows,&error));
+    const auto empty=dir.filePath("empty.lib");QVERIFY(LibraryFile::write(empty,{},&error));QVERIFY(LibraryFile::read(empty,&again,&error));QVERIFY(again.isEmpty());
+    LibraryFileCatalog catalog(dir.filePath("catalog.json"));QVERIFY(catalog.open(&error));
+    QVERIFY(catalog.add(path,&error));QVERIFY(catalog.add(path,&error));QCOMPARE(catalog.paths().size(),1);
+    LibraryFileCatalog reopened(dir.filePath("catalog.json"));QVERIFY(reopened.open(&error));QCOMPARE(reopened.paths(),catalog.paths());
+    QVERIFY(reopened.remove(reopened.paths().first(),&error));QVERIFY(QFile::exists(path));
+    const auto broken=dir.filePath("broken.lib");QFile file(broken);QVERIFY(file.open(QIODevice::WriteOnly));file.write("{broken");file.close();
+    again=rows;QVERIFY(!LibraryFile::read(broken,&again,&error));QCOMPARE(again,rows);
+    QVERIFY(!catalog.add(broken,&error));QCOMPARE(catalog.paths().size(),1);
+    QVERIFY(file.open(QIODevice::WriteOnly));file.write(QByteArray(LibraryFile::MaximumBytes+1,' '));file.close();
+    QVERIFY(!LibraryFile::read(broken,&again,&error));QCOMPARE(again,rows);
+}
+
+void LibraryTests::legacyThresholdLists() {
+    QTemporaryDir dir;QString error;
+    for(const auto &threshold:QStringList{"35000","0,25000","0,0,1500","0,0,0,2000"}) {
+        const QJsonObject entry{{"name","合成兼容测试"},{"parent_ion","238.1"},
+            {"qualitify_ion","220,238.10"},{"quantify_ion","238.10"},
+            {"son_area",threshold},{"msms_son_area",threshold},{"scan_flag",true}};
+        const auto path=dir.filePath("thresholds.lib");
+        QVERIFY2(LibraryFile::write(path,QJsonArray{entry},&error),qPrintable(error));
+        QJsonArray rows;QVERIFY2(LibraryFile::read(path,&rows,&error),qPrintable(error));
+        QCOMPARE(rows,QJsonArray{entry});
+        LibraryFileCatalog catalog(dir.filePath("catalog.json"));
+        QVERIFY(catalog.open(&error));QVERIFY2(catalog.add(path,&error),qPrintable(error));
+        for(const auto &key:QStringList{"son_area","msms_son_area"}) {
+            for(const auto &invalid:QStringList{"0,,10",",10","10,","0,-1","0,nan","0,inf"}) {
+                auto bad=entry;bad[key]=invalid;
+                QVERIFY(!LibraryFile::write(path,QJsonArray{bad},&error));
+                QVERIFY(LibraryFile::read(path,&rows,&error));QCOMPARE(rows,QJsonArray{entry});
+            }
+        }
+        auto bad=entry;bad["parent_ion"]="1,2";QVERIFY(!LibraryFile::validateEntry(bad,&error));
+    }
+}
+
+void LibraryTests::externalLegacyLibSamples() {
+    const auto manifest=qgetenv("QITEST_LIB_SAMPLE_MANIFEST");
+    if(manifest.isEmpty())QSKIP("Optional customer samples remain outside the repository");
+    QFile file(QString::fromUtf8(manifest));QVERIFY(file.open(QIODevice::ReadOnly));
+    const auto samples=QJsonDocument::fromJson(file.readAll()).array();QVERIFY(!samples.isEmpty());
+    QTemporaryDir dir;QString error;LibraryFileCatalog catalog(dir.filePath("catalog.json"));
+    QVERIFY(catalog.open(&error));
+    int index=0;
+    for(const auto &sample:samples) {
+        const auto path=sample.toString();const auto before=LibraryFile::digest(path);
+        QJsonArray rows;QVERIFY2(LibraryFile::read(path,&rows,&error),qPrintable(path+": "+error));
+        QFile original(path);QVERIFY(original.open(QIODevice::ReadOnly));
+        QCOMPARE(rows,QJsonDocument::fromJson(original.readAll()).array());original.close();
+        QVERIFY2(catalog.add(path,&error),qPrintable(error));
+        const auto copy=dir.filePath(QString("copy-%1.lib").arg(++index));
+        QVERIFY2(LibraryFile::write(copy,rows,&error),qPrintable(error));
+        QJsonArray reloaded;QVERIFY(LibraryFile::read(copy,&reloaded,&error));QCOMPARE(reloaded,rows);
+        QCOMPARE(LibraryFile::digest(path),before);
+        qInfo()<<QFileInfo(path).fileName()<<rows.size()<<"entries: import and lossless roundtrip passed";
+    }
+    QCOMPARE(catalog.paths().size(),samples.size());
+}
 
 void LibraryTests::userStandardsAreVersionedBoundedAndIsolated() {
     QTemporaryDir dir; QString error;

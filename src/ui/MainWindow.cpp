@@ -13,6 +13,7 @@
 #include "ai/AiToolProtocol.h"
 #include "core/QuantitationEngine.h"
 #include "core/ChromatogramEngine.h"
+#include "core/IonThresholdScreening.h"
 #include "ui/ChromatogramDialog.h"
 #include "ui/ResultSpectrumDialog.h"
 #include "core/QtCompat.h"
@@ -43,6 +44,7 @@
 #include <QPlainTextEdit>
 #include <QButtonGroup>
 #include "ui/UserStandardsPage.h"
+#include "ui/LibraryFilesPage.h"
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -245,6 +247,31 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
         [applicationStatus](const QString &message) { applicationStatus->setVisible(!message.isEmpty()); });
 
     connect(controller_, &AppController::phaseChanged, this, &MainWindow::updatePhase);
+    connect(controller_, &AppController::detectionStartRejected, this, [this](const QStringList &reasons) {
+        if(auto *existing=findChild<QDialog *>("detectionStartBlockedDialog")) {
+            existing->raise();existing->activateWindow();return;
+        }
+        auto *dialog=new QDialog(this);
+        dialog->setObjectName("detectionStartBlockedDialog");
+        dialog->setWindowTitle("检测条件未达标");
+        dialog->setWindowFlags(Qt::Dialog|Qt::CustomizeWindowHint|Qt::WindowTitleHint);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowModality(Qt::WindowModal);
+        dialog->setWindowFlag(Qt::WindowContextHelpButtonHint,false);
+        dialog->resize(560,300);
+        auto *layout=new QVBoxLayout(dialog);
+        layout->addWidget(makeLabel("暂时无法开始检测，请检查以下项目：","sectionTitle"));
+        auto *message=makeLabel(reasons.join("\n\n"),"bodyStrong");
+        message->setObjectName("detectionStartBlockedReasons");
+        message->setTextFormat(Qt::PlainText);message->setWordWrap(true);
+        layout->addWidget(message,1);
+        auto *confirm=new QPushButton("确认",dialog);
+        confirm->setObjectName("confirmDetectionStartBlocked");
+        confirm->setProperty("sciRole","primary");confirm->setDefault(true);
+        layout->addWidget(confirm);
+        connect(confirm,&QPushButton::clicked,dialog,&QDialog::accept);
+        dialog->open();
+    });
     connect(controller_, &AppController::spectrumChanged, this, [this](const auto &points) {
         spectrumPlot_->setPoints(points);
         spectrumPlot_->setAxisLabels("m/z", "记录分析谱");
@@ -508,6 +535,7 @@ QWidget *MainWindow::createWorkspacePage() {
         const auto phase = controller_->phase();
         if (phase == AppController::Phase::Acquiring || phase == AppController::Phase::Analyzing
             || showReportAfterRunSaved_ || detectionAwaitingConfirmation_) return;
+        if(!controller_->checkDetectionStart())return;
         setWorkspaceSection(0);
         {
             if (findChild<QDialog *>("sampleSaveDialog")) return;
@@ -871,7 +899,8 @@ QWidget *MainWindow::createHomePage() {
     eicPlot_->setObjectName("runEicPlot");
     eicPlot_->setMinimumHeight(100);
     eicPlot_->setAccentColor(QColor("#B97824"));
-    eicPlot_->setAxisLabels("时间 / s", "提取离子信号");
+    eicPlot_->setAxisLabels("时间 / min", "面积");
+    eicPlot_->setXAxisDisplayScale(1.0/60.0);
     eicPlot_->setEmptyMessage("等待时间序列", "");
     auto *eicPanel = new QWidget;
     eicPanel->setObjectName("runEicPanel");
@@ -1954,7 +1983,8 @@ QWidget *MainWindow::createReportPage() {
     connect(reportSpectrumButton_, &QPushButton::clicked, this, [this] {
         if (controller_->currentRun().id.isEmpty()) return;
         auto *dialog = new ResultSpectrumDialog(controller_->scans(), controller_->result().processedSpectrum.points,
-            recordLabel(controller_->currentRun().id) + " · " + dataScopeLabel(controller_->currentRun().dataScope), this);
+            recordLabel(controller_->currentRun().id) + " · " + dataScopeLabel(controller_->currentRun().dataScope), this,
+            controller_->configuredDetectionSeconds());
         dialog->open();
     });
     connect(openSavedData, &QPushButton::clicked, this, [this] {
@@ -1983,7 +2013,7 @@ QWidget *MainWindow::createReportPage() {
         titleRow->addStretch();
         auto *statusFilter = new RoundedComboBox;
         statusFilter->setObjectName("screeningStatusFilter");
-        statusFilter->addItems({"全部", "可疑", "未检出"});
+        statusFilter->addItems({"全部", "可疑", "未检出", "未筛查"});
         statusFilter->setMinimumWidth(120);
         auto *search = new QLineEdit;
         search->setObjectName("screeningSearch");
@@ -2001,10 +2031,18 @@ QWidget *MainWindow::createReportPage() {
         titleRow->addWidget(pageLabel);
         titleRow->addWidget(nextPage);
         layout->addLayout(titleRow);
+        const auto screeningError=controller_->currentRun().sampleInfo.value("screening_error").toString();
+        if(!screeningError.isEmpty()) {
+            auto *message=makeLabel(screeningError,"secondary");
+            message->setObjectName("screeningErrorMessage");message->setWordWrap(true);
+            layout->addWidget(message);
+        }
         auto *table = new QTableWidget(0, 6, dialog);
         table->setObjectName("screeningDetailsTable");
         polishDataTable(table);
         table->setHorizontalHeaderLabels({"序号", "名称", "母离子", "碎片离子", "实测强度比", "是否检出"});
+        const bool ionThresholds=controller_->result().engineVersion==IonThresholdScreening::Version;
+        if(ionThresholds)table->setHorizontalHeaderLabels({"序号","名称","母离子","定性离子","累加值 / 一级阈值","筛查结果"});
         table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
         table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -2020,12 +2058,19 @@ QWidget *MainWindow::createReportPage() {
             QStringList fragments, intensities;
             for (double value : items[row].fragmentMz) fragments << QString::number(value, 'f', value == std::floor(value) ? 0 : 2);
             for (double value : items[row].measuredRelativeIntensity) intensities << QString::number(value, 'f', 1);
+            if(ionThresholds) {
+                intensities.clear();
+                for(int i=0;i<items[row].accumulatedIntensities.size();++i)
+                    intensities<<QString("%1 / %2").arg(items[row].accumulatedIntensities[i],0,'g',10)
+                        .arg(items[row].primaryThresholds.value(i),0,'g',10);
+            }
             setTableText(table, row, 0, QString::number(row + 1));
             setTableText(table, row, 1, items[row].name);
             setTableText(table, row, 2, QString::number(items[row].precursorMz, 'f', items[row].precursorMz == std::floor(items[row].precursorMz) ? 0 : 1));
             setTableText(table, row, 3, fragments.join(", "));
-            setTableText(table, row, 4, intensities.join(" : "));
+            setTableText(table, row, 4, intensities.join(ionThresholds?"; ":" : "));
             setTableText(table, row, 5, items[row].conclusion);
+            for(int col=0;col<6;++col)table->item(row,col)->setToolTip(items[row].evidence);
         }
         constexpr int rowsPerPage = 8;
         dialog->setProperty("screeningPage", 0);
@@ -2118,7 +2163,7 @@ QWidget *MainWindow::createLibraryPage() {
     auto *pages = new QStackedWidget;
     pages->setObjectName("standardLibraryPages");
     for (int i = 0; i < 2; ++i) {
-        auto *button = new QPushButton(i == 0 ? "公共谱库" : "我的标准");
+        auto *button = new QPushButton(i == 0 ? "公共谱库" : "我的谱库");
         button->setObjectName(i == 0 ? "publicLibrarySelector" : "userLibrarySelector");
         button->setCheckable(true); button->setChecked(i == 0);
         button->setProperty("sciRole", "librarySelector");
@@ -2184,18 +2229,7 @@ QWidget *MainWindow::createLibraryPage() {
     pages->addWidget(page);
     QString workspacePath=qEnvironmentVariable("QITEST_WORKSPACE_DB");
     if (workspacePath.isEmpty()) workspacePath = PlatformPaths::appDataFile("workspace.sqlite");
-    auto *standards = new UserStandardsPage(QFileInfo(workspacePath).absolutePath()+"/user-standards.sqlite");
-    standards->setComparisonProvider([this] {
-        StandardComparisonInput input;
-        const auto &run=controller_->currentRun();
-        input.recordId=run.id;
-        input.description=QString("%1 · %2 · 记录分析峰（不是游标选中的扫描）")
-            .arg(run.completedAt.toLocalTime().toString("yyyy-MM-dd HH:mm:ss"),dataScopeLabel(run.dataScope));
-        for(const auto &peak:controller_->result().peaks) input.peaks.append({peak.mz,peak.relativeIntensity});
-        std::sort(input.peaks.begin(),input.peaks.end(),[](const SpectrumPoint &a,const SpectrumPoint &b) { return a.mz<b.mz; });
-        return input;
-    });
-    pages->addWidget(standards);
+    pages->addWidget(new LibraryFilesPage(QFileInfo(workspacePath).absolutePath()+"/library-files.json"));
     return tabs;
 }
 
@@ -2760,7 +2794,9 @@ void MainWindow::refreshReport(const RunSummary &run) {
     reportStatus_->setText(run.reportPath.isEmpty() ? "可生成 PDF"
         : "已生成：" + PlatformPaths::nativeDisplay(run.reportPath));
     resultSource_->setText(recordLabel(run.id) + " · " + run.completedAt.toLocalTime().toString("yyyy-MM-dd HH:mm:ss")
-        + " · " + dataScopeLabel(run.dataScope));
+        + " · " + dataScopeLabel(run.dataScope)
+        + (run.sampleInfo.contains("screening_status")?" · "+screeningStatusLabel(run.sampleInfo.value("screening_status").toString()):QString()));
+    resultSource_->setToolTip(run.sampleInfo.value("screening_error").toString());
     resultSource_->show();
     const auto &candidates = controller_->result().candidates;
     prepareTableRows(reportCandidateTable_, candidates.size());
@@ -3220,20 +3256,26 @@ void MainWindow::showResult(const AnalysisResult &result) {
     const bool simulated = controller_->currentRun().dataScope == "DEMO_SIMULATION"
         || std::any_of(result.candidates.begin(), result.candidates.end(), [](const MatchCandidate &candidate) { return candidate.demo; });
     if (resultSource_) resultSource_->setText(controller_->currentRun().dataScope=="DEVICE_UNVALIDATED"
-        ? "来源：实机采集，筛查未配置" : simulated ? "来源：预览" : "来源：导入");
+        ? "来源：实机采集，"+screeningStatusLabel(controller_->currentRun().sampleInfo.value("screening_status").toString()) : simulated ? "来源：预览" : "来源：导入");
     refreshAiContext();
 }
 
 void MainWindow::refreshRunEic() {
-    eicPlot_->setAxisLabels("时间 / s", "提取离子信号");
+    eicPlot_->setAxisLabels("时间 / min", "面积");
+    eicPlot_->setXAxisDisplayScale(1.0/60.0);
+    eicPlot_->clearDefaultXRange();
     eicPlot_->setPoints({});
     const auto ordinal = eicMz_->value() > 0
         ? controller_->bundledIntensityTrend(eicMz_->value(), eicTolerance_->value()) : QVector<SpectrumPoint>{};
     if (!ordinal.isEmpty()) {
+        eicPlot_->setXAxisDisplayScale(1.0);
         eicPlot_->setPoints(ordinal);
         eicPlot_->setAxisLabels("原始谱序号（非时间）", QString("m/z %1 ± %2 Da").arg(eicMz_->value()).arg(eicTolerance_->value()));
         return;
     }
+    const double configuredSeconds=controller_->configuredDetectionSeconds();
+    if(configuredSeconds>0) eicPlot_->setDefaultXRange(0,std::max(configuredSeconds,
+        controller_->scans().isEmpty()?0.0:controller_->scans().last().timeSeconds));
     if (ticPlot_->points().size() < 2) {
         eicPlot_->setEmptyMessage("等待时间序列", "");
     } else if (eicMz_->value() <= 0) {
@@ -3241,7 +3283,7 @@ void MainWindow::refreshRunEic() {
     } else {
         eicPlot_->setPoints(ChromatogramEngine::trace(controller_->scans(),
             ChromatogramEngine::Kind::Eic, 1, eicMz_->value(), eicTolerance_->value()));
-        eicPlot_->setAxisLabels("时间 / s", QString("m/z %1 ± %2 Da").arg(eicMz_->value(), 0, 'g', 8).arg(eicTolerance_->value()));
+        eicPlot_->setToolTip(QString("每帧面积：m/z %1 ± %2 Da范围内丰度求和；横轴显示分钟。").arg(eicMz_->value(),0,'g',8).arg(eicTolerance_->value()));
     }
     eicPlot_->update();
 }

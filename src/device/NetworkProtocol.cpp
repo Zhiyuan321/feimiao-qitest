@@ -68,8 +68,12 @@ QByteArray NetworkProtocol::detectionCommand(bool enabled) {
     return controlFrame(0x15,QByteArray(1,enabled ? char(0x22) : char(0x23)));
 }
 QByteArray NetworkProtocol::heartbeatCommand() {
-    // User-confirmed 2026-09-15: TCP 0x30 is heartbeat, payload remains 0x22.
-    return controlFrame(0x30,QByteArray(1,char(0x22)));
+    // Match the old-program capture authorized on 2026-09-16.
+    return controlFrame(0x30,QByteArray(1,char(0x23)));
+}
+QByteArray NetworkProtocol::legacyMethodFollowupCommand() {
+    // Captured post-method command; do not infer its physical meaning.
+    return controlFrame(0x50,QByteArray(1,char(0x00)));
 }
 QJsonObject NetworkProtocol::fullscanCalibrationProfile() {
     return {{"source","datafit.json"},{"section","Fullscan"},
@@ -139,8 +143,8 @@ QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QSt
     if (acLow < 0 || acLow > 65535 || acHigh < 0 || acHigh > 65535)
         return fail("AC 电压换算超出协议范围");
 
-    // Hidden Fullscan values come from the vendor default.ini shipped with the
-    // same workstation build. Slots 25-44 are MS-N-only and remain zero.
+    // Fixed slots match the old-program capture authorized on 2026-09-16.
+    // Editable fields and calibrated voltages still come from the current method.
     int data[45]{};
     data[0]=1; data[1]=1; data[2]=period; data[3]=rf; data[4]=3000;
     data[5]=storage; data[6]=low; data[7]=high; data[8]=cooling; data[9]=scanTime;
@@ -148,8 +152,10 @@ QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QSt
     data[15]=20; data[16]=20; data[17]=500; data[18]=500; data[19]=500;
     // User confirmed 2026-09-14: injection 380 sends 380, without x100 scaling.
     // Opening count/interval are a separate fixed pair, independent of cooling.
-    data[20]=1; data[21]=5000; data[22]=multiplier;
+    data[20]=1; data[21]=3000; data[22]=multiplier;
     data[23]=rfFastScanTime; data[24]=rfLowVoltageDuration;
+    const int legacyTail[]{10,100,100,0,0,802,446,207,651,674,0,0,9,1000,600,500,219,10,10,10};
+    for(int i=0;i<20;++i) data[25+i]=legacyTail[i];
     QByteArray payload; payload.reserve(86);
     for (int i=0;i<45;++i) {
         if (i==0 || i==1 || i==14 || i==20) payload.append(char(data[i]));

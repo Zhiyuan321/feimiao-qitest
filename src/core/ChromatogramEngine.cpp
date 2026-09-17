@@ -46,6 +46,21 @@ QVector<SpectrumPoint> ChromatogramEngine::trace(const QVector<SpectrumScan> &sc
     return result;
 }
 
+ChromatogramEngine::Sum ChromatogramEngine::sumIntensities(const QVector<SpectrumPoint> &points) {
+    Sum result;
+    if(points.isEmpty()) {result.error="没有可累加的时间序列";return result;}
+    double previous=-1;
+    for(const auto &p:points) {
+        if(!std::isfinite(p.mz) || p.mz<0 || p.mz<=previous || !std::isfinite(p.intensity) || p.intensity<0) {
+            result.error="时间序列无效";return result;
+        }
+        previous=p.mz;result.value+=p.intensity;
+    }
+    result.valid=std::isfinite(result.value);
+    if(!result.valid) result.error="累加结果溢出";
+    return result;
+}
+
 ChromatogramEngine::Integral ChromatogramEngine::integrate(const QVector<SpectrumPoint> &points,
         double from, double to, bool baseline) {
     Integral result;

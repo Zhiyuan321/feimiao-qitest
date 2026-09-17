@@ -7,6 +7,6 @@ namespace qitest {
 class ResultSpectrumDialog final : public QDialog {
 public:
     ResultSpectrumDialog(QVector<SpectrumScan> scans, QVector<SpectrumPoint> spectrum,
-                         const QString &recordLabel, QWidget *parent = nullptr);
+                         const QString &recordLabel, QWidget *parent = nullptr, double detectionSeconds = 0);
 };
 }

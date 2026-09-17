@@ -1,5 +1,6 @@
 #include "report/ReportGenerator.h"
 #include "domain/DisplayLabels.h"
+#include "core/IonThresholdScreening.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QFont>
@@ -71,14 +72,23 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
     field("数据范围", dataScopeLabel(run.dataScope));
     field("科学引擎", result.engineVersion);
     field("参考库", result.libraryVersion);
-    html += "<h2>质量结论</h2>";
-    field("质量门控", QString("%1（%2/100）").arg(qualityText(result.quality.level)).arg(result.quality.score));
-    for (const auto &check : result.quality.checks)
-        field((check.passed ? "通过 · " : "未通过 · ") + check.title, check.detail);
+    const bool ionThresholds=result.engineVersion==IonThresholdScreening::Version;
+    if(run.sampleInfo.contains("screening_status")) {
+        field("筛查状态",screeningStatusLabel(run.sampleInfo.value("screening_status").toString()));
+        if(!run.sampleInfo.value("screening_error").toString().isEmpty())
+            field("筛查说明",run.sampleInfo.value("screening_error").toString());
+    }
+    if(!ionThresholds || !result.quality.checks.isEmpty()) {
+        html += "<h2>质量结论</h2>";
+        field("质量门控", QString("%1（%2/100）").arg(qualityText(result.quality.level)).arg(result.quality.score));
+        for (const auto &check : result.quality.checks)
+            field((check.passed ? "通过 · " : "未通过 · ") + check.title, check.detail);
+    }
     html += "<h2>筛查结果</h2>";
     if (candidateRows.isEmpty()) html += "<p>未选择候选物；不据此判定样品阴性。</p>";
-    else html += "<table><thead><tr><th>序号</th><th>名称</th><th>母离子</th><th>碎片离子</th>"
-                 "<th>实测强度比</th><th>筛查结果</th></tr></thead><tbody>";
+    else html += QString("<table><thead><tr><th>序号</th><th>名称</th><th>母离子</th><th>%1</th>"
+                 "<th>%2</th><th>筛查结果</th></tr></thead><tbody>")
+                 .arg(ionThresholds?"定性离子":"碎片离子",ionThresholds?"累加值 / 一级阈值":"实测强度比");
     int number = 0;
     for (int row : candidateRows) {
         const auto &candidate = result.candidates[row];
@@ -88,10 +98,18 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
         }
         const QString precursor = QString::number(screening ? screening->precursorMz : candidate.measuredMz, 'f', 2)
             .remove(QRegularExpression("\\.?0+$"));
+        QString comparison=screening?numbers(screening->measuredRelativeIntensity):QStringLiteral("—");
+        if(ionThresholds && screening) {
+            QStringList pairs;
+            for(int i=0;i<screening->accumulatedIntensities.size();++i)
+                pairs<<QString("%1 / %2").arg(screening->accumulatedIntensities[i],0,'g',10)
+                    .arg(screening->primaryThresholds.value(i),0,'g',10);
+            comparison=pairs.join("; ");
+        }
         html += "<tr><td>" + QString::number(++number) + "</td><td>" + escaped(candidate.name)
             + "</td><td>" + escaped(precursor) + "</td><td>"
             + escaped(screening ? numbers(screening->fragmentMz) : QStringLiteral("—")) + "</td><td>"
-            + escaped(screening ? numbers(screening->measuredRelativeIntensity) : QStringLiteral("—"))
+            + escaped(comparison)
             + "</td><td class='suspect'>可疑</td></tr>";
     }
     if (!candidateRows.isEmpty()) html += "</tbody></table>";
@@ -100,7 +118,7 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
     for (int row : candidateRows) {
         const auto &candidate = result.candidates[row];
         html += "<h3>" + escaped(QString("%1. %2").arg(++number).arg(candidate.name)) + "</h3>";
-        field("匹配得分", QString::number(candidate.score, 'f', 1));
+        if(!ionThresholds)field("匹配得分", QString::number(candidate.score, 'f', 1));
         field("候选类型", "筛查候选");
         field("证据", candidate.evidence);
     }

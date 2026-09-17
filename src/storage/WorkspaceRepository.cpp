@@ -2,6 +2,7 @@
 #include "storage/ScanSeriesCodec.h"
 #include <QJsonArray>
 #include "core/ChromatogramEngine.h"
+#include "core/IonThresholdScreening.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -387,6 +388,14 @@ StoredRunDetail WorkspaceRepository::loadRun(const QString &runId) const {
     checks.prepare("SELECT check_id,title,detail,passed FROM quality_checks WHERE run_id=? ORDER BY ordinal"); checks.addBindValue(runId);
     if (checks.exec()) while (checks.next()) detail.result.quality.checks.push_back({
         checks.value(0).toString(), checks.value(1).toString(), checks.value(2).toString(), checks.value(3).toBool()});
+    if(detail.summary.sampleInfo.contains("ion_screening_snapshot")) {
+        QString screeningError;
+        const auto status=IonThresholdScreening::apply(detail.scans,
+            detail.summary.sampleInfo.value("ion_screening_snapshot").toObject(),&detail.result,&screeningError);
+        detail.summary.sampleInfo.insert("screening_status",status);
+        detail.summary.sampleInfo.insert("screening_error",screeningError);
+        detail.summary.candidateCount=detail.result.candidates.size();
+    }
     detail.valid = !detail.rawSpectrum.isEmpty() && !detail.result.processedSpectrum.points.isEmpty();
     return detail;
 }

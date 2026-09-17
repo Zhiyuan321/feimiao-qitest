@@ -1,5 +1,6 @@
 #include "storage/ArchiveImportWorker.h"
 #include "storage/RunArchiveCodec.h"
+#include "core/IonThresholdScreening.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <limits>
@@ -29,13 +30,20 @@ void ArchiveImportWorker::run() {
                     QCryptographicHash::Sha256).toHex());
                 if (repository.containsRun(id)) { ++skipped; outcome = "已存在，跳过"; lastRunId_ = id; }
                 else {
-                    const bool rawOnly=archive.sampleInfo.value("screening_status").toString()=="NOT_CONFIGURED";
+                    auto sampleInfo=archive.sampleInfo;
+                    const bool thresholdScreening=sampleInfo.contains("ion_screening_snapshot");
+                    const bool rawOnly=thresholdScreening || sampleInfo.value("screening_status").toString()=="NOT_CONFIGURED";
                     AnalysisResult result;
                     if(rawOnly) {
                         result.processedSpectrum.points=archive.rawSpectrum;
                         for(const auto &point:archive.rawSpectrum) result.processedSpectrum.totalIonCurrent+=point.intensity;
                         result.engineVersion="tcp-fullscan-raw-1";result.libraryVersion="未配置实机筛查库";
                         result.quality.level=QualityLevel::Review;
+                        if(thresholdScreening) {
+                            QString screeningError;
+                            const auto status=IonThresholdScreening::apply(archive.scans,sampleInfo.value("ion_screening_snapshot").toObject(),&result,&screeningError);
+                            sampleInfo.insert("screening_status",status);sampleInfo.insert("screening_error",screeningError);
+                        }
                     } else result = engine_.analyze(archive.rawSpectrum, health_);
                     if (isInterruptionRequested()) break;
                     const QString quality = result.quality.level == QualityLevel::Pass ? "PASS"
@@ -43,12 +51,12 @@ void ArchiveImportWorker::run() {
                     const RunSummary summary{id, QDateTime::currentDateTimeUtc(), actor_,
                         example ? "公开示例 · OpenMS BSA" : (archive.scans.isEmpty() ? "导入谱图分析" : "扫描序列·首个有效 MS1 分析"),
                         example ? "PUBLIC_EXAMPLE" : "IMPORTED_UNVALIDATED", quality, result.quality.score,
-                        static_cast<int>(result.candidates.size()), "PENDING_REVIEW", {}, archive.sampleInfo};
+                        static_cast<int>(result.candidates.size()), "PENDING_REVIEW", {}, sampleInfo};
                     const double unknown=std::numeric_limits<double>::quiet_NaN();
                     const InstrumentTelemetry noTelemetry{unknown,unknown,unknown,unknown,unknown,"未提供",
                         unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown};
                     if (repository.saveCompletedRun(summary, archive.rawSpectrum, result, rawOnly?noTelemetry:telemetry_, &error, archive.scans)) {
-                        ++imported; outcome = rawOnly?"已导入原始谱，筛查未配置":"已导入"; lastRunId_ = id;
+                        ++imported; outcome = thresholdScreening?"已导入，按记录内谱库快照恢复筛查":rawOnly?"已导入原始谱，筛查未配置":"已导入"; lastRunId_ = id;
                     } else { ++failed; outcome = "保存失败：" + error; }
                 }
             }

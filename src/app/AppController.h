@@ -75,6 +75,10 @@ public:
     QVector<MethodDefinition> methods() const;
     MethodDefinition activeMethod() const;
     const RunSummary &currentRun() const { return currentRun_; }
+    double configuredDetectionSeconds() const {
+        const auto &info=(phase_==Phase::Acquiring || phase_==Phase::Analyzing) ? activeSampleInfo_ : currentRun_.sampleInfo;
+        return info.value("detection_time_seconds").toDouble();
+    }
     Phase phase() const { return phase_; }
     qint64 softwareElapsedMs() const { return softwareClock_.elapsed(); }
     qint64 detectionElapsedMs() const {
@@ -94,6 +98,8 @@ public slots:
     bool requestRfTuning(bool enabled, bool confirmed=false);
     bool exportPumpFrames(const QString &path);
     void startDetection();
+    // Shared by the initial click and the final submit; never cache a passed check.
+    bool checkDetectionStart();
     void startSampleDetection(const QJsonObject &sampleInfo, const QString &savePath);
     void cancelDetection();
     void explainCurrentState();
@@ -138,6 +144,7 @@ signals:
     void scanSeriesChanged();
     void analysisCompleted(const qitest::AnalysisResult &result);
     void notice(const QString &text);
+    void detectionStartRejected(const QStringList &reasons);
     void aiStateChanged(const QString &state);
     void aiBusyChanged(bool busy);
     void aiExplanationReady(const QString &text);

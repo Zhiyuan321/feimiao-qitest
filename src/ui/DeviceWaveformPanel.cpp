@@ -21,6 +21,7 @@ public:
         repaintTimer_.setTimerType(Qt::PreciseTimer);
         QObject::connect(&repaintTimer_,&QTimer::timeout,this,[this]{update();});
         setProperty("frameIntervalMs",16);setMinimumSize(240,220);setMouseTracking(true);
+        setProperty("yMaximum",scaleMaximum());
     }
     void setValues(const QVector<double> &v) {
         if(values_==v)return;
@@ -30,7 +31,7 @@ public:
 protected:
     QRectF area() const {return QRectF(66,24,std::max(1,width()-90),std::max(1,height()-82));}
     double scaleMaximum() const {
-        if (values_.isEmpty()) return 6.0;
+        if (!tuning_ || values_.isEmpty()) return 6.0;
         const double peak=*std::max_element(values_.cbegin(),values_.cend());
         return peak<=6.0 ? 6.0 : std::ceil(peak/5.0)*5.0;
     }
@@ -87,8 +88,7 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
     }
     auto *plot=new VoltagePlot(tuning);plot->setObjectName(tuning?"rfVoltagePlot":"pressureVoltagePlot");
     layout->addWidget(plot,1);
-    if(tuning) layout->addWidget(status);
-    else status->hide();
+    layout->addWidget(status);
     const auto refresh=[=] {
         const auto data=controller->networkStatus();
         if(tuning) {
@@ -102,9 +102,15 @@ QWidget *createDeviceWaveformPanel(AppController *controller,bool tuning,QWidget
                 .arg(data.value("pressureFrames",0).toULongLong()).arg(data.value("pressureCycle",-1).toInt()).arg(values.size());
             if(!values.isEmpty()) {
                 const auto high=*std::max_element(values.cbegin(),values.cend());
-                text+=QString(" 单包峰值 %1 V，纵轴已自动适配。").arg(high,0,'f',2);
+                text+=QString(" 单包峰值 %1 V，纵轴固定为0.00～6.00 V，超出范围的部分不显示。").arg(high,0,'f',2);
             }
-            status->setText(text);
+            const bool completed=data.value("pressureAcquisitionCompleted").toBool();
+            status->setText(completed
+                ? (values.isEmpty()?QString("检测已结束，未收到气压数据")
+                    :QString("检测已结束 · 保留最后一周期气压曲线（周期 %1）").arg(data.value("pressureCycle").toInt()))
+                : (values.isEmpty()?QString("等待网口气压数据")
+                    :QString("最近收到的气压曲线 · 周期 %1 · %2 点").arg(data.value("pressureCycle").toInt()).arg(values.size())));
+            status->setToolTip(text);
             plot->setToolTip(text);
         }
     };

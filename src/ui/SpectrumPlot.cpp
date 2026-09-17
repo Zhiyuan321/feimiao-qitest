@@ -61,6 +61,7 @@ SpectrumPlot::SpectrumPlot(Mode mode, QWidget *parent) : QWidget(parent), mode_(
 bool SpectrumPlot::exportCsv(const QString &path) {
     if(points_.isEmpty() || exportThread_ || path.isEmpty()) return false;
     const auto data=points_; // Implicitly shared immutable snapshot, never the reduced render cache.
+    const double xScale=xDisplayScale_;
     const auto xLabel=QString(xAxisLabel_).replace('\n',' ').replace('\r',' ');
     const auto yLabel=QString(yAxisLabel_).replace('\n',' ').replace('\r',' ');
     struct Result { bool ok=false; QString message; };
@@ -71,7 +72,7 @@ bool SpectrumPlot::exportCsv(const QString &path) {
         QByteArray buffer=("# x_axis: "+xLabel+"\n# y_axis: "+yLabel+"\nx,y\n").toUtf8();
         for(const auto &point:data) {
             if(QThread::currentThread()->isInterruptionRequested()) { result->message="已取消，原文件未改变"; return; }
-            buffer+=QByteArray::number(point.mz,'g',17)+','+QByteArray::number(point.intensity,'g',17)+'\n';
+            buffer+=QByteArray::number(point.mz*xScale,'g',17)+','+QByteArray::number(point.intensity,'g',17)+'\n';
             if(buffer.size()>=65536) {
                 if(file.write(buffer)!=buffer.size()) { result->message=file.errorString(); return; }
                 buffer.clear();
@@ -92,26 +93,28 @@ bool SpectrumPlot::exportCsv(const QString &path) {
 void SpectrumPlot::setPoints(const QVector<SpectrumPoint> &points) {
     points_ = points;
     zoomed_=false; cacheWidth_=-1; hoveredIndex_=-1;
-    viewMinimum_=points_.isEmpty() ? 0:points_.first().mz;
-    viewMaximum_=points_.isEmpty() ? 1:points_.last().mz;
+    viewMinimum_=hasDefaultXRange_ ? defaultMinimum_ : points_.isEmpty() ? 0:points_.first().mz;
+    viewMaximum_=hasDefaultXRange_ ? defaultMaximum_ : points_.isEmpty() ? 1:points_.last().mz;
     if (!repaintTimer_->isActive()) repaintTimer_->start();
 }
 
 void SpectrumPlot::setMode(Mode mode) { mode_=mode; update(); }
 void SpectrumPlot::resetView() {
     zoomed_=false; cacheWidth_=-1; hoveredIndex_=-1;
-    viewMinimum_=points_.isEmpty() ? 0:points_.first().mz;
-    viewMaximum_=points_.isEmpty() ? 1:points_.last().mz;
+    viewMinimum_=hasDefaultXRange_ ? defaultMinimum_ : points_.isEmpty() ? 0:points_.first().mz;
+    viewMaximum_=hasDefaultXRange_ ? defaultMaximum_ : points_.isEmpty() ? 1:points_.last().mz;
     update();
 }
 void SpectrumPlot::zoomAt(double centerX, double factor) {
     if(points_.size()<2 || !std::isfinite(centerX) || !std::isfinite(factor) || factor<=0) return;
-    const double full=points_.last().mz-points_.first().mz;
+    const double minimum=hasDefaultXRange_ ? defaultMinimum_ : points_.first().mz;
+    const double maximum=hasDefaultXRange_ ? defaultMaximum_ : points_.last().mz;
+    const double full=maximum-minimum;
     if(full<=0) return;
     const double span=std::clamp((viewMaximum_-viewMinimum_)*factor,full/10000.0,full);
     if(span>=full) { resetView(); return; }
     const double ratio=std::clamp((centerX-viewMinimum_)/(viewMaximum_-viewMinimum_),0.0,1.0);
-    viewMinimum_=std::clamp(centerX-ratio*span,points_.first().mz,points_.last().mz-span);
+    viewMinimum_=std::clamp(centerX-ratio*span,minimum,maximum-span);
     viewMaximum_=viewMinimum_+span; zoomed_=true; cacheWidth_=-1; hoveredIndex_=-1; update();
 }
 void SpectrumPlot::wheelEvent(QWheelEvent *event) {
@@ -166,6 +169,17 @@ void SpectrumPlot::setAxisLabels(QString xAxis, QString yAxis) {
     yAxisLabel_ = std::move(yAxis);
     update();
 }
+
+void SpectrumPlot::setXAxisDisplayScale(double scale) {
+    if(!std::isfinite(scale) || scale<=0) return;
+    xDisplayScale_=scale;setProperty("xAxisDisplayScale",scale);update();
+}
+void SpectrumPlot::setDefaultXRange(double minimum,double maximum) {
+    if(!std::isfinite(minimum) || !std::isfinite(maximum) || minimum>=maximum) return;
+    hasDefaultXRange_=true;defaultMinimum_=minimum;defaultMaximum_=maximum;resetView();
+    setProperty("defaultXMaximum",maximum);
+}
+void SpectrumPlot::clearDefaultXRange() {hasDefaultXRange_=false;resetView();}
 
 void SpectrumPlot::setAccentColor(const QColor &color) {
     accentColor_ = color;
@@ -271,15 +285,15 @@ void SpectrumPlot::paintEvent(QPaintEvent *) {
             painter.restore();
         }
     }
-    const double axisMin = points_.size() >= 2 ? viewMinimum_ : (xAxisLabel_ == "m/z" ? 50.0 : 0.0);
-    const double axisMax = points_.size() >= 2 ? viewMaximum_ : (xAxisLabel_ == "m/z" ? 500.0 : 1.0);
+    const double axisMin = points_.size() >= 2 || hasDefaultXRange_ ? viewMinimum_ : (xAxisLabel_ == "m/z" ? 50.0 : 0.0);
+    const double axisMax = points_.size() >= 2 || hasDefaultXRange_ ? viewMaximum_ : (xAxisLabel_ == "m/z" ? 500.0 : 1.0);
     for (int i = 0; i <= 5; ++i) {
         const double x = plot.left() + plot.width() * i / 5.0;
         painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
         painter.setPen(Scientz::Ui::Colors::TextSecondary);
         painter.setFont(QFont(painter.font().family(), 10));
         painter.drawText(QRectF(x - 32, plot.bottom() + 3, 64, 18), Qt::AlignCenter,
-                         QString::number(axisMin + (axisMax - axisMin) * i / 5.0, 'g', 4));
+                         QString::number((axisMin + (axisMax - axisMin) * i / 5.0)*xDisplayScale_, 'g', 4));
         painter.setPen(QPen(Scientz::Ui::Colors::Graphite100, 0.8));
     }
     painter.setPen(Scientz::Ui::Colors::TextSecondary);
@@ -321,8 +335,10 @@ void SpectrumPlot::paintEvent(QPaintEvent *) {
             firstDraw ? path.moveTo(x,y):path.lineTo(x,y); firstDraw=false;
         }
         QPainterPath fillPath(path);
-        fillPath.lineTo(plot.right(), plot.bottom());
-        fillPath.lineTo(plot.left(), plot.bottom());
+        if(!drawIndices_.isEmpty()) {
+            fillPath.lineTo(pointPosition(drawIndices_.last(),plot,maximum).x(), plot.bottom());
+            fillPath.lineTo(pointPosition(drawIndices_.first(),plot,maximum).x(), plot.bottom());
+        }
         fillPath.closeSubpath();
         QColor fillTop = accentColor_;
         fillTop.setAlpha(44);
@@ -358,7 +374,7 @@ void SpectrumPlot::paintEvent(QPaintEvent *) {
         painter.drawEllipse(position, 4.5, 4.5);
 
         const QString value = QString("%1 %2  ·  %3")
-            .arg(xAxisLabel_).arg(points_[hoveredIndex_].mz, 0, 'g', 6)
+            .arg(xAxisLabel_).arg(points_[hoveredIndex_].mz*xDisplayScale_, 0, 'g', 6)
             .arg(points_[hoveredIndex_].intensity, 0, 'g', 6);
         QFont valueFont = painter.font();
         valueFont.setPointSize(9);

@@ -2,6 +2,8 @@
 #include "core/QuantitationEngine.h"
 #include "core/CalibrationModel.h"
 #include "core/ChromatogramEngine.h"
+#include "core/IonThresholdScreening.h"
+#include <QJsonArray>
 #include "core/SpectralComparison.h"
 #include "device/SimulatedInstrument.h"
 
@@ -13,6 +15,8 @@ using namespace qitest;
 class CoreTests final : public QObject {
     Q_OBJECT
 private slots:
+    void threeIonThresholdsRequireEveryIndependentSum();
+    void variableIonCountsAndLegacySnapshots();
     void processorRejectsUnsortedMassAxis();
     void syntheticPipelineFindsDemoCandidates();
     void matcherRejectsDistantReference();
@@ -21,9 +25,85 @@ private slots:
     void quantitationFitsVerifiedCalibrationPoints();
     void timeTracesSeparateLevelsAndIntegrateMeasuredTime();
     void ticSumsEachOneSecondSpectrumWithoutMassWeighting();
+    void eicAreaSumsFramesWithoutTimeWeighting();
     void internalStandardUsesPairedRatiosAndPreservesSafetyBounds();
     void userSpectraComparisonIsBoundedAndDoesNotReusePeaks();
 };
+
+void CoreTests::variableIonCountsAndLegacySnapshots() {
+    const QVector<SpectrumScan> scans{{0,1,{{100,10},{200,20},{300,30},{400,40}}},
+                                     {20,1,{{100,10},{200,20},{300,30},{400,40}}}};
+    for(const auto rule:{IonThresholdScreening::Version,IonThresholdScreening::LegacyVersion}) {
+        for(int count=1;count<=4;++count) {
+            QStringList ions,thresholds;
+            for(int i=1;i<=count;++i) {ions<<QString::number(i*100);thresholds<<QString::number(i*20-1);}
+            QJsonObject entry{{"name","可变离子物质"},{"qualitify_ion",ions.join(',')},{"son_area",thresholds.join(',')}};
+            QJsonObject snapshot{{"rule",rule},{"tolerance_da",0.5},{"entries",QJsonArray{entry}}};
+            AnalysisResult result;QString error;
+            QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("COMPLETE"));
+            QCOMPARE(result.engineVersion,QString(IonThresholdScreening::Version));
+            QCOMPARE(result.candidates.size(),1);QCOMPARE(result.candidates[0].requiredFragments,count);
+            QCOMPARE(result.candidates[0].matchedFragments,count);
+            for(int i=0;i<count;++i)QCOMPARE(result.screeningItems[0].accumulatedIntensities[i],double(20*(i+1)));
+            // Each position must pass independently, including the fourth and later ions.
+            for(int i=0;i<count;++i) {
+                auto equal=thresholds;equal[i]=QString::number((i+1)*20);entry["son_area"]=equal.join(',');
+                snapshot["entries"]=QJsonArray{entry};
+                QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("COMPLETE"));
+                QVERIFY(result.candidates.isEmpty());QCOMPARE(result.screeningItems[0].conclusion,QString("未检出"));
+            }
+        }
+    }
+    const auto entry=[](QString ions,QString thresholds){return QJsonObject{{"name","格式检查"},{"qualitify_ion",ions},{"son_area",thresholds}};};
+    QJsonObject snapshot{{"rule",IonThresholdScreening::Version},{"tolerance_da",0.5},{"entries",QJsonArray{
+        entry("100,200","19"),entry("100","19,39"),entry("",""),entry("100,","19,39"),
+        entry("100","-1"),entry("0","0"),entry("100，200","19，39"),
+        QJsonObject{{"name","单个数值字段"},{"qualitify_ion",100},{"son_area",19}}}}};
+    AnalysisResult result;QString error;
+    QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("PARTIAL"));
+    QCOMPARE(result.candidates.size(),2);QCOMPARE(result.screeningItems.size(),8);
+    QVERIFY(result.screeningItems[0].evidence.contains("定性离子2个，一级阈值1个"));
+    for(int i=0;i<6;++i)QCOMPARE(result.screeningItems[i].conclusion,QString("未筛查"));
+}
+
+void CoreTests::threeIonThresholdsRequireEveryIndependentSum() {
+    const QVector<SpectrumPoint> points{{99.49,10000},{99.5,2},{100,3},{100.5,5},{100.51,10000},{200,20},{300,30}};
+    const QVector<SpectrumScan> scans{{0,1,points},{2,2,points},{20,1,points}};
+    const auto row=[](QString name,QString thresholds,QString ions="100,200,300") {
+        return QJsonObject{{"id","duplicate"},{"name",name},{"qualitify_ion",ions},{"son_area",thresholds}};
+    };
+    QJsonObject snapshot{{"rule",IonThresholdScreening::Version},{"tolerance_da",0.5},{"entries",QJsonArray{
+        row("全通过","19,39,59"),row("等于不通过","20,39,59"),row("单项不足","0,0,100"),
+        row("顺序不同","59,39,19"),row("全部为零阈值","0,0,0"),row("缺少离子","0,0,0","100,200")}}};
+    AnalysisResult result;QString error;
+    QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("PARTIAL"));
+    QCOMPARE(result.candidates.size(),2);QCOMPARE(result.screeningItems.size(),6);
+    QCOMPARE(result.screeningItems[0].accumulatedIntensities,QVector<double>({20,40,60}));
+    QCOMPARE(result.screeningItems[0].primaryThresholds,QVector<double>({19,39,59}));
+    QVERIFY(!result.candidates[0].demo);QCOMPARE(result.candidates[0].matchedFragments,3);
+    QVERIFY(result.candidates[0].referenceId!=result.candidates[1].referenceId);
+    for(int i=1;i<=3;++i)QCOMPARE(result.screeningItems[i].conclusion,QString("未检出"));
+    QCOMPARE(result.screeningItems[5].conclusion,QString("未筛查"));
+    for(int i=0;i<3;++i) {
+        const auto trace=ChromatogramEngine::trace(scans,ChromatogramEngine::Kind::Eic,1,100*(i+1),0.5);
+        QCOMPARE(trace.size(),2);
+        QCOMPARE(trace[0].intensity,trace[1].intensity); // Graph still displays individual frames.
+        QCOMPARE(ChromatogramEngine::sumIntensities(trace).value,result.screeningItems[0].accumulatedIntensities[i]);
+    }
+    snapshot["entries"]=QJsonArray{row("缺失信号","0,0,0","100,200,400")};
+    QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("COMPLETE"));
+    QVERIFY(result.candidates.isEmpty());QCOMPARE(result.screeningItems[0].accumulatedIntensities[2],0.0);
+    snapshot["entries"]=QJsonArray{row("非法阈值","-1,0,0"),row("非法数值","nan,0,0")};
+    QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("PARTIAL"));
+    QVERIFY(result.candidates.isEmpty());
+    snapshot["rule"]="unknown";
+    QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("FAILED"));
+    QVERIFY(result.screeningItems.isEmpty());QVERIFY(!error.isEmpty());
+    snapshot["rule"]=IonThresholdScreening::Version;
+    snapshot["entries"]=QJsonArray{row("溢出","0,0,0","100,100,100")};
+    QCOMPARE(IonThresholdScreening::apply({{0,1,{{100,1e308}}},{1,1,{{100,1e308}}}},snapshot,&result,&error),QString("PARTIAL"));
+    QVERIFY(result.candidates.isEmpty());
+}
 
 void CoreTests::userSpectraComparisonIsBoundedAndDoesNotReusePeaks() {
     const QVector<SpectrumPoint> a{{10,3},{20,4}};
@@ -192,6 +272,19 @@ void CoreTests::ticSumsEachOneSecondSpectrumWithoutMassWeighting() {
     QCOMPARE(tic[0].mz, 0.0); QCOMPARE(tic[0].intensity, 60.0);
     QCOMPARE(tic[1].mz, 1.0); QCOMPARE(tic[1].intensity, 6.0);
     QCOMPARE(tic[2].mz, 2.0); QCOMPARE(tic[2].intensity, 0.0);
+}
+
+void CoreTests::eicAreaSumsFramesWithoutTimeWeighting() {
+    const QVector<SpectrumScan> scans{{0,1,{{237.9,2},{238,3},{239,100}}},
+        {2,1,{{237.9,4},{238,6},{239,200}}},{20,1,{{237.9,0},{238,5},{239,300}}}};
+    const auto trace=ChromatogramEngine::trace(scans,ChromatogramEngine::Kind::Eic,1,238,0.5);
+    QCOMPARE(trace[0].intensity,5.0);QCOMPARE(trace[1].intensity,10.0);QCOMPARE(trace[2].intensity,5.0);
+    const auto sum=ChromatogramEngine::sumIntensities(trace);QVERIFY(sum.valid);QCOMPARE(sum.value,20.0);
+    QCOMPARE(ChromatogramEngine::integrate(trace,0,20,false).area,150.0);
+    QVERIFY(!ChromatogramEngine::sumIntensities({}).valid);
+    QVERIFY(!ChromatogramEngine::sumIntensities({{0,1},{1,-1}}).valid);
+    QVERIFY(!ChromatogramEngine::sumIntensities({{0,1},{0,2}}).valid);
+    QVERIFY(!ChromatogramEngine::sumIntensities({{0,1e308},{1,1e308}}).valid);
 }
 
 QTEST_APPLESS_MAIN(CoreTests)

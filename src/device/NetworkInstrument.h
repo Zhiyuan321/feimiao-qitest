@@ -53,6 +53,7 @@ private:
     void closePeer(const QString &message);
     void notify();
     void sendFullscanMethod();
+    void sendLegacyMethodFollowup();
     void finishMethod(bool success, const QString &error = {});
     void sendHeartbeat();
     void recordConnectionEvent(const QString &event, const QTcpSocket *socket);
@@ -66,6 +67,7 @@ private:
     QVector<double> pressureVolts_;
     quint64 pressureFrameCount_ = 0;
     int pressureCycle_ = -1;
+    bool pressureAcquisitionCompleted_ = false;
     bool tuningPending_ = false, tuningTarget_ = false;
     QString tuningMessage_ = "调谐尚未操作";
     NetworkProtocol decoder_;
@@ -92,7 +94,11 @@ private:
     QJsonObject pendingMethodParameters_, confirmedMethodParameters_;
     QString methodConfirmationReason_ = "本次连接尚未设置方法";
     QByteArray pendingMethodWire_;
+    QTimer methodFollowupDelay_;
+    int methodStage_ = 0, methodFollowupsSent_ = 0; // 0 serial, 1 method ACK, 2 delay, 3 followup ACK
     QTimer acquisitionAckTimer_, acquisitionDurationTimer_;
+    QTimer stopRetryTimer_, stopReplyGuardTimer_;
+    int stopCommandsSent_ = 0;
     int acquisitionState_ = 0; // 0 idle, 1 start ACK, 2 collecting, 3 stop ACK
     int acquisitionSeconds_ = 0, acquiredScans_ = 0, nextPressureCycle_ = 0;
     bool acquisitionCancelled_ = false;

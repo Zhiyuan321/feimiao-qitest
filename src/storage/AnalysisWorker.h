@@ -2,6 +2,7 @@
 #include "core/AnalysisEngine.h"
 #include "storage/WorkspaceRepository.h"
 #include "core/ChromatogramEngine.h"
+#include "core/IonThresholdScreening.h"
 #include <QThread>
 
 namespace qitest {
@@ -23,7 +24,7 @@ public:
 protected:
     void run() override {
         try {
-            if(summary.dataScope=="DEVICE_UNVALIDATED"
+            if(summary.dataScope=="DEVICE_UNVALIDATED" || summary.sampleInfo.contains("ion_screening_snapshot")
                 || summary.sampleInfo.value("screening_status").toString()=="NOT_CONFIGURED") {
                 // Preserve raw intensity; never apply the demo screening library to hardware data.
                 if(!ChromatogramEngine::validate(scans_,&error)) return;
@@ -31,6 +32,12 @@ protected:
                 for(const auto &point:spectrum_) result.processedSpectrum.totalIonCurrent+=point.intensity;
                 result.engineVersion="tcp-fullscan-raw-1";result.libraryVersion="未配置实机筛查库";
                 result.quality.level=QualityLevel::Review;
+                if(summary.sampleInfo.contains("ion_screening_snapshot")) {
+                    QString screeningError;
+                    const auto status=IonThresholdScreening::apply(scans_,summary.sampleInfo.value("ion_screening_snapshot").toObject(),&result,&screeningError);
+                    summary.sampleInfo.insert("screening_status",status);
+                    summary.sampleInfo.insert("screening_error",screeningError);
+                }
             } else result = engine_.analyze(spectrum_, health_);
             summary.completedAt = QDateTime::currentDateTimeUtc();
             summary.qualityLevel = result.quality.level == QualityLevel::Pass ? "PASS"

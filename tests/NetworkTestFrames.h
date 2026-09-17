@@ -1,5 +1,7 @@
 #pragma once
 #include "device/NetworkProtocol.h"
+#include <QTcpSocket>
+#include <QtTest>
 namespace qitest { namespace test {
 inline QByteArray networkStatusWire() {
     // Synthetic golden frame: action20/cmd01, length23, payload21, 3000V, raw1234, ON=01.
@@ -14,5 +16,14 @@ inline QByteArray networkFrame(const QByteArray &payload, quint8 action = 0x20,
     const auto crc = NetworkProtocol::crc16(frame.mid(1));
     frame.append(char(crc >> 8)); frame.append(char(crc)); frame.append(char(0xaa));
     return frame;
+}
+inline bool acknowledgeLegacyMethodFollowups(QTcpSocket &client) {
+    for(int i=0;i<3;++i) {
+        QElapsedTimer timer; timer.start();
+        while(client.bytesAvailable()<11 && timer.elapsed()<1500) QTest::qWait(10);
+        if(client.readAll()!=QByteArray::fromHex("55105000030101008556aa")) return false;
+        client.write(QByteArray::fromHex("55105000030101118996aa"));
+    }
+    return true;
 }
 }}

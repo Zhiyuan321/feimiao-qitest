@@ -19,6 +19,10 @@ public:
     void setPoints(const QVector<SpectrumPoint> &points);
     void setEmptyMessage(QString title, QString detail);
     void setAxisLabels(QString xAxis, QString yAxis = {});
+    // Display/export conversion only; point selection keeps the source x coordinate.
+    void setXAxisDisplayScale(double scale);
+    void setDefaultXRange(double minimum, double maximum);
+    void clearDefaultXRange();
     void setAccentColor(const QColor &color);
     void setMode(Mode mode);
     void resetView();
@@ -56,6 +60,8 @@ private:
     QColor accentColor_{"#00A8A8"};
     qsizetype hoveredIndex_ = -1;
     double viewMinimum_ = 0, viewMaximum_ = 1;
+    double xDisplayScale_ = 1, defaultMinimum_ = 0, defaultMaximum_ = 1;
+    bool hasDefaultXRange_ = false;
     bool zoomed_ = false;
     mutable int cacheWidth_ = -1, cacheBuildCount_ = 0;
     mutable double cachedMaximum_ = 1;

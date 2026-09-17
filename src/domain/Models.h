@@ -66,6 +66,9 @@ struct ScreeningItem {
     double score = 0.0;
     QString conclusion;
     bool demo = true;
+    QVector<double> accumulatedIntensities;
+    QVector<double> primaryThresholds;
+    QString evidence;
 };
 
 enum class QualityLevel { Pass, Review, Fail };

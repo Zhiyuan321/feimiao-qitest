@@ -31,6 +31,7 @@ public:
     static QByteArray tuningCommand(bool enabled);
     static QByteArray detectionCommand(bool enabled);
     static QByteArray heartbeatCommand();
+    static QByteArray legacyMethodFollowupCommand();
     static QJsonObject fullscanCalibrationProfile();
     static QVector<double> fullscanMassAxis(const QJsonObject &parameters, QString *error = nullptr);
     // Fullscan 0x81 frame from the vendor V1.4 protocol and the supplied

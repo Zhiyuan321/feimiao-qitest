@@ -80,7 +80,9 @@ bool Rs485Protocol::decodeStatus(const QByteArray &data, Rs485Status *result) {
     value.trapTemperatureC = u16(data, 17) / 10.0;
     value.efcMlMin = u16(data, 19) / 200.0;
     value.gasPumpPwmPercent = u16(data, 21);
-    if (value.highVoltageV > 5000 || value.highVoltageCurrentUa > 1000
+    // This is a raw uint16, not a voltage constrained to 5000. Legacy COM4
+    // captures keep polling with raw values around 37887; retain them intact.
+    if (value.highVoltageCurrentUa > 1000
         || value.vacuumGaugeMv > 3300 || value.gasPumpPwmPercent > 100) return false;
     *result = value;
     return true;

@@ -4,6 +4,8 @@
 #include "domain/DisplayLabels.h"
 #include "app/AppController.h"
 #include "core/MethodDraft.h"
+#include "core/IonThresholdScreening.h"
+#include "library/LibraryFile.h"
 #include "core/PlatformPaths.h"
 #include "storage/ArchiveImportWorker.h"
 #include "storage/AnalysisWorker.h"
@@ -1258,30 +1260,50 @@ void AppController::startSampleDetection(const QJsonObject &sampleInfo, const QS
     }
 }
 
+bool AppController::checkDetectionStart() {
+    auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
+    if(!network)return true; // Offline previews/reanalysis do not operate the instrument.
+    QStringList reasons;
+    const auto networkState=network->statusDetails();
+    const auto method=activeMethod();
+    const auto parameters=method.parameters.value("method_parameters").toObject();
+    if(method.id.isEmpty())reasons<<"当前方法：尚未选择并设置方法，请先点击“设为当前方法”并等待设置成功。";
+    else if(parameters.isEmpty())reasons<<"当前方法：缺少完整参数，请编辑保存后重新设置。";
+    else if(networkState.value("methodPending").toBool() || networkState.value("heartbeatPausedForMethod").toBool())
+        reasons<<"当前方法：本次设置尚未成功，请等待下位机成功回传；若设置失败，请重新点击“设为当前方法”。";
+    else if(network->confirmedMethodParameters().isEmpty())
+        reasons<<"当前方法：尚未收到下位机设置成功确认。"
+            +networkState.value("methodConfirmationReason").toString()
+            +"；请重新点击“设为当前方法”并等待成功。";
+    else if(parameters!=network->confirmedMethodParameters())
+        reasons<<"当前方法：参数已改变，与下位机确认的参数不一致，请重新点击“设为当前方法”。";
+    const auto reading=network->telemetry();
+    if(!networkState.value("connected").toBool() || !std::isfinite(reading.vacuumMbar) || reading.vacuumMbar<=0)
+        reasons<<"真空度：未取得有效网口回传数值；要求达到E-03 mbar或更低压力（小于0.01 mbar）。";
+    else if(reading.vacuumMbar>=0.01)
+        reasons<<QString("真空度：当前%1 mbar，未达标；要求达到E-03或更低压力（小于0.01 mbar）。")
+            .arg(reading.vacuumMbar,0,'E',2);
+    if(!std::isfinite(reading.ionTrapTemperatureC))
+        reasons<<"离子阱温度：未取得有效回传数值；要求大于85.0 ℃。";
+    else if(reading.ionTrapTemperatureC<=85.0)
+        reasons<<QString("离子阱温度：当前%1 ℃，未达标；要求大于85.0 ℃。")
+            .arg(reading.ionTrapTemperatureC,0,'f',1);
+    if(reasons.isEmpty())return true;
+    if(workspace_)workspace_->appendAudit(sessionOperator_,"DETECTION_START_BLOCKED",method.id,reasons.join("\n"));
+    emit notice(reasons.join("\n"));
+    emit detectionStartRejected(reasons);
+    return false;
+}
+
 void AppController::startDetection() {
     if (importWorker_) { emit notice("正在导入数据，请完成或停止导入后再检测"); return; }
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) return;
+    if(!checkDetectionStart())return;
     activeSampleInfo_ = {}; activeSamplePath_.clear();
     detectionClock_.invalidate();
     detectionDurationMs_ = -1;
     if(auto *network=qobject_cast<NetworkInstrument *>(instrument_.get())) {
         if(!workspace_) {emit notice("数据目录不可用，无法开始检测");return;}
-        const auto method=activeMethod();
-        const auto parameters=method.parameters.value("method_parameters").toObject();
-        QString methodError;
-        if(method.id.isEmpty()) methodError="尚未选择当前方法，请在“方法选择”中选择并设置方法";
-        else if(parameters.isEmpty()) methodError="当前方法缺少完整参数，请编辑并保存方法后重新设置";
-        else if(network->confirmedMethodParameters().isEmpty())
-            methodError=network->statusDetails().value("methodConfirmationReason").toString()
-                +"。请在“方法选择”选中当前方法，再点击“设为当前方法”";
-        else if(parameters!=network->confirmedMethodParameters())
-            methodError="当前方法参数与仪器已确认参数不一致，请重新点击“设为当前方法”";
-        if(!methodError.isEmpty()) {
-            workspace_->appendAudit(sessionOperator_,"DETECTION_START_BLOCKED",method.id,
-                QJsonDocument(QJsonObject{{"reason",methodError},{"active_parameters",parameters},
-                    {"confirmed_parameters",network->confirmedMethodParameters()}}).toJson(QJsonDocument::Compact));
-            emit notice(methodError);return;
-        }
         const auto preset=instrumentPreset();
         const int seconds=preset.value("detectionTimeSeconds").toInt();
         QString error;
@@ -1290,6 +1312,16 @@ void AppController::startDetection() {
         activeSampleInfo_.insert("detection_time_seconds",seconds);
         activeSampleInfo_.insert("preset_snapshot",QJsonObject::fromVariantMap(preset));
         activeSampleInfo_.insert("screening_status","NOT_CONFIGURED");
+        const QString libraryPath=preset.value("libraryPath").toString().trimmed();
+        if(!libraryPath.isEmpty()) {
+            QJsonArray entries;QByteArray digest;QString libraryError;
+            LibraryFile::read(libraryPath,&entries,&libraryError,&digest);
+            activeSampleInfo_.insert("ion_screening_snapshot",QJsonObject{
+                {"rule",IonThresholdScreening::Version},{"tolerance_da",IonThresholdScreening::ToleranceDa},
+                {"path",QFileInfo(libraryPath).absoluteFilePath()},{"sha256",QString::fromLatin1(digest.toHex())},
+                {"entries",entries},{"error",libraryError}});
+            activeSampleInfo_.insert("screening_status","PENDING");
+        }
         activeSampleInfo_.insert("mass_axis_profile",NetworkProtocol::fullscanCalibrationProfile());
         activeSampleInfo_.insert("waveform_crc_policy","record_only");
         currentRun_={};result_={};scans_.clear();pendingSpectrum_.clear();liveSpectrum_.clear();progress_=0;
@@ -1424,8 +1456,10 @@ void AppController::finishAcquisition() {
                 return;
             }
             setPhase(Phase::ResultReady,
-                currentRun_.dataScope=="DEVICE_UNVALIDATED" ? "采集已完成，筛查未配置"
+                currentRun_.dataScope=="DEVICE_UNVALIDATED" ? "采集已完成，"+screeningStatusLabel(currentRun_.sampleInfo.value("screening_status").toString())
                 : result_.quality.level == QualityLevel::Pass ? "分析完成" : "分析完成，部分质量检查未通过");
+            if(!currentRun_.sampleInfo.value("screening_error").toString().isEmpty())
+                emit notice(currentRun_.sampleInfo.value("screening_error").toString());
             emit spectrumChanged(liveSpectrum_);
             emit analysisCompleted(result_);
             emit runSaved(currentRun_);

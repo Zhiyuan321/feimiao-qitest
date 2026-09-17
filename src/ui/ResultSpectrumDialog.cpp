@@ -13,7 +13,7 @@
 
 namespace qitest {
 ResultSpectrumDialog::ResultSpectrumDialog(QVector<SpectrumScan> scans, QVector<SpectrumPoint> spectrum,
-                                           const QString &recordLabel, QWidget *parent) : QDialog(parent) {
+                                           const QString &recordLabel, QWidget *parent, double detectionSeconds) : QDialog(parent) {
     setObjectName("resultSpectrumDialog");
     setWindowTitle("谱图查看");
     setAttribute(Qt::WA_DeleteOnClose);
@@ -53,7 +53,10 @@ ResultSpectrumDialog::ResultSpectrumDialog(QVector<SpectrumScan> scans, QVector<
     eic->setAccentColor(QColor("#B97824"));
     tic->setAxisLabels("时间 / s", "总离子信号");
     ms->setAxisLabels("m/z", "当前记录分析谱");
-    eic->setAxisLabels("时间 / s", "提取离子信号");
+    eic->setAxisLabels("时间 / min", "面积");
+    eic->setXAxisDisplayScale(1.0/60.0);
+    if(detectionSeconds>0) eic->setDefaultXRange(0,
+        std::max(detectionSeconds,scans.isEmpty()?0.0:scans.last().timeSeconds));
     tic->setEmptyMessage("当前记录没有 MS1 时间序列", "");
     ms->setEmptyMessage("当前记录没有质谱数据", "");
     eic->setEmptyMessage("当前记录没有 MS1 时间序列", "");
@@ -100,7 +103,8 @@ ResultSpectrumDialog::ResultSpectrumDialog(QVector<SpectrumScan> scans, QVector<
     if (!trace.isEmpty()) selectScan(trace.first().mz);
     const auto updateEic = [scans, eic, mz, tolerance] {
         eic->setPoints(ChromatogramEngine::trace(scans, ChromatogramEngine::Kind::Eic, 1, mz->value(), tolerance->value()));
-        eic->setAxisLabels("时间 / s", QString("m/z %1 ± %2 Da").arg(mz->value(),0,'g',8).arg(tolerance->value()));
+        eic->setAxisLabels("时间 / min", "面积");
+        eic->setToolTip(QString("每帧面积：m/z %1 ± %2 Da范围内丰度求和").arg(mz->value(),0,'g',8).arg(tolerance->value()));
     };
     connect(mz, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, updateEic);
     connect(tolerance, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, updateEic);

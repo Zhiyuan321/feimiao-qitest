@@ -17,11 +17,18 @@ inline QString measurementText(double value, char format = 'f', int precision = 
 }
 // Presentation only: persisted identifiers and audit values stay unchanged.
 inline QString dataScopeLabel(const QString &scope) {
-    if (scope == "DEVICE_UNVALIDATED") return "实机采集 · 筛查未配置";
+    if (scope == "DEVICE_UNVALIDATED") return "实机采集";
     if (scope == "PUBLIC_EXAMPLE") return "公开示例 · 非检测结果";
     if (scope == "DEMO_SIMULATION") return "预览数据";
     if (scope == "IMPORTED_UNVALIDATED") return "导入数据 · 待验证";
     return "其他数据来源";
+}
+inline QString screeningStatusLabel(const QString &status) {
+    if(status=="COMPLETE")return "筛查已完成";
+    if(status=="PARTIAL")return "部分物质未完成筛查";
+    if(status=="FAILED")return "筛查未完成";
+    if(status=="PENDING")return "等待筛查";
+    return "筛查未配置";
 }
 inline QString operatorLabel(const QString &name) {
     return name == "offline-demo" ? QString("本地用户") : name;

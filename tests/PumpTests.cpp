@@ -10,6 +10,21 @@ using namespace qitest;
 class PumpTests final : public QObject {
     Q_OBJECT
 private slots:
+    void highRawVoltageKeepsSharedPollingConnected() {
+        test::FakeSharedBus transport;
+        transport.mainPayload[7]=char(0x94);transport.mainPayload[8]=char(0x01);
+        Rs485Instrument reader(&transport,nullptr);
+        QVERIFY(reader.openPort("TEST_ONLY",true));
+        QTRY_VERIFY_WITH_TIMEOUT(transport.writes.size()>=11,3500);
+        QVERIFY(reader.health().connected);QVERIFY(reader.portOpen());
+        QCOMPARE(reader.statusDetails().value("highVoltageV").toUInt(),37889u);
+        QCOMPARE(reader.telemetry().ionSourceVoltageV,3788.9);
+        QCOMPARE(reader.pumpStatusDetails().value("326").toString(),QString("000045"));
+        for(int i=0;i<transport.writes.size();++i)
+            QCOMPARE(transport.writes[i],i%5==0?Rs485Protocol::statusQuery():PumpProtocol::query(i%5-1));
+        QCOMPARE(transport.openCount,1);QCOMPARE(transport.closeCount,0);QVERIFY(!transport.overlap);
+        reader.closePort();
+    }
     void literalQueriesAndOffsets() {
         QCOMPARE(PumpProtocol::query(0), QByteArray("0010039802=?115\r"));
         QCOMPARE(PumpProtocol::query(1), QByteArray("0010031002=?099\r"));

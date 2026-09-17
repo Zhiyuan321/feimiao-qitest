@@ -482,11 +482,21 @@ private slots:
         qunsetenv("QITEST_OPERATOR_ROLE");
         qunsetenv("QITEST_WORKSPACE_DB");
     }
+    void networkDetectionUsesPresetTimeAndPersistsRawScans_data() {
+        QTest::addColumn<bool>("withLibrary");
+        QTest::newRow("raw-only")<<false;
+        QTest::newRow("specified-lib-variable-ion-screening")<<true;
+    }
     void networkDetectionUsesPresetTimeAndPersistsRawScans() {
+        QFETCH(bool,withLibrary);
         QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("network-run.sqlite").toUtf8());
         test::FakeSerial port;
-        port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
-            ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),c);};
+        int trapTenths=853;
+        port.responder=[&](const QByteArray &r){
+            const quint8 c=quint8(r[2]);auto payload=test::statusPayload();
+            payload[17]=char(trapTenths>>8);payload[18]=char(trapTenths);
+            return c==0x30?test::frame(payload):test::frame(QByteArray::fromHex("1100"),c);
+        };
         auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
         QTRY_VERIFY(serial->health().connected);
         auto adapter=std::make_unique<NetworkInstrument>(std::move(serial));auto *network=adapter.get();
@@ -507,6 +517,7 @@ private slots:
         QVERIFY(!id.isEmpty());controller.activateMethod(id);
         QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_COMPARE(controller.activeMethod().id,id);
         QVERIFY(heartbeatPausedAtMethodNotice);
         QVERIFY(network->statusDetails()["heartbeatActive"].toBool());
@@ -526,10 +537,58 @@ private slots:
         QCOMPARE(client.readAll(),NetworkProtocol::fullscanMethodCommand(MethodDraft::defaultParameters()));
         QVERIFY(!network->statusDetails().value("methodConfirmed").toBool());
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_VERIFY(network->statusDetails().value("methodConfirmed").toBool());
+        QSignalSpy rejected(&controller,&AppController::detectionStartRejected);
+        controller.activateMethod(id);QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        QVERIFY(!controller.checkDetectionStart()); // A previous ACK cannot approve a pending reapply.
+        client.write(test::networkFrame(QByteArray::fromHex("12"),0x10,0x81));
+        QTRY_VERIFY(!network->statusDetails().value("methodPending").toBool());
+        QVERIFY(!controller.checkDetectionStart()); // Failed reapply also blocks the prior confirmation.
+        controller.activateMethod(id);QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
+        QTRY_VERIFY(!network->statusDetails().value("heartbeatPausedForMethod").toBool());
+        // Check measured temperature, not the method setpoint. Equality must fail.
+        for(int t:{849,850}) {
+            trapTenths=t;auto payload=test::statusPayload();payload[17]=char(t>>8);payload[18]=char(t);
+            port.deliver(test::frame(payload));QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,t/10.0);
+            const int beforeReject=rejected.size();controller.startDetection();
+            QCOMPARE(rejected.size(),beforeReject+1);
+            QVERIFY(rejected.last()[0].toStringList().join(" ").contains("离子阱温度"));
+            QVERIFY(controller.phase()!=AppController::Phase::Acquiring);QVERIFY(controller.recentRuns().isEmpty());
+        }
+        trapTenths=851;
+        auto readyPayload=test::statusPayload();readyPayload[17]=char(trapTenths>>8);readyPayload[18]=char(trapTenths);
+        port.deliver(test::frame(readyPayload));QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,85.1);
+        for(int raw:{20000,17000,16000,12000,1234}) {
+            status[2]=char(raw>>8);status[3]=char(raw);client.write(test::networkFrame(status));
+            QTRY_COMPARE(network->statusDetails().value("vacuumRaw").toInt(),raw);
+            const double pressure=NetworkProtocol::vacuumMbarFromRaw(raw);
+            const int previousRejects=rejected.size();
+            const bool allowed=controller.checkDetectionStart();
+            QCOMPARE(allowed,pressure<0.01);
+            if(!allowed) {
+                QCOMPARE(rejected.size(),previousRejects+1);
+                QCOMPARE(rejected.last()[0].toStringList().size(),1);
+                QVERIFY(rejected.last()[0].toStringList()[0].contains("真空度"));
+                client.readAll();controller.startDetection();QTest::qWait(5);
+                QVERIFY(!client.readAll().contains(NetworkProtocol::detectionCommand(true)));
+                QVERIFY(controller.phase()!=AppController::Phase::Acquiring);
+            }
+        }
         auto preset=controller.instrumentPreset();const auto before=preset;
+        preset["libraryPath"]="";
+        if(withLibrary) {
+            QFile lib(dir.filePath("specified.lib"));QVERIFY(lib.open(QIODevice::WriteOnly));
+            lib.write("[{\"name\":\"one-ion\",\"qualitify_ion\":\"100\",\"son_area\":\"1\"},"
+                "{\"name\":\"two-ions\",\"qualitify_ion\":\"200,238\",\"son_area\":\"1,1\"},"
+                "{\"name\":\"three-ions\",\"qualitify_ion\":\"100,200,238\",\"son_area\":\"1,1,1\"}]");lib.close();
+            preset["libraryPath"]=lib.fileName();
+        }
         preset["detectionTimeSeconds"]=1;QVERIFY(controller.saveInstrumentPreset(preset));
         controller.startDetection();QCOMPARE(controller.phase(),AppController::Phase::Acquiring);
+        if(withLibrary)QVERIFY(QFile::remove(preset["libraryPath"].toString())); // Frozen at start, no later file dependency.
         QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(true));
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));
         QTest::qWait(20);
@@ -540,8 +599,8 @@ private slots:
         client.write(wholeCycle.left(1460));client.write(wholeCycle.mid(1460));
         QTRY_COMPARE(controller.scans().size(),1);
         QCOMPARE(controller.liveSpectrum()[0].intensity,258.0);
-        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,1800);
-        QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
+        QTRY_VERIFY_WITH_TIMEOUT(client.peek(client.bytesAvailable()).contains(NetworkProtocol::detectionCommand(false)),1800);
+        QVERIFY(client.readAll().contains(NetworkProtocol::detectionCommand(false))); // Heartbeats may precede the timed stop.
         QCOMPARE(controller.phase(),AppController::Phase::Acquiring);QVERIFY(controller.currentRun().id.isEmpty());
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));
         QTRY_VERIFY_WITH_TIMEOUT(controller.phase()!=AppController::Phase::Acquiring && controller.phase()!=AppController::Phase::Analyzing,3000);
@@ -552,12 +611,17 @@ private slots:
         QCOMPARE(controller.currentRun().sampleInfo.value("mass_axis_profile").toObject(),NetworkProtocol::fullscanCalibrationProfile());
         QCOMPARE(controller.currentRun().sampleInfo.value("waveform_crc_policy").toString(),QString("record_only"));
         QCOMPARE(network->statusDetails()["waveformCrcMismatches"].toInt(),1);
-        QVERIFY(controller.result().candidates.isEmpty());QVERIFY(controller.result().screeningItems.isEmpty());
+        QCOMPARE(controller.result().candidates.size(),withLibrary?3:0);
+        QCOMPARE(controller.result().screeningItems.size(),withLibrary?3:0);
+        QCOMPARE(controller.currentRun().sampleInfo.value("screening_status").toString(),withLibrary?QString("COMPLETE"):QString("NOT_CONFIGURED"));
+        const auto evidence=withLibrary?controller.result().candidates[0].evidence:QString();
         QCOMPARE(controller.result().processedSpectrum.points[0].intensity,258.0);
         QCOMPARE(controller.result().processedSpectrum.totalIonCurrent,axis.size()*258.0);
         const auto runId=controller.currentRun().id;controller.loadStoredRun(runId);
         QCOMPARE(controller.currentRun().sampleInfo.value("waveform_crc_policy").toString(),QString("record_only"));
         QCOMPARE(controller.scans().size(),1);QCOMPARE(controller.scans()[0].points[0].intensity,258.0);
+        QCOMPARE(controller.result().candidates.size(),withLibrary?3:0);
+        if(withLibrary)QCOMPARE(controller.result().candidates[0].evidence,evidence);
         // Cancel waits for a real stop reply; an unanswered stop is a failure.
         controller.startDetection();QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));QTest::qWait(60);
@@ -574,7 +638,9 @@ private slots:
         QSignalSpy imported(&controller,&AppController::importFinished);
         controller.importRunArchives({exportedPath});QTRY_COMPARE_WITH_TIMEOUT(imported.size(),1,3000);
         QCOMPARE(controller.result().processedSpectrum.points[0].intensity,258.0);
-        QVERIFY(controller.result().candidates.isEmpty());QVERIFY(controller.result().screeningItems.isEmpty());
+        QCOMPARE(controller.result().candidates.size(),withLibrary?3:0);
+        QCOMPARE(controller.result().screeningItems.size(),withLibrary?3:0);
+        if(withLibrary)QCOMPARE(controller.result().candidates[0].evidence,evidence);
         QCOMPARE(controller.scans().size(),1);
         QVERIFY(controller.saveInstrumentPreset(before));qunsetenv("QITEST_WORKSPACE_DB");
     }

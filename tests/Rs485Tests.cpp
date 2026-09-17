@@ -1,6 +1,9 @@
 #include "device/Rs485Instrument.h"
 #include "domain/DisplayLabels.h"
 #include <QtTest>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include "Rs485TestDevice.h"
 #include "core/MethodDraft.h"
 #include <cmath>
@@ -11,6 +14,53 @@ using namespace qitest::test;
 class Rs485Tests final : public QObject {
     Q_OBJECT
 private slots:
+    void highVoltageRawUsesFullUnsignedWord() {
+        for (quint16 raw : {0, 5000, 5001, 37887, 37888, 37889, 65535}) {
+            auto data=statusPayload();data[7]=char(raw>>8);data[8]=char(raw&0xff);
+            Rs485Status decoded;
+            QVERIFY(Rs485Protocol::decodeStatus(data,&decoded));
+            QCOMPARE(decoded.highVoltageV,raw);
+            QCOMPARE(decoded.trapTemperatureC,85.3);
+            // Relaxing the raw-HV limit must not disable unrelated checks.
+            auto bad=data;bad[9]=char(0x03);bad[10]=char(0xe9);
+            QVERIFY(!Rs485Protocol::decodeStatus(bad,&decoded));
+            bad=data;bad[11]=char(0x0c);bad[12]=char(0xe5);
+            QVERIFY(!Rs485Protocol::decodeStatus(bad,&decoded));
+        }
+    }
+    void capturedStatusChunksAndRepeatedPolling() {
+        const auto dir=qEnvironmentVariable("QITEST_RS485_CAPTURE_DIR");
+        if(dir.isEmpty())QSKIP("Optional captures stay outside the repository");
+        for(const auto &name:QStringList{"old","new"}) {
+            QFile input(dir+"/"+name+"-events.json");QVERIFY(input.open(QIODevice::ReadOnly));
+            const auto doc=QJsonDocument::fromJson(input.readAll());QVERIFY(doc.isArray());
+            Rs485Protocol decoder;QVector<QByteArray> replies;
+            for(const auto &event:doc.array()) {
+                const auto row=event.toObject();
+                if(row["kind"].toInt()!=3 || row["phase"].toInt()!=1)continue;
+                for(const auto &decoded:decoder.feed(QByteArray::fromHex(row["hex"].toString().toLatin1()))) {
+                    if(decoded.command!=0x30)continue;
+                    Rs485Status status;QVERIFY(Rs485Protocol::decodeStatus(decoded.payload,&status));
+                    const auto raw=(quint16(quint8(decoded.payload[7]))<<8)|quint8(decoded.payload[8]);
+                    QCOMPARE(status.highVoltageV,quint16(raw));
+                    replies.append(frame(decoded.payload));
+                }
+            }
+            QVERIFY(!replies.isEmpty());
+            FakeSerial device;int delivered=0;
+            device.responder=[&](const QByteArray &request) {
+                if(request!=Rs485Protocol::statusQuery())return QByteArray{};
+                return replies[(delivered++)%replies.size()];
+            };
+            Rs485Instrument adapter(&device,nullptr);QVERIFY(adapter.openPort("CAPTURE_REPLAY"));
+            QTRY_VERIFY(adapter.health().connected);
+            // Reach a third query beyond the former 1.5s disconnect deadline.
+            QTRY_VERIFY_WITH_TIMEOUT(delivered>=3,3500);
+            QVERIFY(adapter.health().connected);QVERIFY(adapter.portOpen());
+            qInfo()<<name<<replies.size()<<"captured status frames accepted; repeated polling stays connected";
+            adapter.closePort();
+        }
+    }
     void documentedQueryAndStateOffsets() {
         QCOMPARE(Rs485Protocol::statusQuery(), QByteArray::fromHex("558830000101aa"));
         QCOMPARE(Rs485Protocol::controlCommand(0x02,QByteArray::fromHex("0038")),

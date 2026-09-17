@@ -13,6 +13,133 @@ using namespace qitest;
 class NetworkTests final : public QObject {
     Q_OBJECT
 private slots:
+    void legacyCommandsAndFixedMethodFields() {
+        QCOMPARE(NetworkProtocol::heartbeatCommand(),QByteArray::fromHex("5510300003010123fc1eaa"));
+        QCOMPARE(NetworkProtocol::legacyMethodFollowupCommand(),QByteArray::fromHex("55105000030101008556aa"));
+        const auto wire=NetworkProtocol::fullscanMethodCommand(MethodDraft::defaultParameters());
+        const int expected[]{1,1,10000,50,3000,92,122,892,5000,325,549,579,590,380,0,
+            20,20,500,500,500,1,3000,1000,30,50,10,100,100,0,0,802,446,207,651,674,0,0,9,1000,600,500,219,10,10,10};
+        int offset=7;
+        for(int i=0;i<45;++i) {
+            int actual=quint8(wire[offset++]);
+            if(i!=0 && i!=1 && i!=14 && i!=20) actual=(actual<<8)|quint8(wire[offset++]);
+            QCOMPARE(actual,expected[i]);
+        }
+        QCOMPARE(offset,93);
+    }
+    void legacyMethodFollowupsRequireAllAcks_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("success")<<0;
+        QTest::newRow("reject-second")<<1;
+        QTest::newRow("timeout-second")<<2;
+        QTest::newRow("disconnect-before-followup")<<3;
+    }
+    void legacyMethodFollowupsRequireAllAcks() {
+        QFETCH(int,mode);
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
+            ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),c);};
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);NetworkInstrument adapter(std::move(serial));
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
+        QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
+        QSignalSpy done(&adapter,&IInstrumentAdapter::methodParametersFinished);
+        adapter.requestMethodParameters("legacy",MethodDraft::defaultParameters());
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        if(mode==3) {
+            client.disconnectFromHost();QTRY_COMPARE(done.size(),1);QVERIFY(!done[0][1].toBool());
+            QTest::qWait(200);QCOMPARE(adapter.statusDetails()["methodFollowupsSent"].toInt(),0);return;
+        }
+        for(int i=0;i<3;++i) {
+            QTRY_VERIFY(client.bytesAvailable()>0);
+            QCOMPARE(client.readAll(),QByteArray::fromHex("55105000030101008556aa"));
+            QVERIFY(done.isEmpty());QVERIFY(adapter.confirmedMethodParameters().isEmpty());
+            QVERIFY(!adapter.statusDetails()["heartbeatActive"].toBool());
+            QString error;QVERIFY(!adapter.startAcquisition(1,&error));
+            if(i==1 && mode!=0) {
+                if(mode==1) client.write(test::networkFrame(QByteArray::fromHex("12"),0x10,0x50));
+                QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,4000);QVERIFY(!done[0][1].toBool());
+                QTRY_VERIFY(!adapter.statusDetails()["tcpConnected"].toBool());
+                QCOMPARE(adapter.statusDetails()["methodFollowupsSent"].toInt(),2);return;
+            }
+            // Unrelated/repeated method ACK must not complete the followup stage.
+            client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x30)
+                +test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+            QTest::qWait(30);QVERIFY(done.isEmpty());QCOMPARE(client.bytesAvailable(),qint64(0));
+            client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x50));
+        }
+        QTRY_COMPARE(done.size(),1);QVERIFY(done[0][1].toBool());
+        QCOMPARE(adapter.statusDetails()["methodFollowupsSent"].toInt(),3);
+        QVERIFY(adapter.statusDetails()["heartbeatActive"].toBool());
+    }
+    void stopRetriesOnceWithoutExtendingDeadline_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("first-ack-cancels-retry")<<0;
+        QTest::newRow("second-stop-succeeds")<<1;
+        QTest::newRow("both-stops-unanswered")<<2;
+        QTest::newRow("stop-rejected")<<3;
+        QTest::newRow("disconnect-cancels-retry")<<4;
+    }
+    void stopRetriesOnceWithoutExtendingDeadline() {
+        QFETCH(int,mode);
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
+            ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),c);};
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);NetworkInstrument adapter(std::move(serial));
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
+        QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
+        adapter.requestMethodParameters("retry",MethodDraft::defaultParameters());
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
+        QTRY_VERIFY(adapter.statusDetails()["methodConfirmed"].toBool());
+        QSignalSpy done(&adapter,&NetworkInstrument::acquisitionFinished),started(&adapter,&NetworkInstrument::acquisitionStarted);
+        QString error;QVERIFY(adapter.startAcquisition(1,&error));QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        const auto ack=test::networkFrame(QByteArray::fromHex("11"),0x10,0x15);
+        client.write(ack);QTRY_COMPARE(started.size(),1);
+        client.write(test::networkFrame(QByteArray(3250,0),0x20,0x81,0,0));
+        QTRY_COMPARE(adapter.statusDetails()["acquiredScans"].toInt(),1);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,1500);
+        QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));QElapsedTimer elapsed;elapsed.start();
+        if(mode==0) client.write(ack);
+        else if(mode==3) client.write(test::networkFrame(QByteArray::fromHex("12"),0x10,0x15));
+        else if(mode==4) client.disconnectFromHost();
+        else {
+            QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,800);
+            QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
+            QVERIFY(elapsed.elapsed()>=400);QVERIFY(done.isEmpty());
+            QCOMPARE(adapter.statusDetails()["stopCommandsSent"].toInt(),2);
+            if(mode==1) client.write(ack+test::networkFrame(status));
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,3500);
+        QCOMPARE(done[0][0].toBool(),mode<2);
+        if(mode==2) {QVERIFY(elapsed.elapsed()>=2700);QVERIFY(elapsed.elapsed()<3400);}
+        QTest::qWait(600);
+        QCOMPARE(adapter.statusDetails()["stopCommandsSent"].toInt(),(mode==1||mode==2)?2:1);
+        if(mode==1) {
+            QVERIFY(!adapter.startAcquisition(1,&error));QVERIFY(error.contains("收尾"));
+            client.write(ack);QTest::qWait(30);QCOMPARE(started.size(),1);QCOMPARE(done.size(),1);
+            QTRY_VERIFY_WITH_TIMEOUT(!adapter.statusDetails()["stopReplyGuardActive"].toBool(),3500);
+            client.readAll();QVERIFY(adapter.startAcquisition(1,&error));
+            QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(true));
+            QCOMPARE(adapter.statusDetails()["stopCommandsSent"].toInt(),0);
+            client.write(ack);QTRY_COMPARE(started.size(),2);
+            client.write(test::networkFrame(QByteArray(3250,0),0x20,0x81,0,0));
+            QTRY_COMPARE(adapter.statusDetails()["acquiredScans"].toInt(),1);
+            QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,1500);
+            QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));client.write(ack);
+            QTRY_COMPARE(done.size(),2);QVERIFY(done[1][0].toBool());
+        }
+        if(mode>=2) QVERIFY(!adapter.statusDetails()["tcpConnected"].toBool());
+    }
     void cycleCounterCrosses255AndRejectsDuplicateAndInvalidPressure() {
         test::FakeSerial port;
         port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
@@ -27,6 +154,7 @@ private slots:
         const auto values=MethodDraft::defaultParameters();adapter.requestMethodParameters("cycles",values);
         QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_COMPARE(adapter.confirmedMethodParameters(),values);
         int scans=0;double lastTime=-1;
         connect(&adapter,&NetworkInstrument::acquisitionScan,this,[&](const SpectrumScan &scan){++scans;lastTime=scan.timeSeconds;});
@@ -153,7 +281,7 @@ private slots:
         QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
         auto status=test::networkStatusWire().mid(7,21);status[9]=0;
         client.write(test::networkFrame(status));QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
-        const auto heartbeat=test::networkFrame(QByteArray::fromHex("22"),0x10,0x30);
+        const auto heartbeat=test::networkFrame(QByteArray::fromHex("23"),0x10,0x30);
         QCOMPARE(NetworkProtocol::heartbeatCommand(),heartbeat);
         QTest::qWait(1700);QCOMPARE(client.bytesAvailable(),qint64(0));
         QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,700);QCOMPARE(client.readAll(),heartbeat);
@@ -179,6 +307,7 @@ private slots:
             if(ok) pausedAtSuccess=!adapter.statusDetails()["heartbeatActive"].toBool();
         });
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_COMPARE(done.size(),1);QVERIFY(done[0][1].toBool());QVERIFY(pausedAtSuccess);
         QVERIFY(adapter.statusDetails()["heartbeatActive"].toBool());
         QTest::qWait(1700);QCOMPARE(client.bytesAvailable(),qint64(0));
@@ -245,6 +374,7 @@ private slots:
         adapter.requestMethodParameters("capture-method",values);
         QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_COMPARE(adapter.confirmedMethodParameters(),values);
         const auto axis=NetworkProtocol::fullscanMassAxis(values,&error);
         QCOMPARE(axis.size(),1625);QVERIFY(std::abs(axis.first()-40)<1);QVERIFY(std::abs(axis.last()-300)<1);
@@ -282,6 +412,7 @@ private slots:
         QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));QVERIFY(done.isEmpty());
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));
         QTRY_COMPARE(done.size(),1);QVERIFY(done.last()[0].toBool());QVERIFY(!adapter.acquisitionBusy());
+        QVERIFY(adapter.statusDetails()["pressureAcquisitionCompleted"].toBool());
 
         // A missing cycle cannot be silently renumbered or accepted as a successful run.
         QVERIFY(adapter.startAcquisition(1,&error));QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
@@ -290,6 +421,7 @@ private slots:
         QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));
         QTRY_COMPARE(done.size(),2);QVERIFY(!done.last()[0].toBool());QCOMPARE(scans.size(),2);
+        QVERIFY(!adapter.statusDetails()["pressureAcquisitionCompleted"].toBool());
         QVERIFY(done.last()[2].toString().contains("周期编号不连续"));
 
         // Corrupt status/control data still stops acquisition and remains in raw diagnostics.
@@ -353,7 +485,7 @@ private slots:
         // mixed U8/U16 widths; slot indices are not byte offsets.
         QCOMPARE(wire.mid(21,2),QByteArray::fromHex("1388")); // data[8]: cooling 5000
         QCOMPARE(wire.mid(31,2),QByteArray::fromHex("017c")); // data[13]: injection 380
-        QCOMPARE(wire.mid(44,3),QByteArray::fromHex("011388")); // data[20]=1, data[21]=5000
+        QCOMPARE(wire.mid(44,3),QByteArray::fromHex("010bb8")); // old capture: data[20]=1, data[21]=3000
         const auto baseline=wire;
         values.insert("cooling",5100);
         wire=NetworkProtocol::fullscanMethodCommand(values,&error);
@@ -398,7 +530,7 @@ private slots:
         QCOMPARE(actualWire,NetworkProtocol::fullscanMethodCommand(values,&error));
         QCOMPARE(actualWire.mid(21,2),QByteArray::fromHex("1388"));
         QCOMPARE(actualWire.mid(31,2),QByteArray::fromHex("017c"));
-        QCOMPARE(actualWire.mid(44,3),QByteArray::fromHex("011388"));
+        QCOMPARE(actualWire.mid(44,3),QByteArray::fromHex("010bb8"));
         QVector<int> controls;for(const auto &wire:port.writes)if(wire.size()>2&&quint8(wire[2])!=0x30)controls<<quint8(wire[2]);
         QCOMPARE(controls,QVector<int>({0x02,0x13,0x12,0x04,0x14}));
         QVERIFY(adapter.statusDetails().value("methodPending").toBool());
@@ -419,6 +551,7 @@ private slots:
         QVERIFY(QString::fromUtf8(exported).contains("方法返回值：0x7f；含义未确认"));
         QVERIFY(!adapter.exportFrames(exportDirectory.filePath("missing/method.txt"),&error));
         client.write(test::networkFrame(QByteArray(1,char(0x11)),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_COMPARE(finished.size(),1);QVERIFY(finished[0][1].toBool());
         QCOMPARE(finished[0][2].toJsonObject(),values);QCOMPARE(adapter.confirmedMethodParameters(),values);
         QVERIFY(!adapter.statusDetails().value("methodPending").toBool());

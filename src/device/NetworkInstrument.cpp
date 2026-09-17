@@ -24,6 +24,13 @@ NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QO
         closePeer("检测指令应答超时，仪器运行状态未知，请核对仪器后重新连接");
     });
     connect(&acquisitionDurationTimer_,&QTimer::timeout,this,[this]{stopAcquisition(false);});
+    stopRetryTimer_.setSingleShot(true); stopRetryTimer_.setInterval(500);
+    stopRetryTimer_.setTimerType(Qt::PreciseTimer);
+    stopReplyGuardTimer_.setSingleShot(true); stopReplyGuardTimer_.setInterval(3000);
+    connect(&stopRetryTimer_,&QTimer::timeout,this,[this] {
+        if(acquisitionState_==3 && stopCommandsSent_==1 && !sendDetection(false))
+            closePeer("检测关闭重发失败，仪器可能仍在运行");
+    });
     connect(&server_, &QTcpServer::newConnection, this, &NetworkInstrument::acceptConnection);
     staleTimer_.setSingleShot(true);
     connect(&staleTimer_, &QTimer::timeout, this, [this] {
@@ -41,6 +48,8 @@ NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QO
         tuningMessage_="调谐应答超时，设备可能仍在运行；重连后可发送结束"; emit stateChanged();
     });
     methodTimer_.setSingleShot(true); methodTimer_.setInterval(3000);
+    methodFollowupDelay_.setSingleShot(true); methodFollowupDelay_.setInterval(100);
+    connect(&methodFollowupDelay_,&QTimer::timeout,this,&NetworkInstrument::sendLegacyMethodFollowup);
     connect(&methodTimer_,&QTimer::timeout,this,[this]{
         finishMethod(false,"方法设置应答超时，设备状态未知；已关闭网口连接");
         closePeer("方法设置应答超时，等待仪器重新连接");
@@ -56,6 +65,7 @@ NetworkInstrument::~NetworkInstrument() {
 void NetworkInstrument::notify() { if (!updateTimer_.isActive()) updateTimer_.start(); }
 void NetworkInstrument::sendHeartbeat() {
     if (!heartbeatTimer_.isActive() || heartbeatPausedForMethod_ || !methodRequestId_.isEmpty()
+        || acquisitionState_==3
         || !peer_ || peer_->state()!=QAbstractSocket::ConnectedState) return;
     // Never accumulate heartbeats behind a stalled TCP write buffer.
     if (peer_->bytesToWrite()>0) return;
@@ -102,7 +112,10 @@ bool NetworkInstrument::startListening(const QString &address, quint16 port, int
 void NetworkInstrument::closePeer(const QString &message) {
     heartbeatTimer_.stop(); heartbeatPausedForMethod_=false;
     if(acquisitionBusy()) finishNetworkAcquisition(false,message);
+    stopRetryTimer_.stop(); stopReplyGuardTimer_.stop();
+    methodFollowupDelay_.stop();
     pressureTimer_.stop(); pressureVolts_.clear(); pressureCycle_=-1;
+    pressureAcquisitionCompleted_=false;
     if(peer_ || !confirmedMethodParameters_.isEmpty())
         methodConfirmationReason_="网口连接变化后需重新确认方法："+message;
     confirmedMethodParameters_={};
@@ -213,7 +226,9 @@ void NetworkInstrument::receive() {
             else if(!collecting || acquisitionError_.isEmpty()) {
                 if(collecting) ++nextPressureCycle_;
                 pressureVolts_=pressure; ++pressureFrameCount_;
-                pressureCycle_=frame.cycleIndex(); pressureTimer_.start();
+                pressureCycle_=frame.cycleIndex();
+                // A final pressure frame may follow the stop acknowledgement in the same read.
+                if(!pressureAcquisitionCompleted_) pressureTimer_.start();
             }
         }
         const bool tuningAck=frame.action==0x10 && frame.command==0x20 && frame.count==1 && frame.index==1
@@ -229,18 +244,32 @@ void NetworkInstrument::receive() {
         const bool heartbeatReply=NetworkProtocol::decodeCommandAcknowledgement(frame,0x30,&heartbeatAccepted);
         if(heartbeatReply) ++heartbeatReplies_;
         const bool methodAck=NetworkProtocol::decodeCommandAcknowledgement(frame,0x81,&methodSucceeded);
-        if (methodAck && !methodRequestId_.isEmpty() && methodTimer_.isActive())
-            finishMethod(methodSucceeded, methodSucceeded ? QString{} : quint8(frame.payload[0]) == 0x29
+        if (methodAck && !methodRequestId_.isEmpty() && methodStage_==1 && methodTimer_.isActive()) {
+            if(!methodSucceeded) finishMethod(false,quint8(frame.payload[0])==0x29
                 ? "设备返回0x29：冷却时间错误，方法设置失败" : "设备拒绝 Fullscan 方法参数");
+            else {
+                methodTimer_.stop(); methodStage_=2; methodFollowupDelay_.start();
+            }
+        }
+        bool followupSucceeded=false;
+        const bool followupAck=NetworkProtocol::decodeCommandAcknowledgement(frame,0x50,&followupSucceeded);
+        if(followupAck && !methodRequestId_.isEmpty() && methodStage_==3 && methodTimer_.isActive()) {
+            methodTimer_.stop();
+            if(!followupSucceeded) {
+                finishMethod(false,"设备拒绝方法后续0x50指令，方法未完整应用");
+                closePeer("方法后续指令失败，请重连后重新设置方法");
+            } else if(methodFollowupsSent_<3) sendLegacyMethodFollowup();
+            else finishMethod(true);
+        }
         const bool acquisitionFrame=(frame.action==0x20 && frame.command==0x81)
             || (frame.action==0x10 && frame.command==0x15);
         if (decoded) {
             status_ = next; fresh_ = true; lastReadback_ = QDateTime::currentDateTime();
             staleTimer_.start(); message_ = "网口状态回读正常；Fullscan 方法与定时采集可用";
-        } else if(!pressureDecoded && !tuningAck && !methodAck && !acquisitionFrame && !heartbeatReply) ++unparsedFrames_;
+        } else if(!pressureDecoded && !tuningAck && !methodAck && !followupAck && !acquisitionFrame && !heartbeatReply) ++unparsedFrames_;
         recentFrames_.append(QJsonObject{{"time", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
             {"peer", peerAddress_}, {"direction", "RX"}, {"decodedStatus", decoded}, {"decodedPressure", pressureDecoded}, {"tuningAck", tuningAck}, {"methodAck",methodAck},
-            {"heartbeatReply",heartbeatReply},{"action", frame.action}, {"command", frame.command}, {"frameCount", frame.count},
+            {"heartbeatReply",heartbeatReply},{"methodFollowupAck",followupAck},{"action", frame.action}, {"command", frame.command}, {"frameCount", frame.count},
             {"frameIndex", frame.index}, {"hex", QString::fromLatin1(frame.wire.toHex(' '))}});
         recentFrames_.last().insert("crcRequired",frame.crcRequired);
         recentFrames_.last().insert("crcMatches",frame.receivedCrc==frame.calculatedCrc);
@@ -293,6 +322,7 @@ void NetworkInstrument::requestMethodParameters(const QString &requestId,const Q
     QString error; const auto wire=NetworkProtocol::fullscanMethodCommand(parameters,&error);
     if (wire.isEmpty()) { emit methodParametersFinished(requestId,false,{},error); return; }
     methodRequestId_=requestId; pendingMethodParameters_=parameters; pendingMethodWire_=wire;
+    methodStage_=0; methodFollowupsSent_=0;
     heartbeatTimer_.stop(); heartbeatPausedForMethod_=true;
     recordConnectionEvent("heartbeat_paused_method",peer_);
     if (!serial_->requestBasicMethodParameters(requestId,parameters,&error)) finishMethod(false,error);
@@ -306,15 +336,30 @@ void NetworkInstrument::sendFullscanMethod() {
         {"direction","TX"},{"peer",peerAddress_},{"action",0x10},{"command",0x81},
         {"hex",QString::fromLatin1(pendingMethodWire_.toHex(' '))}});
     if (recentFrames_.size()>256) recentFrames_.removeFirst();
-    methodTimer_.start();
+    methodStage_=1; methodTimer_.start();
     if (peer_->write(pendingMethodWire_)!=pendingMethodWire_.size()) {
         finishMethod(false,"Fullscan 方法参数发送失败"); closePeer("方法参数发送失败，等待仪器重连");
     }
 }
+void NetworkInstrument::sendLegacyMethodFollowup() {
+    if(methodRequestId_.isEmpty() || (methodStage_!=2 && methodStage_!=3)) return;
+    if(!peer_ || peer_->state()!=QAbstractSocket::ConnectedState) {
+        closePeer("方法后续指令发送失败，等待仪器重连"); return;
+    }
+    const auto wire=NetworkProtocol::legacyMethodFollowupCommand();
+    ++methodFollowupsSent_; methodStage_=3;
+    recentFrames_.append(QJsonObject{{"time",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {"direction","TX"},{"peer",peerAddress_},{"action",0x10},{"command",0x50},
+        {"methodFollowup",methodFollowupsSent_},{"hex",QString::fromLatin1(wire.toHex(' '))}});
+    if(recentFrames_.size()>256) recentFrames_.removeFirst();
+    methodTimer_.start();
+    if(peer_->write(wire)!=wire.size()) closePeer("方法后续指令发送失败，等待仪器重连");
+}
 void NetworkInstrument::finishMethod(bool success,const QString &error) {
     if (methodRequestId_.isEmpty()) return;
     const QString id=methodRequestId_; const QJsonObject values=pendingMethodParameters_;
-    methodTimer_.stop(); methodRequestId_.clear(); pendingMethodParameters_={}; pendingMethodWire_.clear();
+    methodTimer_.stop(); methodFollowupDelay_.stop(); methodStage_=0;
+    methodRequestId_.clear(); pendingMethodParameters_={}; pendingMethodWire_.clear();
     if (success) {confirmedMethodParameters_=values;methodConfirmationReason_="当前连接的方法已确认";}
     emit methodParametersFinished(id,success,success?values:QJsonObject{},error);
     // The synchronous controller slot publishes the success notice before restarting.
@@ -368,12 +413,18 @@ QVariantMap NetworkInstrument::statusDetails() const {
         {"rejectedBytes", decoder_.rejectedBytes()}, {"retainedFrames", recentFrames_.size()}};
     data.insert("pressureFrames",pressureFrameCount_); data.insert("pressurePoints",pressureVolts_.size());
     data.insert("pressureCycle",pressureCycle_);
+    data.insert("pressureAcquisitionCompleted",pressureAcquisitionCompleted_);
     data.insert("waveformFormat","whole-cycle-u16be-legacy-crc-record-only");
     data.insert("waveformCrcPolicy","record_only");
     data.insert("waveformCrcMismatches",waveformCrcMismatches_);
     data.insert("tuningPending",tuningPending_);data.insert("tuningMessage",tuningMessage_);
     data.insert("methodPending",!methodRequestId_.isEmpty());
     data.insert("heartbeatIntervalMs",2000);
+    data.insert("sendProfile","legacy-capture-20260916");
+    data.insert("heartbeatPayload",0x23);
+    data.insert("methodFollowupsSent",methodFollowupsSent_);
+    data.insert("stopCommandsSent",stopCommandsSent_);
+    data.insert("stopReplyGuardActive",stopReplyGuardTimer_.isActive());
     data.insert("heartbeatActive",heartbeatTimer_.isActive());
     data.insert("heartbeatPausedForMethod",heartbeatPausedForMethod_);
     data.insert("heartbeatSent",heartbeatSent_);
@@ -466,6 +517,7 @@ bool NetworkInstrument::exportFrames(const QString &path, QString *error) const 
 bool NetworkInstrument::startAcquisition(int seconds,QString *error) {
     const auto fail=[error](const QString &text){if(error)*error=text;return false;};
     if(acquisitionBusy() || tuningPending_ || !methodRequestId_.isEmpty()) return fail("请等待当前设备操作完成");
+    if(stopReplyGuardTimer_.isActive()) return fail("正在收尾上一轮关闭回复，请稍后开始检测");
     if(!peer_ || !fresh_ || status_.experimentRunning) return fail("需要有效网口回读且仪器已停止检测");
     if(confirmedMethodParameters_.isEmpty()) return fail("请先将 Fullscan 方法设置到仪器并确认成功");
     if(confirmedMethodParameters_.value("period").toInt()!=10000)
@@ -477,9 +529,13 @@ bool NetworkInstrument::startAcquisition(int seconds,QString *error) {
     if(seconds<1 || seconds>5000 || qint64(seconds)*acquisitionMassAxis_.size()>1000000)
         return fail("检测时间超出当前采集容量（最多5000周期、100万采样点），请缩短检测时间");
     acquisitionSeconds_=seconds; acquiredScans_=0;nextPressureCycle_=0;
+    stopCommandsSent_=0;
     acquisitionCancelled_=false; acquisitionError_.clear(); acquisitionState_=1;
+    pressureTimer_.stop(); pressureVolts_.clear(); pressureCycle_=-1;
+    pressureAcquisitionCompleted_=false;
     errorRawReceives_.clear();acquisitionParseFailure_={};
     if(!sendDetection(true)) {closePeer("检测开启发送失败，设备状态未知");return false;}
+    notify();
     return true;
 }
 bool NetworkInstrument::sendDetection(bool enabled) {
@@ -489,7 +545,9 @@ bool NetworkInstrument::sendDetection(bool enabled) {
         {"direction","TX"},{"peer",peerAddress_},{"action",0x10},{"command",0x15},
         {"hex",QString::fromLatin1(wire.toHex(' '))}});
     if(recentFrames_.size()>256) recentFrames_.removeFirst();
-    acquisitionAckTimer_.start();
+    // A single retry must not extend the original 3-second stop deadline.
+    if(enabled || stopCommandsSent_==0) acquisitionAckTimer_.start();
+    if(!enabled) ++stopCommandsSent_;
     return peer_->write(wire)==wire.size();
 }
 void NetworkInstrument::stopAcquisition(bool cancelled) {
@@ -498,10 +556,11 @@ void NetworkInstrument::stopAcquisition(bool cancelled) {
     if(acquisitionState_==1) {
         // Start and stop ACKs have identical payloads. Never have both outstanding.
         if(acquisitionError_.isEmpty()) acquisitionError_="在开启确认前取消，仪器状态未知";
-        return; // After start ACK, send stop once. On timeout isolate the connection.
+        return; // After start ACK, send stop. On timeout isolate the connection.
     }
     acquisitionDurationTimer_.stop(); acquisitionState_=3;
     if(!sendDetection(false)) closePeer("检测关闭发送失败，仪器可能仍在运行");
+    else stopRetryTimer_.start();
 }
 void NetworkInstrument::failAcquisition(const QString &error) {
     if(!acquisitionBusy()) return;
@@ -512,8 +571,15 @@ void NetworkInstrument::failAcquisition(const QString &error) {
 void NetworkInstrument::finishNetworkAcquisition(bool success,const QString &error) {
     if(!acquisitionBusy()) return;
     acquisitionAckTimer_.stop(); acquisitionDurationTimer_.stop();
+    stopRetryTimer_.stop();
+    // Start/stop replies have no request ID. Drain late replies to the duplicate
+    // stop before permitting another start on this socket.
+    if(stopCommandsSent_>1) stopReplyGuardTimer_.start();
     acquisitionState_=0;
+    pressureAcquisitionCompleted_=success && !acquisitionCancelled_ && error.isEmpty();
+    if(pressureAcquisitionCompleted_) pressureTimer_.stop();
     if(!error.isEmpty()) acquisitionError_=error;
+    notify();
     emit acquisitionFinished(success,acquisitionCancelled_ && error.isEmpty(),error);
 }
 void NetworkInstrument::receiveAcquisition(const NetworkFrame &frame) {
