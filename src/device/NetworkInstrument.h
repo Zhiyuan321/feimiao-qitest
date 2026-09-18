@@ -27,6 +27,9 @@ public:
     bool startAcquisition(int seconds, QString *error);
     void stopAcquisition(bool cancelled = true);
     bool acquisitionBusy() const { return acquisitionState_ != 0; }
+    bool calibrationBusy() const { return settingBusy() || acquisitionBusy() || tuningPending_ || !methodRequestId_.isEmpty() || (fresh_ && status_.experimentRunning); }
+    bool setCalibrationProfile(const QJsonObject &profile,QString *error=nullptr);
+    QJsonObject calibrationProfile() const { return calibrationProfile_; }
     InstrumentDescriptor descriptor() const override;
     InstrumentHealth health() const override;
     InstrumentTelemetry telemetry() const override;
@@ -121,6 +124,7 @@ private:
     quint64 waveformCrcMismatches_ = 0;
     QString methodRequestId_;
     QJsonObject pendingMethodParameters_, confirmedMethodParameters_;
+    QJsonObject calibrationProfile_=NetworkProtocol::fullscanCalibrationProfile();
     QString methodConfirmationReason_ = "本次连接尚未设置方法";
     QByteArray pendingMethodWire_;
     QTimer methodFollowupDelay_;

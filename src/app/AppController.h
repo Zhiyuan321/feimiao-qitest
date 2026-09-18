@@ -3,6 +3,7 @@
 #include "ai/AiEvidenceBuilder.h"
 #include "ai/LocalKnowledgeStore.h"
 #include "core/AnalysisEngine.h"
+#include "core/FullscanCalibration.h"
 #include "device/IInstrumentAdapter.h"
 #include "storage/WorkspaceRepository.h"
 #include "library/SpectralLibraryRepository.h"
@@ -63,6 +64,10 @@ public:
     QVariantMap pumpStatus() const;
     QVariantMap instrumentSettings() const { return instrumentSettings_; }
     QJsonObject confirmedMethodParameters() const { return instrument_->confirmedMethodParameters(); }
+    QJsonObject massCalibrationProfile() const { return massCalibrationProfile_; }
+    QString massCalibrationPath() const { return massCalibrationPath_; }
+    bool synchronizeMassCalibration(const QVector<MassAxisPair> &pairs,const QJsonObject &base,QString *error);
+    bool undoMassCalibration(QString *error);
     QString sessionSummary() const;
     // 方法草稿的字段完整度不能随485/TCP适配器切换而变化。真实设备是否
     // 允许激活仍由 activateMethod、协议映射和设备回读分别校验。
@@ -169,6 +174,10 @@ signals:
     void importFinished(const QString &summary);
 
 private:
+    bool storeMassCalibration(const QJsonObject &profile,QString *error);
+    void loadMassCalibration();
+    QJsonObject massCalibrationProfile_=FullscanCalibration::defaults(), previousMassCalibration_;
+    QString massCalibrationPath_;
     void bindInstrumentSignals();
     void refreshInstrumentReadback();
     void watchPendingRealInstrument(IInstrumentAdapter *adapter);

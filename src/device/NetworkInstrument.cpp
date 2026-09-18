@@ -386,6 +386,15 @@ bool NetworkInstrument::requestTuning(bool enabled, QString *error) {
     }
     emit stateChanged();return true;
 }
+bool NetworkInstrument::setCalibrationProfile(const QJsonObject &profile,QString *error) {
+    if(calibrationBusy()){if(error)*error="请结束检测、调谐或待确认操作后再同步校准";return false;}
+    if(profile==calibrationProfile_)return true;
+    // A damaged saved profile remains invalid, blocking method submission rather than silently using defaults.
+    calibrationProfile_=profile;
+    confirmedMethodParameters_={};
+    methodConfirmationReason_="质量轴校准已变更，须重新设为当前方法";
+    emit stateChanged();return true;
+}
 CommandValidation NetworkInstrument::validateMethodParameters(const QJsonObject &parameters) const {
     if(settingBusy()) return {false,"请等待开机或部件操作完成"};
     if(acquisitionBusy()) return {false,"检测期间不能修改方法"};
@@ -394,7 +403,7 @@ CommandValidation NetworkInstrument::validateMethodParameters(const QJsonObject 
     if (status_.experimentRunning) return {false,"检测运行中不能修改方法"};
     if (tuningPending_ || !methodRequestId_.isEmpty()) return {false,"正在等待上一条设备指令应答"};
     QString error;
-    if (NetworkProtocol::fullscanMethodCommand(parameters,&error).isEmpty()) return {false,error};
+    if (NetworkProtocol::fullscanMethodCommand(parameters,&error,calibrationProfile_).isEmpty()) return {false,error};
     if (!parameters.value("source").isDouble()) return {false,"离子源电压须填写数值"};
     if (NetworkProtocol::ionSourceVoltageCommand(parameters.value("source").toDouble(),&error).isEmpty())
         return {false,error};
@@ -407,7 +416,7 @@ void NetworkInstrument::requestMethodParameters(const QString &requestId,const Q
     if (requestId.isEmpty() || !validation.allowed) {
         emit methodParametersFinished(requestId,false,{},requestId.isEmpty()?"方法请求号为空":validation.reason); return;
     }
-    QString error; const auto wire=NetworkProtocol::fullscanMethodCommand(parameters,&error);
+    QString error; const auto wire=NetworkProtocol::fullscanMethodCommand(parameters,&error,calibrationProfile_);
     if (wire.isEmpty()) { emit methodParametersFinished(requestId,false,{},error); return; }
     methodRequestId_=requestId; pendingMethodParameters_=parameters; pendingMethodWire_=wire;
     methodStage_=0; methodFollowupsSent_=0;
@@ -715,6 +724,7 @@ QVariantMap NetworkInstrument::statusDetails() const {
         {"validFrames", validFrames_}, {"unparsedFrames", unparsedFrames_},
         {"rejectedBytes", decoder_.rejectedBytes()}, {"retainedFrames", recentFrames_.size()}};
     data.insert("startupStage",int(startup_.stage()));
+    data.insert("massCalibrationProfile",calibrationProfile_.toVariantMap());
     data.insert("startupTemperaturesConfirmed",startupTemperaturesConfirmed());
     data.insert("resumeHeatingAvailable",runningStartupNeedsHeating() && validateSetting("powerOn",true).allowed);
     data.insert("shutdownBusy",shutdownBusy());
@@ -836,7 +846,7 @@ bool NetworkInstrument::startAcquisition(int seconds,QString *error) {
     if(confirmedMethodParameters_.isEmpty()) return fail("请先将 Fullscan 方法设置到仪器并确认成功");
     if(confirmedMethodParameters_.value("period").toInt()!=10000)
         return fail("当前采集按已确认的1秒周期工作，请将方法周期设为10000");
-    acquisitionMassAxis_=NetworkProtocol::fullscanMassAxis(confirmedMethodParameters_,error);
+    acquisitionMassAxis_=NetworkProtocol::fullscanMassAxis(confirmedMethodParameters_,error,calibrationProfile_);
     if(acquisitionMassAxis_.isEmpty()) return false;
     if(acquisitionMassAxis_.size()*2>NetworkProtocol::MaximumWaveformPayload)
         return fail("当前方法的单周期质谱超过网口长度字段容量，请调整方法");

@@ -641,6 +641,7 @@ private slots:
     void detectionStartListsUnmetConditions();
     void fixedLandscapeNavigation();
     void manualQuadraticCalibrationWorksheet();
+    void synchronizedCalibrationFitsSmallScreen();
     void professionalOfflineToolsValidateAndRemainUsable();
     void instrumentPowerButtonsReflectPartialState();
     void bundledExampleLoadsThreePlotsWithoutAi();
@@ -2767,6 +2768,43 @@ void UiSmokeTests::traceAnalysisUsesImportedScans() {
     shortTrace->findChild<QPushButton *>("calculateIntegral")->click();
     QVERIFY(shortTrace->findChild<QLabel *>("integrationResult")->text().startsWith("面积"));
     shortTrace->close();
+}
+
+void UiSmokeTests::synchronizedCalibrationFitsSmallScreen() {
+    QTemporaryDir dir;QStandardPaths::setTestModeEnabled(true);
+    qputenv("QITEST_WORKSPACE_DB",dir.filePath("mass-ui.sqlite").toUtf8());
+    AppController controller(std::make_unique<SimulatedInstrument>());MainWindow window(&controller);window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+    window.findChild<QAction *>("OpenHome")->trigger();window.findChild<QAction *>("OpenSettings")->trigger();
+    window.findChild<QComboBox *>("settingsSection")->setCurrentIndex(1);
+    auto *tree=window.findChild<QTreeWidget *>("settingsTree");
+    QTreeWidgetItemIterator it(tree);bool opened=false;
+    while(*it){if((*it)->text(0)=="质量轴校准"){QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem*,*it),Q_ARG(int,0));opened=true;break;}++it;}
+    QVERIFY(opened);auto *page=window.findChild<QWidget *>("workbench_质量轴校准");
+    auto *table=page->findChild<QTableWidget *>("workbenchPoints");auto *tabs=page->findChild<QTabWidget *>("workbenchTabs");
+    auto *sync=page->findChild<QPushButton *>("syncMassCalibration");QVERIFY(sync);QVERIFY(!sync->isEnabled());
+    const auto base=controller.massCalibrationProfile();
+    const double measured[]{126,237,303},theoretical[]{127,238,304};
+    for(int r=0;r<3;++r){table->item(r,0)->setText(QString::number(measured[r]));table->item(r,1)->setText(QString::number(theoretical[r]));}
+    page->findChild<QPushButton *>("calculateWorkbench")->click();QVERIFY(sync->isEnabled());
+    page->findChild<QDoubleSpinBox *>("massQuery")->setValue(237);
+    page->findChild<QPushButton *>("applyMassAxis")->click();
+    QVERIFY(page->findChild<QLabel *>("workbenchStatus")->text().contains("238"));
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+    for(int height:{700,768}) {
+        window.resize(1024,height);QTest::qWait(80);
+        for(int tab:{0,1}) {
+            tabs->setCurrentIndex(tab);QTest::qWait(50);QCOMPARE(window.width(),1024);QCOMPARE(window.height(),height);
+            QVERIFY(sync->isVisibleTo(&window));QVERIFY(page->rect().contains(QRect(sync->mapTo(page,QPoint(0,0)),sync->size())));
+            if(tab==0)QVERIFY(table->viewport()->height()>100);
+            else {auto *undo=page->findChild<QPushButton *>("revertMassCalibration");QVERIFY(page->rect().contains(QRect(undo->mapTo(page,QPoint(0,0)),undo->size())));}
+            if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/mass-%1-%2.png").arg(height).arg(tab)));
+        }
+    }
+    sync->click();QVERIFY(!sync->isEnabled());QVERIFY(controller.massCalibrationProfile()!=base);
+    QVERIFY(table->item(1,0)->text().isEmpty()); // Old measurements must not be applied again to the new profile.
+    page->findChild<QPushButton *>("revertMassCalibration")->click();QCOMPARE(controller.massCalibrationProfile(),base);
+    qunsetenv("QITEST_WORKSPACE_DB");
 }
 
 void UiSmokeTests::manualQuadraticCalibrationWorksheet() {

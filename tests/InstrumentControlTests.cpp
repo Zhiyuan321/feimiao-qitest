@@ -50,6 +50,34 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
+    void massCalibrationPersistsAndCanUndo() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("mass.sqlite").toUtf8());
+        QString path,error;QJsonObject fitted;
+        {
+            AppController controller(std::make_unique<SimulatedInstrument>());
+            const auto base=controller.massCalibrationProfile();path=controller.massCalibrationPath();
+            QVERIFY(controller.synchronizeMassCalibration({{126,127},{237,238},{303,304}},base,&error));
+            fitted=controller.massCalibrationProfile();QVERIFY(fitted!=base);QVERIFY(QFile::exists(path));
+            QVERIFY(!controller.synchronizeMassCalibration({{126,127},{237,238},{303,304}},base,&error));
+            QVERIFY(error.contains("重新拟合"));QCOMPARE(controller.massCalibrationProfile(),fitted);
+        }
+        {
+            auto network=std::make_unique<NetworkInstrument>();auto *adapter=network.get();
+            AppController controller(std::move(network));QCOMPARE(controller.massCalibrationProfile(),fitted);
+            QCOMPARE(adapter->calibrationProfile(),fitted);
+            QVERIFY(controller.undoMassCalibration(&error));QCOMPARE(controller.massCalibrationProfile(),FullscanCalibration::defaults());
+            QVERIFY(adapter->confirmedMethodParameters().isEmpty());
+            QVERIFY(controller.undoMassCalibration(&error));QCOMPARE(controller.massCalibrationProfile(),fitted);
+        }
+        QFile corrupt(path);QVERIFY(corrupt.open(QIODevice::WriteOnly));corrupt.write("broken");corrupt.close();
+        {
+            auto network=std::make_unique<NetworkInstrument>();auto *adapter=network.get();
+            AppController controller(std::move(network));
+            QVERIFY(!FullscanCalibration::validate(controller.massCalibrationProfile()));
+            QVERIFY(NetworkProtocol::fullscanMethodCommand(MethodDraft::defaultParameters(),&error,adapter->calibrationProfile()).isEmpty());
+        }
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void manualPumpStartupWaitsBeyondFiveSeconds() {
         QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("pump.sqlite").toUtf8());
         test::FakeSerial port;QElapsedTimer startup;

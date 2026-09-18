@@ -14,3 +14,5 @@ ArchiveImportWorker 负责后台批量导入，每个线程独立数据库连接
 实机缺失监控读数以 SQL NULL 保存、读出恢复 NaN；初始化时事务迁移旧版非空监控表，保留旧记录。原始谱和扫描序列不因缺失监控读数而保存失败。
 
 筛查规则版本 eic-ion-sum-2 修正旧版固定三个离子的限制；兼容 eic-three-ion-sum-1 快照，重开旧记录/归档时使用原扫描和库快照按实际离子数重新计算，结果标注新规则版本；不改写旧库或原始数据。
+
+2026-09-18当前Fullscan校准独立文件fullscan-calibration.json由AppController原子写入，保存current/previous、原始手填点、拟合来源和基础系数。检测记录mass_axis_profile使用实际网口实例配置，随原始谱和归档保存。历史加载、重分析不读取最新配置重算旧质量轴。

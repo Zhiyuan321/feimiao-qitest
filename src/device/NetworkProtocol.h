@@ -35,10 +35,10 @@ public:
     static QByteArray heartbeatCommand();
     static QByteArray ionSourceVoltageCommand(double voltageV, QString *error = nullptr);
     static QJsonObject fullscanCalibrationProfile();
-    static QVector<double> fullscanMassAxis(const QJsonObject &parameters, QString *error = nullptr);
+    static QVector<double> fullscanMassAxis(const QJsonObject &parameters, QString *error = nullptr, const QJsonObject &calibration = {});
     // Fullscan 0x81 frame from the vendor V1.4 protocol and the supplied
     // workstation parameter mapping. Returns empty on any unsafe conversion.
-    static QByteArray fullscanMethodCommand(const QJsonObject &parameters, QString *error = nullptr);
+    static QByteArray fullscanMethodCommand(const QJsonObject &parameters, QString *error = nullptr, const QJsonObject &calibration = {});
     static bool decodeCommandAcknowledgement(const NetworkFrame &frame, quint8 expectedCommand,
                                              bool *success);
     static quint16 crc16(const QByteArray &bytes);

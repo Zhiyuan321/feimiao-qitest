@@ -20,3 +20,5 @@
 调试设备先看 ../device/README.md；回归测试是 tests/InstrumentControlTests.cpp、WorkspaceTests.cpp。
 
 2026-09-17离子源电压方法下发：old.pcapng中方法成功后0x50连续三条BE，用户确认设定3800 V；结合协议2.5V控制量对应5000V、控制量乘100，采用V/20编码为单字节（0～5000 V，20 V步进）。3500 V为AF，3800 V为BE，0仍发00。预检在任何写入之前完成；485只处理TD/离子阱/EFC/PWM，source由TCP接入，三次0x50均成功后才确认整套方法并恢复心跳。TD=0按用户确认仍发485 0x02数据0000，不跳过、不替换关加热命令。监控温度/电压保持设备回读，不能用设定值覆盖。此次旧抓包有气压波峰，新旧载气模式和多项方法参数不同，不能把0x50修复视为气压问题已实机解决。
+
+2026-09-18质量轴校准：synchronizeMassCalibration重新计算并核对基础配置未变，将current/previous通过QSaveFile原子保存至AppDataLocation/fullscan-calibration.json；测试使用QITEST_WORKSPACE_DB同目录。同步只持久化和使当前方法确认失效，不自动向硬件发指令。启动加载已存配置，后建网口适配器也注入；损坏文件保持INVALID阻止方法发送。采集sample_info.mass_axis_profile冻结实际使用配置，历史扫描不重算。undoMassCalibration恢复上一个已保存配置，仍需重新设为当前方法。

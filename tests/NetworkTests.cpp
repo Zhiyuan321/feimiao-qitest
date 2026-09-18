@@ -3,6 +3,7 @@
 #include "Rs485TestDevice.h"
 #include "PumpTestDevice.h"
 #include "core/MethodDraft.h"
+#include "core/FullscanCalibration.h"
 #include "core/ChromatogramEngine.h"
 #include <QFile>
 #include <QJsonDocument>
@@ -15,6 +16,26 @@ using namespace qitest;
 class NetworkTests final : public QObject {
     Q_OBJECT
 private slots:
+    void calibratedMethodAndAxisShareProfile() {
+        const auto base=FullscanCalibration::defaults();QString error;
+        const auto profile=FullscanCalibration::fit({{126,127},{237,238},{303,304}},base,&error);
+        auto oldMethod=MethodDraft::defaultParameters();
+        oldMethod["storage_mass"]=29;oldMethod["low_mass"]=49;oldMethod["high_mass"]=499;
+        auto correctedMethod=oldMethod;
+        correctedMethod["storage_mass"]=30;correctedMethod["low_mass"]=50;correctedMethod["high_mass"]=500;
+        const auto oldWire=NetworkProtocol::fullscanMethodCommand(oldMethod,&error,base);
+        const auto newWire=NetworkProtocol::fullscanMethodCommand(correctedMethod,&error,profile);
+        QVERIFY2(!newWire.isEmpty(),qPrintable(error));QCOMPARE(oldWire,newWire);
+        const auto oldAxis=NetworkProtocol::fullscanMassAxis(oldMethod,&error,base);
+        const auto newAxis=NetworkProtocol::fullscanMassAxis(correctedMethod,&error,profile);
+        QVERIFY(!oldAxis.isEmpty());QCOMPARE(oldAxis.size(),newAxis.size());
+        for(int i=0;i<oldAxis.size();++i)QVERIFY(std::abs(newAxis[i]-oldAxis[i]-1)<1e-8);
+        auto bad=profile;bad["calibrate_a"]="bad";
+        QVERIFY(NetworkProtocol::fullscanMethodCommand(correctedMethod,&error,bad).isEmpty());
+        QVERIFY(NetworkProtocol::fullscanMassAxis(correctedMethod,&error,bad).isEmpty());
+        NetworkInstrument adapter;QVERIFY(adapter.setCalibrationProfile(profile,&error));
+        QCOMPARE(adapter.calibrationProfile(),profile);QVERIFY(adapter.confirmedMethodParameters().isEmpty());
+    }
     void slowPumpStartupKeepsBoardFreshAndCanResume_data() {
         QTest::addColumn<bool>("confirmPump");
         QTest::newRow("delayed-current")<<true;
@@ -462,6 +483,10 @@ private slots:
         QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
         QSignalSpy done(&adapter,&IInstrumentAdapter::methodParametersFinished);
         auto parameters=MethodDraft::defaultParameters();parameters.insert("source",source);
+        if(mode==0 && source==3800) {
+            QString error;const auto initial=FullscanCalibration::fit({{126,127},{237,238},{303,304}},FullscanCalibration::defaults(),&error);
+            QVERIFY(adapter.setCalibrationProfile(initial,&error));
+        }
         for(double invalid:{-20.0,3501.0,5020.0}) {
             auto bad=parameters;bad.insert("source",invalid);
             const int before=port.writes.size();
@@ -471,7 +496,11 @@ private slots:
             QCOMPARE(port.writes.size(),before);QCOMPARE(client.bytesAvailable(),qint64(0));
         }
         adapter.requestMethodParameters("legacy",parameters);
-        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        QString calibrationError;
+        const auto calibration=FullscanCalibration::fit({{126,127},{237,238},{303,304}},adapter.calibrationProfile(),&calibrationError);
+        QVERIFY(!adapter.setCalibrationProfile(calibration,&calibrationError)); // Cannot alter an in-flight method.
+        QTRY_VERIFY(client.bytesAvailable()>0);
+        QCOMPARE(client.readAll(),NetworkProtocol::fullscanMethodCommand(parameters,&calibrationError,adapter.calibrationProfile()));
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
         if(mode==3) {
             client.disconnectFromHost();QTRY_COMPARE(done.size(),1);QVERIFY(!done[0][1].toBool());
@@ -503,6 +532,11 @@ private slots:
         QCOMPARE(adapter.serial()->confirmedSettings().value("tdTemperatureC").toDouble(),0.0);
         QCOMPARE(adapter.telemetry().tdTemperatureC,245.6); // Keep actual readback, not setpoint.
         QCOMPARE(adapter.telemetry().ionSourceVoltageV,320.0);
+        const auto calibrated=FullscanCalibration::fit({{126,127},{237,238},{303,304}},adapter.calibrationProfile(),&calibrationError);
+        QVERIFY(adapter.setCalibrationProfile(calibrated,&calibrationError));
+        QVERIFY(adapter.confirmedMethodParameters().isEmpty());
+        QVERIFY(!adapter.startAcquisition(1,&calibrationError));
+        QVERIFY(calibrationError.contains("方法"));
     }
     void stopRetriesOnceWithoutExtendingDeadline_data() {
         QTest::addColumn<int>("mode");
@@ -811,6 +845,9 @@ private slots:
         QVector<SpectrumScan> scans;connect(&adapter,&NetworkInstrument::acquisitionScan,this,[&](const SpectrumScan &s){scans.append(s);});
         QVERIFY(!adapter.startAcquisition(0,&error));QVERIFY(!adapter.startAcquisition(5000,&error));
         QVERIFY(adapter.startAcquisition(1,&error));QVERIFY(!adapter.startAcquisition(1,&error));
+        const auto capturedProfile=adapter.calibrationProfile();
+        const auto changedProfile=FullscanCalibration::fit({{126,127},{237,238},{303,304}},capturedProfile,&error);
+        QVERIFY(!adapter.setCalibrationProfile(changedProfile,&error));QCOMPARE(adapter.calibrationProfile(),capturedProfile);
         QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(true));
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x15));QTRY_COMPARE(started.size(),1);
         QByteArray payload;for(int i=0;i<axis.size();++i) {payload.append(char(0x80));payload.append(char(i&255));}

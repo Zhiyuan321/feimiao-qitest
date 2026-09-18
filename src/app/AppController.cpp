@@ -194,6 +194,7 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
         if (workspace_) workspace_->appendAudit(sessionOperator_, "INSTRUMENT_COMMAND_TIMEOUT", key, id);
         emit notice("仪器未及时回执，状态未知；请检查设备，不要反复点击。");
     });
+    loadMassCalibration();
     bindInstrumentSignals();
     QString workspacePath = qEnvironmentVariable("QITEST_WORKSPACE_DB");
     if (workspacePath.isEmpty()) workspacePath = PlatformPaths::appDataFile("workspace.sqlite");
@@ -296,6 +297,7 @@ AppController::AppController(std::unique_ptr<IInstrumentAdapter> instrument, QOb
 
 void AppController::bindInstrumentSignals() {
     if(auto *network=qobject_cast<NetworkInstrument *>(instrument_.get())) {
+        network->setCalibrationProfile(massCalibrationProfile_);
         connect(network,&NetworkInstrument::acquisitionStarted,this,[this] {
             detectionClock_.start(); setPhase(Phase::Acquiring,"正在检测");
         });
@@ -537,6 +539,7 @@ bool AppController::startNetworkListening(const QString &address, quint16 port, 
         }
         if (instrument_->descriptor().simulation) {
             pendingNetwork_ = std::make_unique<NetworkInstrument>(std::move(pendingRs485_));
+            pendingNetwork_->setCalibrationProfile(massCalibrationProfile_);
             network = pendingNetwork_.get();
             watchPendingRealInstrument(network);
             if (!network->startListening(address, port, staleMs)) {
@@ -1295,6 +1298,58 @@ void AppController::startSampleDetection(const QJsonObject &sampleInfo, const QS
     }
 }
 
+void AppController::loadMassCalibration() {
+    const QString workspacePath=qEnvironmentVariable("QITEST_WORKSPACE_DB");
+    massCalibrationPath_=workspacePath.isEmpty()?PlatformPaths::appDataFile("fullscan-calibration.json")
+        :QFileInfo(workspacePath).dir().filePath("fullscan-calibration.json");
+    QFile file(massCalibrationPath_);if(!file.exists())return;
+    QString error;QJsonParseError parse;
+    const bool opened=file.open(QIODevice::ReadOnly);
+    const auto bytes=opened?file.read(1024*1024+1):QByteArray{};
+    const auto root=QJsonDocument::fromJson(bytes,&parse).object();
+    if(!opened || bytes.size()>1024*1024 || parse.error!=QJsonParseError::NoError
+        || root["schema"]!="qitest-fullscan-calibration-1"
+        || !FullscanCalibration::validate(root["current"].toObject(),&error)) {
+        massCalibrationProfile_={{"section","INVALID"},{"error","保存的质量轴校准文件无法读取："+error}};
+        return;
+    }
+    massCalibrationProfile_=root["current"].toObject();
+    if(FullscanCalibration::validate(root["previous"].toObject()))previousMassCalibration_=root["previous"].toObject();
+}
+bool AppController::storeMassCalibration(const QJsonObject &profile,QString *error) {
+    const auto fail=[&](const QString &s){if(error)*error=s;return false;};
+    if(!FullscanCalibration::validate(profile,error))return false;
+    auto *network=networkEndpoint();
+    if(phase_==Phase::Acquiring || phase_==Phase::Analyzing || !pendingSettingId_.isEmpty()
+        || !pendingMethodRequestId_.isEmpty() || (network && network->calibrationBusy()))
+        return fail("请结束检测、调谐或待确认操作后再同步校准");
+    if(!instrument_->descriptor().simulation && !network && !qobject_cast<Rs485Instrument *>(instrument_.get()))
+        return fail("当前厂家插件不支持此Fullscan校准");
+    if(!workspace_ || !workspace_->appendAudit(sessionOperator_,"MASS_CALIBRATION_REQUESTED","Fullscan",
+        QString::fromUtf8(QJsonDocument(profile).toJson(QJsonDocument::Compact))))return fail("校准操作记录无法保存");
+    const QJsonObject document{{"schema","qitest-fullscan-calibration-1"},{"current",profile},
+        {"previous",massCalibrationProfile_},{"saved_at",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+    const auto bytes=QJsonDocument(document).toJson();
+    if(!QDir().mkpath(QFileInfo(massCalibrationPath_).absolutePath()))return fail("无法创建校准保存目录");
+    QSaveFile file(massCalibrationPath_);
+    if(!file.open(QIODevice::WriteOnly) || file.write(bytes)!=bytes.size() || !file.commit())
+        return fail("校准保存失败："+file.errorString());
+    previousMassCalibration_=massCalibrationProfile_;massCalibrationProfile_=profile;
+    if(network)network->setCalibrationProfile(profile);
+    emit methodsChanged();emit instrumentSettingsChanged(instrumentSettings_);
+    if(error)error->clear();return true;
+}
+bool AppController::synchronizeMassCalibration(const QVector<MassAxisPair> &pairs,const QJsonObject &base,QString *error) {
+    if(base!=massCalibrationProfile_){if(error)*error="当前校准已变更，请重新拟合";return false;}
+    const auto profile=FullscanCalibration::fit(pairs,base,error);
+    return !profile.isEmpty() && storeMassCalibration(profile,error);
+}
+bool AppController::undoMassCalibration(QString *error) {
+    if(previousMassCalibration_.isEmpty()){if(error)*error="没有可恢复的上一组校准";return false;}
+    const auto previous=previousMassCalibration_;
+    return storeMassCalibration(previous,error);
+}
+
 bool AppController::checkDetectionStart() {
     auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
     if(!network)return true; // Offline previews/reanalysis do not operate the instrument.
@@ -1357,7 +1412,7 @@ void AppController::startDetection() {
                 {"entries",entries},{"error",libraryError}});
             activeSampleInfo_.insert("screening_status","PENDING");
         }
-        activeSampleInfo_.insert("mass_axis_profile",NetworkProtocol::fullscanCalibrationProfile());
+        activeSampleInfo_.insert("mass_axis_profile",network->calibrationProfile());
         activeSampleInfo_.insert("waveform_crc_policy","record_only");
         currentRun_={};result_={};scans_.clear();pendingSpectrum_.clear();liveSpectrum_.clear();progress_=0;
         emit spectrumChanged(liveSpectrum_);emit scanSeriesChanged();emit progressChanged(0);

@@ -1,6 +1,8 @@
 #include "ui/InstrumentWorkbench.h"
 #include "ui/RoundedComboBox.h"
 #include "core/MassAxisCalibration.h"
+#include "app/AppController.h"
+#include "core/FullscanCalibration.h"
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
@@ -60,7 +62,7 @@ bool pairsFromTable(QTableWidget *table,QVector<MassAxisPair> *pairs,QString *er
     *pairs=result;return true;
 }
 }
-QWidget *createInstrumentWorkbench(const QString &kind,QWidget *parent) {
+QWidget *createInstrumentWorkbench(const QString &kind,QWidget *parent,AppController *controller) {
     auto *page=new WorkbenchPage(parent);page->setObjectName("workbench_"+kind);page->setAttribute(Qt::WA_StyledBackground);
     auto *layout=new QVBoxLayout(page);layout->setContentsMargins(8,8,8,8);
     auto *body=new QWidget;auto *content=new QVBoxLayout(body);content->setContentsMargins(0,0,0,0);
@@ -127,6 +129,7 @@ QWidget *createInstrumentWorkbench(const QString &kind,QWidget *parent) {
         degree->setObjectName("massFitDegree");mode->setObjectName("massFitMode");
         if(mass) {
             degree->setCurrentIndex(1);
+            if(controller){degree->setEnabled(false);mode->clear();mode->addItem("Fullscan");}
             auto *hint=new QLabel("手填实测值与理论值，例如实测237、理论238。二次拟合至少需要3组不同质量数。");
             hint->setWordWrap(true);hint->setObjectName("massCalibrationHint");content->addWidget(hint);
         }
@@ -145,30 +148,73 @@ QWidget *createInstrumentWorkbench(const QString &kind,QWidget *parent) {
         auto *apply=new QPushButton("计算校正质量数");apply->setObjectName("applyMassAxis");apply->setMinimumHeight(44);apply->setVisible(mass);resultLayout->addWidget(apply);
         apply->setProperty("sciRole","primary");
         auto *undo=new QPushButton("撤销拟合");undo->setObjectName("undoMassFit");undo->setMinimumHeight(44);undo->setVisible(mass);resultLayout->addWidget(undo);
+        auto candidate=std::make_shared<QJsonObject>(),baseProfile=std::make_shared<QJsonObject>();
+        auto fittedPoints=std::make_shared<QVector<MassAxisPair>>();
+        QPushButton *revert=nullptr;
+        if(mass && controller) {
+            hardware->setText("同步校准");hardware->setObjectName("syncMassCalibration");
+            hardware->setToolTip("保存校准系数；重新设为当前方法并收到成功回执后，用于后续检测");
+            revert=new QPushButton("撤销上次同步");revert->setObjectName("revertMassCalibration");revert->setMinimumHeight(44);resultLayout->addWidget(revert);
+            body->setToolTip("实测值按当前校准还原扫描电压，再与理论值拟合。同步只保存系数，方法需重新下发。");
+            status->setText(FullscanCalibration::validate(controller->massCalibrationProfile())
+                ?"输入本机在当前校准下测得的质量数；同步后须重新设为当前方法。"
+                :"本机校准文件无效，请核对："+controller->massCalibrationPath());
+        }
         resultLayout->addStretch();
-        const auto invalidate=[=]{*dirty=true;*fit=MassAxisFit{};result->clear();};
+        const auto invalidate=[=]{*dirty=true;*fit=MassAxisFit{};*candidate={};hardware->setEnabled(false);result->clear();};
         QObject::connect(t,&QTableWidget::cellChanged,page,[=]{invalidate();});QObject::connect(degree,QOverload<int>::of(&QComboBox::currentIndexChanged),page,[=]{invalidate();});QObject::connect(mode,QOverload<int>::of(&QComboBox::currentIndexChanged),page,[=]{invalidate();});
         for(auto *input:rf)QObject::connect(input,QOverload<double>::of(&QDoubleSpinBox::valueChanged),page,[=]{invalidate();});
         QObject::connect(add,&QPushButton::clicked,page,[=]{if(t->rowCount()>=1000){status->setText("最多 1000 行");return;}int r=t->rowCount();t->insertRow(r);for(int c=0;c<2;++c)t->setItem(r,c,new QTableWidgetItem);t->setCurrentCell(r,0);t->editItem(t->item(r,0));invalidate();});
         QObject::connect(remove,&QPushButton::clicked,page,[=]{if(t->currentRow()>=0){t->removeRow(t->currentRow());invalidate();}});
         QObject::connect(calculate,&QPushButton::clicked,page,[=]{
             QString error;QVector<MassAxisPair> points;if(!pairsFromTable(t,&points,&error)){status->setText(error);return;}
-            if(mass){*fit=MassAxisCalibration::fit(points,degree->currentIndex()+1);if(!fit->valid){status->setText(fit->error);return;}
+            if(mass && controller) {
+                if(mode->currentText()!="Fullscan" || degree->currentIndex()!=1){status->setText("实际校准当前仅支持Fullscan二次拟合");return;}
+                *baseProfile=controller->massCalibrationProfile();
+                *candidate=FullscanCalibration::fit(points,*baseProfile,&error);
+                if(candidate->isEmpty()){hardware->setEnabled(false);status->setText(error);return;}
+                *fittedPoints=points;hardware->setEnabled(true);
+                result->setText(QString("扫描电压 = a × (m/z)^2 + b × m/z + c\na = %1\nb = %2\nc = %3\n校准点范围：%4–%5 m/z；范围外为外推。\n校准点质量残差 RMS：%6 m/z\n同步后请重新设为当前方法；历史数据不变。")
+                    .arg((*candidate)["calibrate_a"].toDouble(),0,'g',16).arg((*candidate)["calibrate_b"].toDouble(),0,'g',16)
+                    .arg((*candidate)["calibrate_c"].toDouble(),0,'g',16).arg((*candidate)["minimum"].toDouble())
+                    .arg((*candidate)["maximum"].toDouble()).arg((*candidate)["mass_rms"].toDouble(),0,'g',8));
+                status->setText("拟合完成，尚未同步");tabs->setCurrentWidget(resultPage);
+            }else if(mass){*fit=MassAxisCalibration::fit(points,degree->currentIndex()+1);if(!fit->valid){status->setText(fit->error);return;}
                 result->setText(QString("局部校准范围 %1–%2 m/z；训练点 RMS 残差 %3 m/z\ny = %4 + %5·z + %6·z²，z = (实测值 − %7) / %8\n未做独立标准验证，未同步仪器。").arg(fit->minimum).arg(fit->maximum).arg(fit->rms,0,'g',8).arg(fit->coefficients[0],0,'g',10).arg(fit->coefficients[1],0,'g',10).arg(fit->coefficients[2],0,'g',10).arg(fit->center).arg(fit->scale));status->setText("本地拟合完成");
                 tabs->setCurrentWidget(resultPage);
             }else{if(points.isEmpty()){status->setText("请录入实测响应数据");return;}
                 const auto best=std::max_element(points.begin(),points.end(),[](const MassAxisPair &a,const MassAxisPair &b){return a.theoretical<b.theoretical;});result->setText(QString("输入数据最大响应：RF=%1，响应=%2；仅供人工复核，未设置仪器").arg(best->measured).arg(best->theoretical));}
         });
-        QObject::connect(apply,&QPushButton::clicked,page,[=]{double y=0;if(!fit->map(query->value(),&y)){status->setText("请先拟合；只允许校准范围内换算");return;}status->setText(QString("校正后 %1 m/z · 原始数据未改变").arg(y,0,'g',12));});
-        QObject::connect(undo,&QPushButton::clicked,page,[=]{*fit=MassAxisFit{};result->clear();status->setText("拟合已撤销，原始校准点保留");});
+        QObject::connect(apply,&QPushButton::clicked,page,[=]{double y=0;
+            const bool valid=(mass && controller)?!candidate->isEmpty() && query->value()<=801
+                && FullscanCalibration::mass(*candidate,FullscanCalibration::voltage(*baseProfile,query->value()),&y)
+                :fit->map(query->value(),&y);
+            if(!valid){status->setText("请先拟合，并填写有效校准范围内的质量数");return;}
+            status->setText(QString("校正后 %1 m/z · 原始数据未改变").arg(y,0,'g',12));});
+        QObject::connect(undo,&QPushButton::clicked,page,[=]{invalidate();status->setText("拟合已撤销，原始校准点保留");});
+        if(mass && controller) {
+            QObject::connect(hardware,&QPushButton::clicked,page,[=]{QString error;
+                if(candidate->isEmpty()){status->setText("请先拟合");return;}
+                if(!controller->synchronizeMassCalibration(*fittedPoints,*baseProfile,&error)){status->setText(error);return;}
+                invalidate();for(int r=0;r<t->rowCount();++r)if(t->item(r,0))t->item(r,0)->setText({});
+                status->setText("校准已同步保存，请重新设为当前方法并等待成功回执。为再次校准，请重新采集实测值。");});
+            QObject::connect(revert,&QPushButton::clicked,page,[=]{QString error;
+                if(!controller->undoMassCalibration(&error)){status->setText(error);return;}
+                invalidate();for(int r=0;r<t->rowCount();++r)if(t->item(r,0))t->item(r,0)->setText({});
+                status->setText("已恢复上一组校准，请重新设为当前方法。");});
+        }
         collect=[=](QString *error){
             QVector<MassAxisPair> points;if(!pairsFromTable(t,&points,error))return QJsonObject{};QJsonArray rows;for(const auto &p:points)rows.append(QJsonArray{p.measured,p.theoretical});
             QJsonObject p{{"points",rows},{"degree",degree->currentIndex()+1},{"mode",mode->currentText()}};
+            if(mass && controller)p["base_profile"]=controller->massCalibrationProfile();
             for(auto i=rf.cbegin();i!=rf.cend();++i)p.insert(i.key(),i.value()->value());
             if(!mass&&(rf["RF低"]->value()>rf["RF高"]->value()||rf["AC低"]->value()>rf["AC高"]->value())){*error="低值不能大于高值";return QJsonObject{};}
             return p;
         };
         restore=[=](const QJsonObject &p,QString *error){
+            if(mass && controller && (p["mode"]!="Fullscan" || p["degree"]!=2)){*error="仅支持Fullscan二次校准记录";return false;}
+            if(mass && controller && p.contains("base_profile") && p["base_profile"].toObject()!=controller->massCalibrationProfile()){
+                *error="记录所用校准与当前不同，请重新采集实测值";return false;}
             if(!p.value("points").isArray()||p.value("points").toArray().size()>1000||!p.value("degree").isDouble()||(p.value("degree").toDouble()!=1&&p.value("degree").toDouble()!=2)||!QStringList{"Fullscan","SIM","MS/MS"}.contains(p.value("mode").toString())){*error="记录格式错误";return false;}
             for(const auto &v:p.value("points").toArray()){const auto a=v.toArray();if(a.size()!=2||!a[0].isDouble()||!a[1].isDouble()||a[0].toDouble()<=0||a[0].toDouble()>1e6||a[1].toDouble()<0||a[1].toDouble()>1e12){*error="数据点无效";return false;}}
             for(auto i=rf.cbegin();i!=rf.cend();++i)if(!p.value(i.key()).isDouble()||p.value(i.key()).toDouble()<0||p.value(i.key()).toDouble()>1e6){*error="RF/AC 参数无效";return false;}

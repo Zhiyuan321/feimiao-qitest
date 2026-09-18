@@ -1,14 +1,10 @@
 #include "device/NetworkProtocol.h"
+#include "core/FullscanCalibration.h"
 #include <cmath>
 #include <limits>
 
 namespace qitest {
 namespace {
-// Fullscan profile supplied in datafit.json on 2026-09-15. Both directions
-// must use this one profile; never change only the displayed mass axis.
-constexpr double fullscanA = 0.00013517703930585604;
-constexpr double fullscanB = 5.882440951161457;
-constexpr double fullscanC = 8.575019905095814;
 quint16 u16(const QByteArray &bytes, int offset) {
     return (quint16(quint8(bytes[offset])) << 8) | quint8(bytes[offset + 1]);
 }
@@ -38,10 +34,9 @@ bool exactInteger(const QJsonObject &values, const char *key, int minimum, int m
     }
     *result = int(std::llround(number)); return true;
 }
-bool calibratedVoltage(double mass, quint16 *result, QString *error) {
+bool calibratedVoltage(double mass, quint16 *result, QString *error, const QJsonObject &profile) {
     // The supplied method code applies the Fullscan polynomial / 2.
-    constexpr double a = fullscanA, b = fullscanB, c = fullscanC;
-    const double raw = (c + b * mass + a * mass * mass) / 2.0;
+    const double raw = FullscanCalibration::voltage(profile,mass)/2.0;
     if (!std::isfinite(raw) || raw < 0 || raw > 65535) {
         if (error) *error = "质量数超出当前仪器 Fullscan 校准范围";
         return false;
@@ -96,36 +91,32 @@ QByteArray NetworkProtocol::ionSourceVoltageCommand(double voltageV, QString *er
     return controlFrame(0x50,QByteArray(1,char(int(std::llround(encoded)))));
 }
 QJsonObject NetworkProtocol::fullscanCalibrationProfile() {
-    return {{"source","datafit.json"},{"section","Fullscan"},
-        {"source_sha256","f84190db1ebd30dc63eafcc8f69c726f3cefa73b65f07130378e79229b8e2233"},
-        {"calibrate_a",fullscanA},{"calibrate_b",fullscanB},{"calibrate_c",fullscanC}};
+    return FullscanCalibration::defaults();
 }
-QVector<double> NetworkProtocol::fullscanMassAxis(const QJsonObject &parameters, QString *error) {
-    const auto wire=fullscanMethodCommand(parameters,error);
+QVector<double> NetworkProtocol::fullscanMassAxis(const QJsonObject &parameters, QString *error, const QJsonObject &calibration) {
+    const auto profile=calibration.isEmpty()?fullscanCalibrationProfile():calibration;
+    const auto wire=fullscanMethodCommand(parameters,error,profile);
     if(wire.isEmpty()) return {};
     const auto fail=[error](const QString &message){if(error)*error=message;return QVector<double>{};};
     // Use the exact transmitted (truncated) slots and the same calibration as method setting.
     const int count=int(u16(wire,11))*int(u16(wire,23))/10;
     if(count<2 || count>127500) return fail("采样点数超出单周期分包容量");
     const double low=u16(wire,17)*2.0, high=u16(wire,19)*2.0;
-    const double lowMass=parameters.value("low_mass").toDouble(),highMass=parameters.value("high_mass").toDouble();
     QVector<double> axis;axis.reserve(count);
     for(int i=0;i<count;++i) {
         const double voltage=low+(high-low)*i/(count-1);
-        const double discriminant=fullscanB*fullscanB-4*fullscanA*(fullscanC-voltage);
-        if(discriminant<0) return fail("质量轴校准反算失败");
-        const double roots[]{(-fullscanB+std::sqrt(discriminant))/(2*fullscanA),
-                            (-fullscanB-std::sqrt(discriminant))/(2*fullscanA)};
         double mz=0;
-        for(double root:roots) if(root>lowMass-2 && root<highMass+2) {mz=root;break;}
+        if(!FullscanCalibration::mass(profile,voltage,&mz)) return fail("质量轴校准反算失败");
         if(!std::isfinite(mz) || mz<=0 || (!axis.isEmpty() && mz<=axis.last()))
             return fail("质量轴不是有效递增序列，请核对校准文件");
         axis.append(mz);
     }
     return axis;
 }
-QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QString *error) {
+QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QString *error, const QJsonObject &calibration) {
     const auto fail = [error](const QString &message) { if (error) *error = message; return QByteArray{}; };
+    const auto profile=calibration.isEmpty()?fullscanCalibrationProfile():calibration;
+    if(!FullscanCalibration::validate(profile,error))return {};
     if (values.value("scan_mode").toString().compare("Fullscan", Qt::CaseInsensitive) != 0)
         return fail("真实方法下发当前仅开放 Fullscan");
     int period=0, speed=0, rf=0, ac=0, injection=0, cooling=0, multiplier=0;
@@ -148,8 +139,8 @@ QByteArray NetworkProtocol::fullscanMethodCommand(const QJsonObject &values, QSt
     if (!std::isfinite(storageMass) || !std::isfinite(lowMass) || !std::isfinite(highMass)
         || storageMass < 0 || lowMass < 0 || highMass <= lowMass) return fail("Fullscan 质量数范围无效");
     quint16 storage=0, low=0, high=0;
-    if (!calibratedVoltage(storageMass,&storage,error) || !calibratedVoltage(lowMass,&low,error)
-        || !calibratedVoltage(highMass,&high,error)) return {};
+    if (!calibratedVoltage(storageMass,&storage,error,profile) || !calibratedVoltage(lowMass,&low,error,profile)
+        || !calibratedVoltage(highMass,&high,error,profile)) return {};
     const double scanTimeRaw=(highMass-lowMass)*10000.0/speed;
     if (!std::isfinite(scanTimeRaw) || scanTimeRaw < 1 || scanTimeRaw > 65535)
         return fail("扫描时间超出协议范围");

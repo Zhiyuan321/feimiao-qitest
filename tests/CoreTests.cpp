@@ -1,6 +1,7 @@
 #include "core/AnalysisEngine.h"
 #include "core/QuantitationEngine.h"
 #include "core/CalibrationModel.h"
+#include "core/FullscanCalibration.h"
 #include "core/ChromatogramEngine.h"
 #include "core/IonThresholdScreening.h"
 #include <QJsonArray>
@@ -15,6 +16,26 @@ using namespace qitest;
 class CoreTests final : public QObject {
     Q_OBJECT
 private slots:
+    void fullscanQuadraticCalibrationUsesOldVoltage() {
+        const auto base=FullscanCalibration::defaults();QString error;
+        const auto result=FullscanCalibration::fit({{126,127},{237,238},{303,304}},base,&error);
+        QVERIFY2(!result.isEmpty(),qPrintable(error));
+        const double a=base["calibrate_a"].toDouble(),b=base["calibrate_b"].toDouble(),c=base["calibrate_c"].toDouble();
+        QVERIFY(std::abs(result["calibrate_a"].toDouble()-a)<1e-12);
+        QVERIFY(std::abs(result["calibrate_b"].toDouble()-(b-2*a))<1e-10);
+        QVERIFY(std::abs(result["calibrate_c"].toDouble()-(c-b+a))<1e-8);
+        double corrected=0;QVERIFY(FullscanCalibration::mass(result,FullscanCalibration::voltage(base,237),&corrected));
+        QVERIFY(std::abs(corrected-238)<1e-8);
+        QVERIFY(result["mass_rms"].toDouble()<1e-8);
+        const auto repeated=FullscanCalibration::fit({{127,127},{238,238},{304,304}},result,&error);
+        QVERIFY(std::abs(repeated["calibrate_b"].toDouble()-result["calibrate_b"].toDouble())<1e-10);
+        QVERIFY(FullscanCalibration::fit({{237,238},{303,304}},base,&error).isEmpty());
+        QVERIFY(FullscanCalibration::fit({{126,127},{126,238},{303,304}},base,&error).isEmpty());
+        QVERIFY(FullscanCalibration::fit({{126,304},{237,238},{303,127}},base,&error).isEmpty());
+        QVERIFY(FullscanCalibration::fit({{126,127},{237,238},{802,803}},base,&error).isEmpty());
+        auto bad=base;bad["calibrate_b"]=-2;QVERIFY(!FullscanCalibration::validate(bad,&error));
+        bad=base;bad.remove("calibrate_a");QVERIFY(!FullscanCalibration::validate(bad,&error));
+    }
     void threeIonThresholdsRequireEveryIndependentSum();
     void variableIonCountsAndLegacySnapshots();
     void processorRejectsUnsortedMassAxis();

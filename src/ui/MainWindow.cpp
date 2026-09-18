@@ -1771,7 +1771,7 @@ QWidget *MainWindow::createSettingsPage() {
     settingsDetailStack_->addWidget(createLibraryPage());
     settingsDetailStack_->addWidget(createQuantitationPage());
     settingsDetailStack_->addWidget(createDeviceWaveformPanel(controller_,true));
-    settingsDetailStack_->addWidget(createInstrumentWorkbench("质量轴校准"));
+    settingsDetailStack_->addWidget(createInstrumentWorkbench("质量轴校准",nullptr,controller_));
     settingsDetailStack_->addWidget(createInstrumentWorkbench("注射泵"));
     auto *gasPage = new QWidget;
     auto *gasLayout = new QVBoxLayout(gasPage);
@@ -2782,7 +2782,7 @@ bool MainWindow::executeAssistantCommand(AssistantCommand command, const QString
         break;
     case AssistantCommand::OpenCalibration:
         openSettingsModule("仪器配置", "调谐与校准");
-        feedback = "已打开离线质量轴校准；可拟合与保存，不会同步实际仪器。";
+        feedback = "已打开质量轴校准；手填后拟合并同步，再重新设为当前方法。";
         break;
     case AssistantCommand::OpenSampling:
         openSettingsModule("仪器配置", "进样与注射泵");
