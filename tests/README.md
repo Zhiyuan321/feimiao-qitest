@@ -2,6 +2,8 @@
 
 2026-09-18：slowPumpStartupKeepsBoardFreshAndCanResume覆盖6.9秒延迟启动与10秒零电流超时；zeroCurrentTimeoutKeepsConnectionAndPendingReply核对10秒期限及在途半帧；manualPumpStartupWaitsBeyondFiveSeconds验证手动启动不被宿主5秒提前取消。使用内存串口和回环TCP，无实机操作。
 
+2026-09-18停止时序：NetworkTests::stopWaitsForOutstandingHeartbeat覆盖心跳延迟620ms（超过原500ms重试）、半帧/多条在途回复、400ms间隔、定时结束、停止重试/无回复、心跳无回复、等待及间隔期间断线、重连不遗留停止指令。无关状态/质谱/0x15 ACK不能提前放行，等待期间完整质谱仍保留。并回归原停止应答/拒绝/超时、迟到ACK隔离和方法期间心跳暂停；合成回环不代替实机验收。
+
 首次开发请运行 QITestWorkstation；需要回归检查时开启 QITEST_BUILD_TESTS=ON。
 
 | 文件 | 关注点 |
@@ -47,3 +49,11 @@ UiSmokeTests::readinessUsesLiveVacuumAndTemperaturesWithoutMethod覆盖未下发
 质量轴手填回归：UiSmokeTests::manualQuadraticCalibrationWorksheet覆盖默认3行/二次、空输入、126→127/237→238/303→304换算、撤销、重复实测值和不足3点。此次仅验证离线工作区，未验证同步下位机。
 
 2026-09-18实用质量轴校准回归：CoreTests::fullscanQuadraticCalibrationUsesOldVoltage检查237→238及解析可手算的系数、无效点。NetworkTests::calibratedMethodAndAxisShareProfile验证同电压/新质量轴一致，legacyMethodFollowupsRequireAllAcks覆盖动态系数实际下发、忙时拒绝切换和同步清除方法确认，detectionAssemblesRawSpectrumAndWaitsForStopAck验证采集中拒绝切换。InstrumentControlTests::massCalibrationPersistsAndCanUndo覆盖重启、恢复、旧基础配置拒绝及坏文件不回退。UiSmokeTests::synchronizedCalibrationFitsSmallScreen检查实际主窗口录入/试算/同步/撤销及1024×700/768截图。
+
+2026-09-18检测温度：networkDetectionUsesPresetTimeAndPersistsRawScans覆盖实测82.9/87.1℃拒绝，83.0/84.9/85.0/87.0℃预检通过，并在83.0及87.0℃分别完成真实适配器的合成采集流程；方法确认和真空门槛保持。
+
+2026-09-18报告回归：WorkspaceTests::reportTemplateOnlyListsSuspects验证模板字段、姓名转义、仅可疑过滤、空结果提示、定量离子快照及同名/非法文件名；writesTraceablePdf验证原子写出与长内容分页。UiSmokeTests::navigationAndAcquisitionRemainStable覆盖空姓名拦截、姓名命名归档/PDF及小屏；customerResultReviewWorkflow、bundledSamplesImportWithoutDuplicates覆盖现有报告及导入流程。PDF渲染核对产物在忽略目录build/report-template-20260918。
+
+2026-09-18校准保存排查：massCalibrationPersistsAndCanUndo、synchronizedCalibrationFitsSmallScreen补充直接读取同步后的JSON，核对current等于本次拟合，previous及current.base_coefficients保留旧值。用126→127、237→238、303→304复测，current.c显著变化且重启读取一致，两项通过；日志build/calibration-save-20260918。尚无用户现场文件及输入点，不能据本机测试认定现场原因；本次未修改产品校准算法和保存行为。
+
+2026-09-18旧候选残留回归：reportReplacesPreviousSuspectsAndClearsOnNewDetection用合成谱库/扫描保存2、1、0项可疑结果，依次切换并执行搜索清空、页面往返，确认行数严格匹配；开始下一次检测及取消不显示旧结果，显式打开旧记录可恢复。reportOpensHistoryExplicitlyAndViewsFrozenSpectra覆盖启动空报告与历史谱图；reportSelectionSurvivesPageRoundTrips和bundledSamplesImportWithoutDuplicates回归同一记录选择和导入重分析。networkDetectionUsesPresetTimeAndPersistsRawScans覆盖有/无库的实机适配器合成采集、停止失败、归档恢复。

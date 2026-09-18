@@ -75,6 +75,7 @@ private:
     QString startupId_, startupStepId_, startupStepKey_;
     bool startupPreparingMode_ = false;
     bool sendDetection(bool enabled);
+    void sendStopAfterHeartbeat();
     void receiveAcquisition(const NetworkFrame &frame);
     void finishNetworkAcquisition(bool success, const QString &error);
     void failAcquisition(const QString &error);
@@ -93,6 +94,7 @@ private:
     QTimer staleTimer_, updateTimer_, pressureTimer_, tuningTimer_, methodTimer_;
     QTimer heartbeatTimer_;
     quint64 heartbeatSent_ = 0;
+    int pendingHeartbeatReplies_ = 0;
     bool heartbeatPausedForMethod_ = false;
     QVector<double> pressureVolts_;
     quint64 pressureFrameCount_ = 0;
@@ -131,8 +133,9 @@ private:
     int methodStage_ = 0, methodFollowupsSent_ = 0; // 0 serial, 1 method ACK, 2 delay, 3 followup ACK
     QTimer acquisitionAckTimer_, acquisitionDurationTimer_;
     QTimer stopRetryTimer_, stopReplyGuardTimer_;
+    QTimer stopHeartbeatWaitTimer_, stopHeartbeatQuietTimer_;
     int stopCommandsSent_ = 0;
-    int acquisitionState_ = 0; // 0 idle, 1 start ACK, 2 collecting, 3 stop ACK
+    int acquisitionState_ = 0; // 0 idle, 1 start ACK, 2 collecting, 3 heartbeat drain / stop ACK
     int acquisitionSeconds_ = 0, acquiredScans_ = 0, nextPressureCycle_ = 0;
     bool acquisitionCancelled_ = false;
     QString acquisitionError_;

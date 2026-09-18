@@ -81,6 +81,13 @@ NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QO
     stopRetryTimer_.setSingleShot(true); stopRetryTimer_.setInterval(500);
     stopRetryTimer_.setTimerType(Qt::PreciseTimer);
     stopReplyGuardTimer_.setSingleShot(true); stopReplyGuardTimer_.setInterval(3000);
+    stopHeartbeatWaitTimer_.setSingleShot(true); stopHeartbeatWaitTimer_.setInterval(3000);
+    stopHeartbeatQuietTimer_.setSingleShot(true); stopHeartbeatQuietTimer_.setInterval(400);
+    stopHeartbeatQuietTimer_.setTimerType(Qt::PreciseTimer);
+    connect(&stopHeartbeatWaitTimer_,&QTimer::timeout,this,[this] {
+        closePeer("停止检测前等待心跳应答超时，停止指令尚未发送，仪器可能仍在运行；请核对仪器后重新连接");
+    });
+    connect(&stopHeartbeatQuietTimer_,&QTimer::timeout,this,&NetworkInstrument::sendStopAfterHeartbeat);
     connect(&stopRetryTimer_,&QTimer::timeout,this,[this] {
         if(acquisitionState_==3 && stopCommandsSent_==1 && !sendDetection(false))
             closePeer("检测关闭重发失败，仪器可能仍在运行");
@@ -139,6 +146,7 @@ void NetworkInstrument::sendHeartbeat() {
         closePeer("心跳发送失败，等待仪器重新连接"); return;
     }
     ++heartbeatSent_;
+    ++pendingHeartbeatReplies_;
 }
 void NetworkInstrument::recordConnectionEvent(const QString &event, const QTcpSocket *socket) {
     connectionEvents_.append(QJsonObject{
@@ -176,6 +184,8 @@ void NetworkInstrument::closePeer(const QString &message) {
     startup_.observeVacuum(0,false); stopStartup(message);
     if(shutdownBusy()) finishShutdown(false,message);
     heartbeatTimer_.stop(); heartbeatPausedForMethod_=false;
+    pendingHeartbeatReplies_=0;
+    stopHeartbeatWaitTimer_.stop(); stopHeartbeatQuietTimer_.stop();
     if(acquisitionBusy()) finishNetworkAcquisition(false,message);
     stopRetryTimer_.stop(); stopReplyGuardTimer_.stop();
     methodFollowupDelay_.stop();
@@ -323,7 +333,18 @@ void NetworkInstrument::receive() {
         bool methodSucceeded=false;
         bool heartbeatAccepted=false;
         const bool heartbeatReply=NetworkProtocol::decodeCommandAcknowledgement(frame,0x30,&heartbeatAccepted);
-        if(heartbeatReply) ++heartbeatReplies_;
+        if(heartbeatReply) {
+            ++heartbeatReplies_;
+            if(pendingHeartbeatReplies_>0) {
+                --pendingHeartbeatReplies_;
+                if(pendingHeartbeatReplies_==0 && stopHeartbeatWaitTimer_.isActive()) {
+                    stopHeartbeatWaitTimer_.stop();
+                    // Successful captures leave about 0.4 s between heartbeat ACK and stop.
+                    stopHeartbeatQuietTimer_.start();
+                    recordConnectionEvent("stop_heartbeat_drained",peer_);
+                }
+            }
+        }
         const bool methodAck=NetworkProtocol::decodeCommandAcknowledgement(frame,0x81,&methodSucceeded);
         if (methodAck && !methodRequestId_.isEmpty() && methodStage_==1 && methodTimer_.isActive()) {
             if(!methodSucceeded) finishMethod(false,quint8(frame.payload[0])==0x29
@@ -752,6 +773,11 @@ QVariantMap NetworkInstrument::statusDetails() const {
     data.insert("heartbeatPausedForMethod",heartbeatPausedForMethod_);
     data.insert("heartbeatSent",heartbeatSent_);
     data.insert("heartbeatReplies",heartbeatReplies_);
+    data.insert("pendingHeartbeatReplies",pendingHeartbeatReplies_);
+    data.insert("stopWaitingForHeartbeat",stopHeartbeatWaitTimer_.isActive());
+    data.insert("stopHeartbeatQuietActive",stopHeartbeatQuietTimer_.isActive());
+    data.insert("stopHeartbeatWaitTimeoutMs",stopHeartbeatWaitTimer_.interval());
+    data.insert("stopHeartbeatQuietMs",stopHeartbeatQuietTimer_.interval());
     data.insert("retainedRawReceiveBytes",recentRawBytes_);
     data.insert("acquisitionParseFailure",acquisitionParseFailure_);
     data.insert("methodConfirmed",!confirmedMethodParameters_.isEmpty());
@@ -885,6 +911,18 @@ void NetworkInstrument::stopAcquisition(bool cancelled) {
         return; // After start ACK, send stop. On timeout isolate the connection.
     }
     acquisitionDurationTimer_.stop(); acquisitionState_=3;
+    // Stop state suppresses new heartbeats. Drain every outstanding reply first;
+    // a TCP ACK or an unrelated status packet cannot release this barrier.
+    if(pendingHeartbeatReplies_>0) {
+        recordConnectionEvent("stop_waiting_for_heartbeat",peer_);
+        stopHeartbeatWaitTimer_.start();
+        notify();
+        return;
+    }
+    sendStopAfterHeartbeat();
+}
+void NetworkInstrument::sendStopAfterHeartbeat() {
+    if(acquisitionState_!=3 || stopCommandsSent_!=0 || pendingHeartbeatReplies_>0) return;
     if(!sendDetection(false)) closePeer("检测关闭发送失败，仪器可能仍在运行");
     else stopRetryTimer_.start();
 }
@@ -898,6 +936,7 @@ void NetworkInstrument::finishNetworkAcquisition(bool success,const QString &err
     if(!acquisitionBusy()) return;
     acquisitionAckTimer_.stop(); acquisitionDurationTimer_.stop();
     stopRetryTimer_.stop();
+    stopHeartbeatWaitTimer_.stop(); stopHeartbeatQuietTimer_.stop();
     // Start/stop replies have no request ID. Drain late replies to the duplicate
     // stop before permitting another start on this socket.
     if(stopCommandsSent_>1) stopReplyGuardTimer_.start();
@@ -913,6 +952,7 @@ void NetworkInstrument::receiveAcquisition(const NetworkFrame &frame) {
     bool accepted=false;
     if(NetworkProtocol::decodeCommandAcknowledgement(frame,0x15,&accepted)) {
         if(acquisitionState_!=1 && acquisitionState_!=3) return;
+        if(acquisitionState_==3 && stopCommandsSent_==0) return;
         acquisitionAckTimer_.stop();
         if(!accepted) {
             closePeer("设备拒绝检测指令，请核对仪器运行状态"); return;

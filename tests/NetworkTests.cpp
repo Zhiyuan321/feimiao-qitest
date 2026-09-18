@@ -538,6 +538,111 @@ private slots:
         QVERIFY(!adapter.startAcquisition(1,&calibrationError));
         QVERIFY(calibrationError.contains("方法"));
     }
+    void stopWaitsForOutstandingHeartbeat_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("delayed-heartbeat-then-stop")<<0;
+        QTest::newRow("stop-retry-after-heartbeat")<<1;
+        QTest::newRow("heartbeat-never-replies")<<2;
+        QTest::newRow("disconnect-while-waiting")<<3;
+        QTest::newRow("disconnect-during-quiet-gap")<<4;
+        QTest::newRow("stop-never-replies")<<5;
+        QTest::newRow("automatic-duration-stop")<<6;
+        QTest::newRow("multiple-outstanding-heartbeats")<<7;
+    }
+    void stopWaitsForOutstandingHeartbeat() {
+        QFETCH(int,mode);
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
+            ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),c);};
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);NetworkInstrument adapter(std::move(serial));
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
+        QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
+        adapter.requestMethodParameters("heartbeat-stop",MethodDraft::defaultParameters());
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
+        QTRY_VERIFY(adapter.statusDetails()["methodConfirmed"].toBool());
+        QSignalSpy done(&adapter,&NetworkInstrument::acquisitionFinished),started(&adapter,&NetworkInstrument::acquisitionStarted);
+        QString error;QVERIFY(adapter.startAcquisition(mode==6?3:10,&error));
+        QTRY_VERIFY(client.bytesAvailable()>0);QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(true));
+        const auto ack=test::networkFrame(QByteArray::fromHex("11"),0x10,0x15);
+        const auto heartbeatAck=test::networkFrame(QByteArray::fromHex("11"),0x10,0x30);
+        client.write(ack);QTRY_COMPARE(started.size(),1);
+        client.write(test::networkFrame(QByteArray(3250,0),0x20,0x81,0,0));
+        QTRY_COMPARE(adapter.statusDetails()["acquiredScans"].toInt(),1);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,2400);
+        QCOMPARE(client.readAll(),NetworkProtocol::heartbeatCommand());
+        if(mode==7) {
+            QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,2400);
+            QCOMPARE(client.readAll(),NetworkProtocol::heartbeatCommand());
+        }
+        if(mode==6) QTRY_VERIFY_WITH_TIMEOUT(adapter.statusDetails()["stopWaitingForHeartbeat"].toBool(),1500);
+        else adapter.stopAcquisition(false);
+        QVERIFY(adapter.statusDetails()["stopWaitingForHeartbeat"].toBool());
+        QElapsedTimer wait;wait.start();
+        // Neither a stray 0x15 ACK nor a status/spectrum can confirm an unsent stop.
+        client.write(ack+test::networkFrame(status)+test::networkFrame(QByteArray(3250,0),0x20,0x81,0,1));
+        QTest::qWait(620);
+        QCOMPARE(adapter.statusDetails()["stopCommandsSent"].toInt(),0);
+        QCOMPARE(adapter.statusDetails()["acquiredScans"].toInt(),2);
+        QCOMPARE(client.bytesAvailable(),qint64(0));QVERIFY(done.isEmpty());
+        if(mode==2 || mode==3) {
+            if(mode==3) client.disconnectFromHost();
+            QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,3300);
+            QVERIFY(!done[0][0].toBool());
+            if(mode==2) {
+                QVERIFY(done[0][2].toString().contains("心跳"));
+                QVERIFY(wait.elapsed()>=2700);QVERIFY(wait.elapsed()<3500);
+            }
+        } else {
+            if(mode==7) {
+                client.write(heartbeatAck);QTest::qWait(450);
+                QCOMPARE(adapter.statusDetails()["pendingHeartbeatReplies"].toInt(),1);
+                QVERIFY(adapter.statusDetails()["stopWaitingForHeartbeat"].toBool());
+                QCOMPARE(client.bytesAvailable(),qint64(0));
+            }
+            // A partial heartbeat reply must not release the stop barrier.
+            client.write(heartbeatAck.left(6));QTest::qWait(60);
+            QVERIFY(adapter.statusDetails()["stopWaitingForHeartbeat"].toBool());
+            client.write(heartbeatAck.mid(6));QElapsedTimer gap;gap.start();
+            QTRY_VERIFY(adapter.statusDetails()["stopHeartbeatQuietActive"].toBool());
+            QTest::qWait(200);QCOMPARE(client.bytesAvailable(),qint64(0));QVERIFY(done.isEmpty());
+            if(mode==4) {
+                client.disconnectFromHost();QTRY_COMPARE(done.size(),1);QVERIFY(!done[0][0].toBool());
+                QTest::qWait(500);QCOMPARE(adapter.statusDetails()["stopCommandsSent"].toInt(),0);
+            } else {
+                QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,600);
+                QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
+                QVERIFY(gap.elapsed()>=390);QElapsedTimer stop;stop.start();
+                QCOMPARE(adapter.statusDetails()["pendingHeartbeatReplies"].toInt(),0);
+                if(mode==1 || mode==5) {
+                    QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable()>0,800);
+                    QCOMPARE(client.readAll(),NetworkProtocol::detectionCommand(false));
+                    QVERIFY(stop.elapsed()>=400);
+                }
+                if(mode!=5) client.write(ack);
+                QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,3500);
+                QCOMPARE(done[0][0].toBool(),mode!=5);
+                if(mode==5) {QVERIFY(stop.elapsed()>=2700);QVERIFY(stop.elapsed()<3500);}
+            }
+        }
+        QVERIFY(!adapter.statusDetails()["stopWaitingForHeartbeat"].toBool());
+        QVERIFY(!adapter.statusDetails()["stopHeartbeatQuietActive"].toBool());
+        if(mode>=2 && mode<=5) {
+            QVERIFY(!adapter.statusDetails()["tcpConnected"].toBool());
+            QCOMPARE(adapter.statusDetails()["pendingHeartbeatReplies"].toInt(),0);
+            // A fresh connection must not inherit the old delayed stop.
+            QTcpSocket replacement;replacement.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+            QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+            replacement.write(test::networkFrame(status));QTest::qWait(550);
+            QCOMPARE(replacement.bytesAvailable(),qint64(0));QCOMPARE(done.size(),1);
+            QVERIFY(!adapter.statusDetails()["methodConfirmed"].toBool());
+        }
+    }
     void stopRetriesOnceWithoutExtendingDeadline_data() {
         QTest::addColumn<int>("mode");
         QTest::newRow("first-ack-cancels-retry")<<0;
@@ -587,6 +692,17 @@ private slots:
         QTest::qWait(600);
         QCOMPARE(adapter.statusDetails()["stopCommandsSent"].toInt(),(mode==1||mode==2)?2:1);
         if(mode==1) {
+            // This case waits through the late-stop guard, so its fake device
+            // must answer idle heartbeats instead of discarding their bytes.
+            QTimer heartbeatResponder;
+            connect(&heartbeatResponder,&QTimer::timeout,&client,[&] {
+                const auto wire=NetworkProtocol::heartbeatCommand();
+                while(client.peek(wire.size())==wire) {
+                    client.read(wire.size());
+                    client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x30));
+                }
+            });
+            heartbeatResponder.start(10);
             QVERIFY(!adapter.startAcquisition(1,&error));QVERIFY(error.contains("收尾"));
             client.write(ack);QTest::qWait(30);QCOMPARE(started.size(),1);QCOMPARE(done.size(),1);
             QTRY_VERIFY_WITH_TIMEOUT(!adapter.statusDetails()["stopReplyGuardActive"].toBool(),3500);

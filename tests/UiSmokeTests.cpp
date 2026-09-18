@@ -556,6 +556,13 @@ private slots:
         auto *label=page->findChild<QLabel *>("pressureWaveformStatus");QVERIFY(plot && label);
         QVERIFY(adapter->startListening("127.0.0.1",0,1000));QTcpSocket client;
         client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        connect(&client,&QTcpSocket::readyRead,&client,[&] {
+            const auto wire=NetworkProtocol::heartbeatCommand();
+            while(client.peek(wire.size())==wire) {
+                client.read(wire.size());
+                client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x30));
+            }
+        });
         QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());
         auto status=test::networkStatusWire().mid(7,21);status[9]=0;
         QTimer keepAlive;connect(&keepAlive,&QTimer::timeout,&client,[&]{client.write(test::networkFrame(status));});
@@ -636,7 +643,7 @@ private slots:
     void bundledSamplesImportWithoutDuplicates();
     void externalArchivePreview();
     void customerResultReviewWorkflow();
-    void reportLoadsLatestAndViewsFrozenSpectra();
+    void reportOpensHistoryExplicitlyAndViewsFrozenSpectra();
     void reportShowsVariableIonThresholdScreening();
     void detectionStartListsUnmetConditions();
     void fixedLandscapeNavigation();
@@ -647,6 +654,7 @@ private slots:
     void bundledExampleLoadsThreePlotsWithoutAi();
     void navigationAndAcquisitionRemainStable();
     void reportSelectionSurvivesPageRoundTrips();
+    void reportReplacesPreviousSuspectsAndClearsOnNewDetection();
     void conversationIsBoundedAndSelectable();
     void traceAnalysisUsesImportedScans();
     void calibrationPageLoadsSavesAndCalculatesWithoutExtraNavigation();
@@ -1128,7 +1136,7 @@ void UiSmokeTests::reportShowsVariableIonThresholdScreening() {
     qunsetenv("QITEST_WORKSPACE_DB");
 }
 
-void UiSmokeTests::reportLoadsLatestAndViewsFrozenSpectra() {
+void UiSmokeTests::reportOpensHistoryExplicitlyAndViewsFrozenSpectra() {
     QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir dir; const QString db=dir.filePath("report-latest.sqlite");
     qputenv("QITEST_WORKSPACE_DB",db.toUtf8());
@@ -1146,9 +1154,12 @@ void UiSmokeTests::reportLoadsLatestAndViewsFrozenSpectra() {
     }
     AppController controller(std::make_unique<SimulatedInstrument>());
     MainWindow window(&controller);window.resize(1024,700);window.show();
-    QTRY_COMPARE_WITH_TIMEOUT(controller.currentRun().id,QString("latest"),5000);
     QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenReport")->isVisibleTo(&window),5000);
     window.findChild<QAction *>("OpenReport")->trigger();
+    QVERIFY(controller.currentRun().id.isEmpty());
+    QCOMPARE(window.findChild<QTableWidget *>("reportScreeningResults")->rowCount(),0);
+    controller.loadStoredRun("latest");
+    QCOMPARE(controller.currentRun().id,QString("latest"));
     QVERIFY(!window.findChild<QWidget *>("reportSummaryStrip"));
     QVERIFY(!visibleWidgetWithText<QPushButton>(window,"完成复核"));
     QVERIFY(!visibleWidgetWithText<QLabel>(window,"质量检查"));
@@ -1295,7 +1306,7 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     auto *statusFilter = detailsDialog->findChild<QComboBox *>("screeningStatusFilter");
     auto *screeningSearch = detailsDialog->findChild<QLineEdit *>("screeningSearch");
     QVERIFY(statusFilter && screeningSearch);
-    QCOMPARE(statusFilter->count(), 3);
+    QCOMPARE(statusFilter->count(), 4); // Includes the existing incomplete-screening state.
     QCOMPARE(screeningTable->columnCount(), 6);
     QVERIFY(!visibleWidgetWithText<QLabel>(*detailsDialog,
         "当前为演示筛查面板；正式判定前需由客户确认离子列表、阈值和仪器适配结果。"));
@@ -1309,7 +1320,7 @@ void UiSmokeTests::customerResultReviewWorkflow() {
     QVERIFY(sampleDialog);
     sampleDialog->findChild<QLineEdit *>("sampleNumber")->setText("CUSTOMER-RESULT");
     sampleDialog->findChild<QLineEdit *>("sampleSaveFolder")->setText(directory.path());
-    sampleDialog->findChild<QLineEdit *>("sampleFileName")->setText("customer-result");
+    sampleDialog->findChild<QLineEdit *>("samplePersonName")->setText("测试人员");
     sampleDialog->findChild<QPushButton *>("confirmSampleStart")->click();
     QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 5000);
     QTRY_VERIFY_WITH_TIMEOUT(visibleWidgetWithText<QLabel>(window, "报告生成与查看"), 1000);
@@ -1377,7 +1388,7 @@ void UiSmokeTests::bundledSamplesImportWithoutDuplicates() {
     QCOMPARE(controller.recentRuns().size(), 21);
     QCOMPARE(controller.currentRun().id, id);
     QSignalSpy saved(&controller, &AppController::archiveGenerated);
-    controller.startSampleDetection({{"sample_id", "repeat-import"}}, database.filePath("repeat.qit.json"));
+    controller.startSampleDetection({{"sample_id", "repeat-import"},{"person_name","测试人员"}}, database.filePath("repeat.qit.json"));
     QTRY_COMPARE_WITH_TIMEOUT(saved.count(), 1, 5000);
     QCOMPARE(controller.currentRun().dataScope, QString("IMPORTED_UNVALIDATED"));
     QCOMPARE(controller.bundledIntensityTrend().size(), 21);
@@ -1878,6 +1889,54 @@ void UiSmokeTests::reportSelectionSurvivesPageRoundTrips() {
     QVERIFY(search->text().isEmpty());
     QVERIFY(table->selectionModel()->selectedRows().isEmpty());
     QVERIFY(!table->isRowHidden(0));
+    qunsetenv("QITEST_WORKSPACE_DB");
+}
+
+void UiSmokeTests::reportReplacesPreviousSuspectsAndClearsOnNewDetection() {
+    QStandardPaths::setTestModeEnabled(true);
+    QTemporaryDir dir;const auto db=dir.filePath("replace-results.sqlite");
+    qputenv("QITEST_WORKSPACE_DB",db.toUtf8());
+    const QJsonObject snapshot{{"rule",IonThresholdScreening::Version},{"tolerance_da",0.5},
+        {"entries",QJsonArray{
+            QJsonObject{{"name","测试物甲"},{"parent_ion",127},{"qualitify_ion","85,127"},{"son_area","100,100"}},
+            QJsonObject{{"name","测试物乙"},{"parent_ion",238},{"qualitify_ion","220,238"},{"son_area","100,100"}}}}};
+    {
+        WorkspaceRepository repo(db);QString error;QVERIFY(repo.open(&error));
+        for(int count:{2,1,0}) {
+            QVector<SpectrumPoint> points{{85,count>0?200.0:0.0},{127,count>0?200.0:0.0},
+                {220,count>1?200.0:0.0},{238,count>1?200.0:0.0}};
+            QVector<SpectrumScan> scans{{0,1,points}};AnalysisResult result;
+            QCOMPARE(IonThresholdScreening::apply(scans,snapshot,&result,&error),QString("COMPLETE"));
+            result.processedSpectrum.points=points;QCOMPARE(result.candidates.size(),count);
+            RunSummary run;run.id=QString("suspects-%1").arg(count);run.completedAt=QDateTime::currentDateTimeUtc();
+            run.operatorName="test";run.methodName="fixture";run.reviewStatus="PENDING";
+            run.dataScope="DEVICE_UNVALIDATED";run.sampleInfo={{"ion_screening_snapshot",snapshot},{"screening_status","COMPLETE"}};
+            QVERIFY2(repo.saveCompletedRun(run,points,result,InstrumentTelemetry{},&error,scans),qPrintable(error));
+        }
+    }
+    AppController controller(std::make_unique<SimulatedInstrument>());controller.setOfflineDemoSession();
+    MainWindow window(&controller);window.resize(1024,700);window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenReport")->isVisibleTo(&window),5000);
+    auto *table=window.findChild<QTableWidget *>("reportScreeningResults");
+    auto *search=window.findChild<QLineEdit *>("reportCandidateSearch");
+    window.findChild<QAction *>("OpenReport")->trigger();
+    for(int count:{2,1,0}) {
+        controller.loadStoredRun(QString("suspects-%1").arg(count));
+        QCOMPARE(table->rowCount(),count);
+        search->setText("测试物");search->clear();
+        window.findChild<QAction *>("OpenHome")->trigger();window.findChild<QAction *>("OpenReport")->trigger();
+        QCOMPARE(table->rowCount(),count);
+        QCOMPARE(table->property("displayedRunId").toString(),QString("suspects-%1").arg(count));
+    }
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
+    if(!capture.isEmpty()){QDir().mkpath(capture);QVERIFY(window.grab().save(capture+"/empty-current-results.png"));}
+    controller.loadStoredRun("suspects-2");QCOMPARE(table->rowCount(),2);table->selectRow(0);
+    controller.startDetection();QCOMPARE(controller.phase(),AppController::Phase::Acquiring);
+    QVERIFY(controller.currentRun().id.isEmpty());QVERIFY(controller.result().candidates.isEmpty());
+    QCOMPARE(table->rowCount(),0);QVERIFY(table->selectionModel()->selectedRows().isEmpty());
+    search->setText("测试物");search->clear();QCOMPARE(table->rowCount(),0);
+    controller.cancelDetection();QCOMPARE(table->rowCount(),0);
+    controller.loadStoredRun("suspects-2");QCOMPARE(table->rowCount(),2);
     qunsetenv("QITEST_WORKSPACE_DB");
 }
 
@@ -2432,9 +2491,15 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
         const auto capture = qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
         if (!capture.isEmpty()) QVERIFY(dialog->grab().save(capture + "/sample-save-dialog.png"));
         dialog->findChild<QLineEdit *>("sampleNumber")->setText("SAMPLE-TEST");
-        dialog->findChild<QLineEdit *>("samplePersonName")->setText("张三");
+        auto *person=dialog->findChild<QLineEdit *>("samplePersonName");
+        person->setText("   ");
+        dialog->findChild<QPushButton *>("confirmSampleStart")->click();
+        QVERIFY(dialog->isVisible());
+        QVERIFY(dialog->findChild<QLabel *>("sampleStartError")->text().contains("姓名"));
+        person->setText("张三");
         dialog->findChild<QLineEdit *>("sampleSaveFolder")->setText(sampleDirectory.path());
-        dialog->findChild<QLineEdit *>("sampleFileName")->setText("test-sample");
+        QCOMPARE(dialog->findChild<QLineEdit *>("sampleFileName")->text(),QString("张三"));
+        QVERIFY(dialog->findChild<QLineEdit *>("sampleFileName")->isReadOnly());
         dialog->findChild<QPushButton *>("confirmSampleStart")->click();
         QCoreApplication::sendPostedEvents(nullptr,QEvent::DeferredDelete);
     };
@@ -2459,7 +2524,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     runAction->trigger();
     confirmSample();
     QTRY_COMPARE_WITH_TIMEOUT(controller.phase(), AppController::Phase::ResultReady, 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(sampleDirectory.filePath("test-sample.qit.json")),5000);
+    QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(sampleDirectory.filePath("张三.qit.json")),5000);
     auto *completed=window.findChild<QDialog *>("detectionCompletedDialog");
     QVERIFY(completed && completed->isVisible());
     QVERIFY(visibleWidgetWithText<QLabel>(*completed,"检测已完成"));
@@ -2473,7 +2538,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QVERIFY(!window.findChild<QDialog *>("detectionCompletedDialog"));
     QVERIFY(runAction->isEnabled());QVERIFY(runningButton->isEnabled());
     QCOMPARE(runningButton->text(),QString("开始检测"));
-    const auto savedSample = RunArchiveCodec::read(sampleDirectory.filePath("test-sample.qit.json"));
+    const auto savedSample = RunArchiveCodec::read(sampleDirectory.filePath("张三.qit.json"));
     QVERIFY(savedSample.valid);
     QCOMPARE(savedSample.sampleInfo.value("sample_id").toString(),QString("SAMPLE-TEST"));
     QVERIFY(!controller.liveSpectrum().isEmpty());
@@ -2561,7 +2626,7 @@ void UiSmokeTests::navigationAndAcquisitionRemainStable() {
     QTest::mouseClick(generatePdf, Qt::LeftButton);
     QTRY_COMPARE_WITH_TIMEOUT(generated.count(), 1, 3000);
     const QString reportPath = generated.constFirst().constFirst().toString();
-    QVERIFY(QFileInfo(reportPath).fileName().startsWith(QStringLiteral("张三-检测报告-")));
+    QVERIFY(QFileInfo(reportPath).fileName().startsWith(QStringLiteral("张三")));
     QFile report(reportPath);
     QVERIFY(report.open(QIODevice::ReadOnly));
     QCOMPARE(report.read(4), QByteArray("%PDF"));
@@ -2802,6 +2867,11 @@ void UiSmokeTests::synchronizedCalibrationFitsSmallScreen() {
         }
     }
     sync->click();QVERIFY(!sync->isEnabled());QVERIFY(controller.massCalibrationProfile()!=base);
+    QFile calibrationFile(controller.massCalibrationPath());QVERIFY(calibrationFile.open(QIODevice::ReadOnly));
+    const auto calibrationDocument=QJsonDocument::fromJson(calibrationFile.readAll()).object();calibrationFile.close();
+    QCOMPARE(calibrationDocument["current"].toObject(),controller.massCalibrationProfile());
+    QCOMPARE(calibrationDocument["previous"].toObject(),base);
+    QVERIFY(std::abs(calibrationDocument["current"].toObject()["calibrate_c"].toDouble()-base["calibrate_c"].toDouble())>1.0);
     QVERIFY(table->item(1,0)->text().isEmpty()); // Old measurements must not be applied again to the new profile.
     page->findChild<QPushButton *>("revertMassCalibration")->click();QCOMPARE(controller.massCalibrationProfile(),base);
     qunsetenv("QITEST_WORKSPACE_DB");

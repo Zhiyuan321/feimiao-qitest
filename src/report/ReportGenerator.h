@@ -7,6 +7,8 @@ namespace qitest {
 
 class ReportGenerator final {
 public:
+    static QString reportHtml(const RunSummary &run, const AnalysisResult &result,
+        const QVector<int> &candidateRows);
     static bool writePdf(const QString &path, const RunSummary &run,
         const AnalysisResult &result, QString *error = nullptr);
     static bool writePdf(const QString &path, const RunSummary &run,

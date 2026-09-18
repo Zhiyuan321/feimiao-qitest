@@ -1,6 +1,5 @@
 #include "report/ReportGenerator.h"
 #include "domain/DisplayLabels.h"
-#include "core/IonThresholdScreening.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QFont>
@@ -11,30 +10,79 @@
 #include <QTextDocument>
 #include <QTextOption>
 #include <QSet>
+#include <QJsonArray>
 #include <QStringList>
 
 namespace qitest {
 namespace {
-QString qualityText(QualityLevel level) {
-    switch (level) {
-    case QualityLevel::Pass: return "质量门控通过";
-    case QualityLevel::Review: return "部分质量检查未通过";
-    case QualityLevel::Fail: return "质量门控失败";
-    }
-    return "未知";
-}
-
 // Imported names and evidence are plain text, never report markup.
 QString escaped(const QString &text) {
     return text.toHtmlEscaped().replace("\n", "<br/>");
 }
 
-QString numbers(const QVector<double> &values) {
-    QStringList text;
-    for (double value : values)
-        text << QString::number(value, 'f', 2).remove(QRegularExpression("\\.?0+$"));
-    return text.join(", ");
 }
+
+QString ReportGenerator::reportHtml(const RunSummary &run, const AnalysisResult &result,
+                                  const QVector<int> &candidateRows) {
+    const auto value=[&](const char *key) {
+        const auto text=run.sampleInfo.value(key).toString().trimmed();
+        return escaped(text.isEmpty()?QString("未提供"):text);
+    };
+    const auto now=QDateTime::currentDateTime();
+    const int offset=now.offsetFromUtc()/60;
+    const QString zone=QString("UTC%1%2:%3").arg(offset<0?"-":"+")
+        .arg(qAbs(offset)/60,2,10,QChar('0')).arg(qAbs(offset)%60,2,10,QChar('0'));
+    QString html="<html><body><h1 align='center'>检测报告</h1><hr/>";
+    html+="<table width='100%' border='1' cellspacing='0' cellpadding='5'>"
+        "<tr><td align='center'>检测报告生成时间（当地时间）</td></tr><tr><td align='center'>"
+        +escaped(now.toString("yyyy-MM-dd HH:mm:ss")+" ("+zone+")")+"</td></tr></table>";
+    html+="<table width='100%' cellspacing='0' cellpadding='6'>"
+        "<tr><td width='18%'><b>样品类型</b></td><td width='42%'>"+value("sample_type")
+        +"</td><td width='15%'><b>被检人</b></td><td width='25%'>"+value("person_name")+"</td></tr>"
+        "<tr><td><b>仪器名称</b></td><td>"+value("instrument_model")
+        +"</td><td><b>样本编号</b></td><td>"+value("sample_id")+"</td></tr>"
+        "<tr><td><b>时间</b></td><td colspan='3'>"
+        +escaped(run.completedAt.toLocalTime().toString("yyyy年MM月dd日 HH时mm分ss秒"))+"</td></tr></table>";
+    html+="<p>离子模式："+value("ionization")+"</p>";
+    html+="<p class='meta'>数据来源："+escaped(dataScopeLabel(run.dataScope))+"</p>";
+    if(run.sampleInfo.contains("screening_status"))
+        html+="<p class='meta'>筛查状态："+escaped(screeningStatusLabel(run.sampleInfo["screening_status"].toString()))+"</p>";
+    if(!run.sampleInfo["screening_error"].toString().isEmpty())
+        html+="<p>"+escaped(run.sampleInfo["screening_error"].toString())+"</p>";
+    html+="<hr/><table width='100%' cellspacing='0' cellpadding='7'><thead><tr>"
+        "<th width='9%'>序号</th><th width='41%'>化合物名称</th>"
+        "<th width='32%'>定量离子</th><th width='18%'>是否检出</th></tr></thead>";
+    const auto entries=run.sampleInfo["ion_screening_snapshot"].toObject()["entries"].toArray();
+    int number=0;
+    for(int row:candidateRows) {
+        if(row<0 || row>=result.candidates.size())continue;
+        const auto &candidate=result.candidates[row];
+        const ScreeningItem *item=nullptr;
+        for(const auto &screening:result.screeningItems)
+            if(screening.referenceId==candidate.referenceId){item=&screening;break;}
+        if(!result.screeningItems.isEmpty() && (!item || item->conclusion!="可疑"))continue;
+        // Quantitative ions must come from the acquisition's frozen library, not
+        // a later edited file, and are distinct from qualitative screening ions.
+        QString ions="未提供";
+        const auto match=QRegularExpression("^lib-row-([1-9][0-9]*)$").match(candidate.referenceId);
+        if(match.hasMatch()) {
+            const int index=match.captured(1).toInt()-1;
+            const auto entry=index>=0 && index<entries.size()?entries.at(index).toObject():QJsonObject{};
+            if(entry["name"].toString()==candidate.name) {
+                const auto ion=entry["quantify_ion"];
+                const QString text=ion.isDouble()?QString::number(ion.toDouble(),'g',12):ion.toString().trimmed();
+                if(!text.isEmpty())ions=text;
+            }
+        }
+        html+="<tr><td align='center'>"+QString::number(++number)+"</td><td align='center'>"
+            +escaped(candidate.name)+"</td><td align='center'>"+escaped(ions)
+            +"</td><td align='center' class='suspect'>可疑</td></tr>";
+    }
+    html+="</table>";
+    if(number==0)html+="<p>本次报告无可疑化合物。</p>";
+    html+="<p class='meta'>本报告仅列出可疑筛查结果，未列出不等于证明样品阴性。</p>"
+        "<p>---报告结束---</p></body></html>";
+    return html;
 }
 
 bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
@@ -57,78 +105,7 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
     }
     const QString personName = run.sampleInfo.value("person_name").toString().trimmed();
     const QString sampleId = run.sampleInfo.value("sample_id").toString().trimmed();
-    const QString identityNumber = run.sampleInfo.value("identity_number").toString().trimmed();
-    QString html = "<html><body><h1>检测报告</h1>";
-    const auto field = [&](const QString &name, const QString &value) {
-        html += "<p><b>" + escaped(name) + "：</b>" + escaped(value) + "</p>";
-    };
-    field("记录编号", run.id);
-    field("完成时间", run.completedAt.toLocalTime().toString("yyyy-MM-dd HH:mm:ss"));
-    if (!sampleId.isEmpty()) field("样本编号", sampleId);
-    if (!personName.isEmpty()) field("被筛查人", personName);
-    if (!identityNumber.isEmpty()) field("证件号码", identityNumber);
-    field("操作人", operatorLabel(run.operatorName));
-    field("方法", run.methodName);
-    field("数据范围", dataScopeLabel(run.dataScope));
-    field("科学引擎", result.engineVersion);
-    field("参考库", result.libraryVersion);
-    const bool ionThresholds=result.engineVersion==IonThresholdScreening::Version;
-    if(run.sampleInfo.contains("screening_status")) {
-        field("筛查状态",screeningStatusLabel(run.sampleInfo.value("screening_status").toString()));
-        if(!run.sampleInfo.value("screening_error").toString().isEmpty())
-            field("筛查说明",run.sampleInfo.value("screening_error").toString());
-    }
-    if(!ionThresholds || !result.quality.checks.isEmpty()) {
-        html += "<h2>质量结论</h2>";
-        field("质量门控", QString("%1（%2/100）").arg(qualityText(result.quality.level)).arg(result.quality.score));
-        for (const auto &check : result.quality.checks)
-            field((check.passed ? "通过 · " : "未通过 · ") + check.title, check.detail);
-    }
-    html += "<h2>筛查结果</h2>";
-    if (candidateRows.isEmpty()) html += "<p>未选择候选物；不据此判定样品阴性。</p>";
-    else html += QString("<table><thead><tr><th>序号</th><th>名称</th><th>母离子</th><th>%1</th>"
-                 "<th>%2</th><th>筛查结果</th></tr></thead><tbody>")
-                 .arg(ionThresholds?"定性离子":"碎片离子",ionThresholds?"累加值 / 一级阈值":"实测强度比");
-    int number = 0;
-    for (int row : candidateRows) {
-        const auto &candidate = result.candidates[row];
-        const ScreeningItem *screening = nullptr;
-        for (const auto &item : result.screeningItems) {
-            if (item.referenceId == candidate.referenceId) { screening = &item; break; }
-        }
-        const QString precursor = QString::number(screening ? screening->precursorMz : candidate.measuredMz, 'f', 2)
-            .remove(QRegularExpression("\\.?0+$"));
-        QString comparison=screening?numbers(screening->measuredRelativeIntensity):QStringLiteral("—");
-        if(ionThresholds && screening) {
-            QStringList pairs;
-            for(int i=0;i<screening->accumulatedIntensities.size();++i)
-                pairs<<QString("%1 / %2").arg(screening->accumulatedIntensities[i],0,'g',10)
-                    .arg(screening->primaryThresholds.value(i),0,'g',10);
-            comparison=pairs.join("; ");
-        }
-        html += "<tr><td>" + QString::number(++number) + "</td><td>" + escaped(candidate.name)
-            + "</td><td>" + escaped(precursor) + "</td><td>"
-            + escaped(screening ? numbers(screening->fragmentMz) : QStringLiteral("—")) + "</td><td>"
-            + escaped(comparison)
-            + "</td><td class='suspect'>可疑</td></tr>";
-    }
-    if (!candidateRows.isEmpty()) html += "</tbody></table>";
-    html += "<h2>候选证据</h2>";
-    number = 0;
-    for (int row : candidateRows) {
-        const auto &candidate = result.candidates[row];
-        html += "<h3>" + escaped(QString("%1. %2").arg(++number).arg(candidate.name)) + "</h3>";
-        if(!ionThresholds)field("匹配得分", QString::number(candidate.score, 'f', 1));
-        field("候选类型", "筛查候选");
-        field("证据", candidate.evidence);
-    }
-    html += "<h2>适用范围</h2>";
-    field("重要边界", run.dataScope == "PUBLIC_EXAMPLE"
-        ? "本报告来自 OpenMS BSA 公开示例，用于查看曲线和软件流程，不是客户检测结果，不用于浓度验证。"
-        : run.dataScope.contains("DEMO")
-        ? "本报告来自模拟数据，仅用于软件流程演示，不是实机检测结果。"
-        : "本报告列出筛查可疑结果，未列出候选物不等于证明样品阴性。");
-    html += "<p>本报告由确定性 C++ 引擎生成数值；本地大语言模型不参与数值计算。</p></body></html>";
+    const QString html=reportHtml(run,result,candidateRows);
 
     QSaveFile output(path);
     if (!output.open(QIODevice::WriteOnly)) {
@@ -138,21 +115,20 @@ bool ReportGenerator::writePdf(const QString &path, const RunSummary &run,
     {
         QPdfWriter pdf(&output);
         pdf.setPageSize(QPageSize(QPageSize::A4));
-        pdf.setPageMargins(QMarginsF(16, 16, 16, 16));
+        pdf.setPageMargins(QMarginsF(22, 24, 22, 18),QPageLayout::Millimeter);
         pdf.setResolution(144);
         pdf.setTitle((personName.isEmpty() ? sampleId : personName) + " 检测报告");
         pdf.setCreator("飞秒质谱工作站 Qt/C++");
         QTextDocument document;
         document.documentLayout()->setPaintDevice(&pdf);
-        document.setDefaultFont(QFont("IBM Plex Sans SC", 10));
+        document.setDefaultFont(QFont("SimSun", 11));
         QTextOption options = document.defaultTextOption();
         options.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         document.setDefaultTextOption(options);
-        document.setDefaultStyleSheet("body { color:#303634; background-color:white; }"
-            "h1 { color:#007f80; font-size:19pt; } h2 { color:#007f80; font-size:13pt; margin-top:16px; }"
-            "h3 { font-size:11pt; margin-top:12px; } p { margin-top:4px; margin-bottom:6px; }"
-            "table { width:100%; border-collapse:collapse; margin-top:8px; }"
-            "th, td { border:1px solid #b8c8c4; padding:5px; } th { background:#d9f1ec; }"
+        document.setDefaultStyleSheet("body { color:#111111; background-color:white; }"
+            "h1 { font-size:20pt; margin-bottom:20px; }"
+            "p { margin-top:8px; margin-bottom:8px; }"
+            "th { font-weight:bold; } .meta { font-size:9pt; color:#555555; }"
             ".suspect { color:#c62828; font-weight:bold; }");
         document.setHtml(html);
         // Page-aware layout keeps wrapped paragraphs visible; the former fixed

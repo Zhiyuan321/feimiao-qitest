@@ -150,6 +150,7 @@ signals:
     void spectrumChanged(const QVector<qitest::SpectrumPoint> &points);
     void scanSeriesChanged();
     void analysisCompleted(const qitest::AnalysisResult &result);
+    void currentResultCleared();
     void notice(const QString &text);
     void detectionStartRejected(const QStringList &reasons);
     void aiStateChanged(const QString &state);
@@ -186,6 +187,7 @@ private:
     NetworkInstrument *networkEndpoint() const;
     void setPhase(Phase phase, const QString &label);
     void finishAcquisition();
+    void clearCurrentResult();
     AiContextSnapshot buildAiContext() const;
     QString currentAiEvidence() const;
 

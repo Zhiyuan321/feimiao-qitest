@@ -1,3 +1,4 @@
+#include "support/NamedOutputPath.h"
 #include "ui/MainWindow.h"
 #include "ui/Rs485ConnectionPanel.h"
 #include "ui/NetworkConnectionPanel.h"
@@ -575,12 +576,12 @@ QWidget *MainWindow::createWorkspacePage() {
             };
             auto *sample = field("样本编号 *", "sampleNumber");
             sample->setText("S-" + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz"));
-            auto *person = field("姓名（选填）", "samplePersonName");
+            auto *person = field("姓名 *", "samplePersonName");
             auto *identity = field("身份证号（选填）", "sampleIdentityNumber");
             identity->setMaxLength(18);
             auto *name = field("文件名 *", "sampleFileName");
-            name->setText(sample->text());
-            connect(sample, &QLineEdit::textChanged, name, &QLineEdit::setText);
+            name->setReadOnly(true);
+            connect(person, &QLineEdit::textChanged, name, &QLineEdit::setText);
             auto *folder = field("保存位置 *", "sampleSaveFolder");
             QSettings settings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01");
             const QString defaultFolder = PlatformPaths::documentsSubdirectory("飞秒检测数据");
@@ -600,24 +601,18 @@ QWidget *MainWindow::createWorkspacePage() {
                 const auto path = QFileDialog::getExistingDirectory(dialog,"保存位置",folder->text());
                 if (!path.isEmpty()) folder->setText(PlatformPaths::nativeDisplay(path));
             });
-            auto *error = new QLabel; error->setWordWrap(true); error->setProperty("sciTone", "error"); layout->addWidget(error);
+            auto *error = new QLabel; error->setObjectName("sampleStartError"); error->setWordWrap(true); error->setProperty("sciTone", "error"); layout->addWidget(error);
             auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
             buttons->button(QDialogButtonBox::Ok)->setText("保存并开始");
             buttons->button(QDialogButtonBox::Ok)->setObjectName("confirmSampleStart");
             buttons->button(QDialogButtonBox::Cancel)->setText("取消"); layout->addWidget(buttons);
             connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
             connect(buttons, &QDialogButtonBox::accepted, dialog, [=] {
-                QString filename = name->text().trimmed();
-                bool invalid = filename.isEmpty() || filename.endsWith('.') || filename.endsWith(' ');
-                for (const QChar ch : filename) if (ch.unicode()<32 || QString("\\/:*?\"<>|").contains(ch)) invalid=true;
-                const auto stem = filename.section('.',0,0).toUpper();
-                if (QStringList{"CON","PRN","AUX","NUL","COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9","LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"}.contains(stem)) invalid=true;
-                if (sample->text().trimmed().isEmpty() || invalid) { error->setText("请填写样本编号，文件名不能包含特殊字符。"); return; }
+                if(person->text().trimmed().isEmpty()) { error->setText("请填写姓名后再开始检测。"); person->setFocus(); return; }
+                if(sample->text().trimmed().isEmpty()) { error->setText("请填写样本编号。"); return; }
                 const QDir directory(folder->text().trimmed());
                 if (!directory.exists() || !QFileInfo(directory.absolutePath()).isDir()) { error->setText("请选择存在的文件夹。"); return; }
-                if (!filename.endsWith(".qit.json",Qt::CaseInsensitive)) filename += ".qit.json";
-                const QString path = directory.absoluteFilePath(filename);
-                if (QFileInfo::exists(path)) { error->setText("已有同名文件，请更换名称，避免覆盖。"); return; }
+                const QString path=namedOutputPath(directory.absolutePath(),person->text(),".qit.json");
                 QTemporaryFile probe(directory.absoluteFilePath(".qitest-write-XXXXXX"));
                 if (!probe.open()) { error->setText("该位置不能写入，请选择其他文件夹。"); return; }
                 QSettings(QSettings::defaultFormat(), QSettings::UserScope, "SCIENTZ", "QITest01").setValue("sampleSaveFolder",directory.absolutePath());
@@ -632,7 +627,7 @@ QWidget *MainWindow::createWorkspacePage() {
                     && !detectionAwaitingConfirmation_) showReportAfterRunSaved_=false;
                 updatePhase(controller_->phase(),phaseLabel_->text());
             });
-            dialog->open(); sample->setFocus();
+            dialog->open(); person->setFocus();
         }
     });
     connect(actions_->action("OpenMethod"), &QAction::triggered, this, [this] {
@@ -655,6 +650,9 @@ QWidget *MainWindow::createWorkspacePage() {
     connect(instrumentStatusAction, &QAction::triggered, this, [this] {
         if (!instrumentTools_) return;
         setInstrumentToolsVisible(!instrumentTargetVisible_);
+    });
+    connect(controller_, &AppController::currentResultCleared, this, [this] {
+        refreshReport({});
     });
     connect(controller_, &AppController::runSaved, this, [this](const RunSummary &run) {
         refreshReport(run);
@@ -711,11 +709,8 @@ QWidget *MainWindow::createWorkspacePage() {
         if (methodRefreshTimer_) methodRefreshTimer_->start();
     });
     QTimer::singleShot(0, this, [this] {
-        if (!controller_->currentRun().id.isEmpty()) { refreshReport(controller_->currentRun()); return; }
-        if (controller_->phase() == AppController::Phase::Acquiring
-            || controller_->phase() == AppController::Phase::Analyzing || controller_->importInProgress()) return;
-        const auto recent = controller_->recentRuns(1);
-        if (!recent.isEmpty()) controller_->loadStoredRun(recent.first().id);
+        // Old results are opened explicitly through "打开数据", never restored on startup.
+        refreshReport(controller_->currentRun());
     });
     return page;
 }
@@ -2020,7 +2015,8 @@ QWidget *MainWindow::createReportPage() {
 
     connect(reportCandidateTable_, &QTableWidget::itemSelectionChanged, this, [this] {
         const int count = reportCandidateTable_->selectionModel()->selectedRows().size();
-        reportSelectionHint_->setText(count > 0
+        const bool noCandidates=controller_->result().candidates.isEmpty();
+        reportSelectionHint_->setText(noCandidates ? "本次检测无可疑结果" : count > 0
             ? QString("已选择 %1 项；PDF 只包含这些候选证据。").arg(count)
             : "未选择时将导出全部候选结果。");
         if (count == 1 && reportEvidenceDetail_) {
@@ -2847,10 +2843,15 @@ void MainWindow::refreshReport(const RunSummary &run) {
         reportRunId_->setText("等待检测");
         reportMeta_->clear();
         reportStatus_->clear();
-        if (reportEvidenceDetail_)
+        if (reportEvidenceDetail_) {
             reportEvidenceDetail_->setText("选择候选查看匹配证据");
-        prepareTableRows(reportCandidateTable_, 0);
+            reportEvidenceDetail_->setToolTip({});
+        }
+        resultSource_->setToolTip({});
+        reportRunId_->setToolTip({});
+        reportCandidateTable_->setRowCount(0);
         reportSelectionHint_->clear();
+        reportSelectionHint_->hide();
         reportSpectrumButton_->setEnabled(false);
         reportExportButton_->setEnabled(false);
         return;
@@ -2870,7 +2871,8 @@ void MainWindow::refreshReport(const RunSummary &run) {
     resultSource_->setToolTip(run.sampleInfo.value("screening_error").toString());
     resultSource_->show();
     const auto &candidates = controller_->result().candidates;
-    prepareTableRows(reportCandidateTable_, candidates.size());
+    // Delete excess items; hiding reused rows lets search resurrect an earlier run.
+    reportCandidateTable_->setRowCount(candidates.size());
     for (int row = 0; row < candidates.size(); ++row) {
         const auto &candidate = candidates[row];
         const QStringList values{candidate.name, "—",
@@ -2887,16 +2889,18 @@ void MainWindow::refreshReport(const RunSummary &run) {
             && (!name || !name->text().contains(keyword, Qt::CaseInsensitive)));
     }
     reportCandidateTable_->clearSelection();
-    if (reportEvidenceDetail_)
+    if (reportEvidenceDetail_) {
         reportEvidenceDetail_->setText(candidates.isEmpty()
             ? "无候选证据"
             : "选择候选查看匹配证据");
-    reportSelectionHint_->setText(candidates.isEmpty()
-        ? "本次记录没有候选结果。"
-        : "选择需要写入报告的候选结果。");
+        reportEvidenceDetail_->setToolTip({});
+    }
     reportExportButton_->setEnabled(!controller_->result().processedSpectrum.points.isEmpty());
     reportSpectrumButton_->setEnabled(true);
-    reportSelectionHint_->setText("未选择时将导出全部候选结果。");
+    reportSelectionHint_->setText(candidates.isEmpty()
+        ? "本次检测无可疑结果"
+        : "未选择时将导出全部候选结果。");
+    reportSelectionHint_->setVisible(candidates.isEmpty());
     for (int row : selectedRows)
         if (row < reportCandidateTable_->rowCount() && !reportCandidateTable_->isRowHidden(row))
             reportCandidateTable_->selectionModel()->select(reportCandidateTable_->model()->index(row, 0),

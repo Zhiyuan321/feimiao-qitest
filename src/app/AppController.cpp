@@ -13,6 +13,7 @@
 #include "ai/LocalAiBridge.h"
 #include "library/SpectralLibraryRepository.h"
 #include "report/ReportGenerator.h"
+#include "support/NamedOutputPath.h"
 #include "storage/RunArchiveCodec.h"
 #include "support/DiagnosticBundle.h"
 
@@ -49,27 +50,10 @@ QString qualityLevelName(QualityLevel level) {
     return "FAIL";
 }
 
-QString safeReportFileStem(QString value) {
-    value = value.trimmed();
-    for (QChar &character : value) {
-        if (character.unicode() < 32 || QStringLiteral("\\/:*?\"<>|").contains(character))
-            character = QChar('_');
-    }
-    while (value.endsWith('.') || value.endsWith(' ')) value.chop(1);
-    value = value.simplified().left(60);
-    return value.isEmpty() ? QStringLiteral("检测结果") : value;
-}
-
 QString reportPathForRun(const QString &directory, const RunSummary &run) {
-    const QString personName = run.sampleInfo.value("person_name").toString();
-    const QString sampleId = run.sampleInfo.value("sample_id").toString();
-    const QString subject = safeReportFileStem(personName.trimmed().isEmpty() ? sampleId : personName);
-    const QString base = QStringLiteral("%1-检测报告-%2")
-        .arg(subject, QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
-    QString path = QDir(directory).absoluteFilePath(base + ".pdf");
-    for (int suffix = 2; QFileInfo::exists(path); ++suffix)
-        path = QDir(directory).absoluteFilePath(QString("%1-%2.pdf").arg(base).arg(suffix));
-    return path;
+    const QString personName=run.sampleInfo.value("person_name").toString().trimmed();
+    return namedOutputPath(directory,personName.isEmpty()
+        ? run.sampleInfo.value("sample_id").toString() : personName,".pdf");
 }
 
 struct AiDeploymentProfile {
@@ -1274,6 +1258,9 @@ void AppController::exportRunArchive(const QString &runId, const QString &path) 
 void AppController::startSampleDetection(const QJsonObject &sampleInfo, const QString &savePath) {
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) return;
     if (exportWorker_) { emit notice("正在保存上一份数据，请完成后再开始新样本"); return; }
+    if (sampleInfo.value("person_name").toString().trimmed().isEmpty()) {
+        emit notice("请填写姓名后再开始检测"); return;
+    }
     if (sampleInfo.value("sample_id").toString().trimmed().isEmpty() || savePath.isEmpty()
         || QFileInfo::exists(savePath)) { emit notice("请填写样本编号，并选择未使用的保存文件名"); return; }
     if (instrument_->descriptor().simulation && currentRun_.dataScope == "IMPORTED_UNVALIDATED") {
@@ -1288,6 +1275,7 @@ void AppController::startSampleDetection(const QJsonObject &sampleInfo, const QS
         activeSampleInfo_.insert("reanalysis_source_run", currentRun_.id);
         activeSamplePath_ = savePath;
         detectionClock_.invalidate(); detectionDurationMs_ = -1;
+        clearCurrentResult();
         finishAcquisition();
         return;
     }
@@ -1374,9 +1362,9 @@ bool AppController::checkDetectionStart() {
         reasons<<QString("真空度：当前%1 mbar，未达标；要求达到E-03或更低压力（小于0.01 mbar）。")
             .arg(reading.vacuumMbar,0,'E',2);
     if(!std::isfinite(reading.ionTrapTemperatureC))
-        reasons<<"离子阱温度：未取得有效回传数值；要求大于85.0 ℃。";
-    else if(reading.ionTrapTemperatureC<=85.0)
-        reasons<<QString("离子阱温度：当前%1 ℃，未达标；要求大于85.0 ℃。")
+        reasons<<"离子阱温度：未取得有效回传数值；要求83.0～87.0 ℃（85±2 ℃，含边界）。";
+    else if(reading.ionTrapTemperatureC<83.0 || reading.ionTrapTemperatureC>87.0)
+        reasons<<QString("离子阱温度：当前%1 ℃，未达标；要求83.0～87.0 ℃（85±2 ℃，含边界）。")
             .arg(reading.ionTrapTemperatureC,0,'f',1);
     if(reasons.isEmpty())return true;
     if(workspace_)workspace_->appendAudit(sessionOperator_,"DETECTION_START_BLOCKED",method.id,reasons.join("\n"));
@@ -1389,7 +1377,7 @@ void AppController::startDetection() {
     if (importWorker_) { emit notice("正在导入数据，请完成或停止导入后再检测"); return; }
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) return;
     if(!checkDetectionStart())return;
-    activeSampleInfo_ = {}; activeSamplePath_.clear();
+    activeSampleInfo_ = {{"instrument_model",instrument_->descriptor().model}}; activeSamplePath_.clear();
     detectionClock_.invalidate();
     detectionDurationMs_ = -1;
     if(auto *network=qobject_cast<NetworkInstrument *>(instrument_.get())) {
@@ -1414,7 +1402,7 @@ void AppController::startDetection() {
         }
         activeSampleInfo_.insert("mass_axis_profile",network->calibrationProfile());
         activeSampleInfo_.insert("waveform_crc_policy","record_only");
-        currentRun_={};result_={};scans_.clear();pendingSpectrum_.clear();liveSpectrum_.clear();progress_=0;
+        clearCurrentResult();scans_.clear();pendingSpectrum_.clear();liveSpectrum_.clear();progress_=0;
         emit spectrumChanged(liveSpectrum_);emit scanSeriesChanged();emit progressChanged(0);
         setPhase(Phase::Acquiring,"等待仪器确认检测开启");
         if(!network->startAcquisition(seconds,&error) && phase_==Phase::Acquiring) {
@@ -1454,6 +1442,7 @@ void AppController::startDetection() {
         emit notice("采集会话建立失败：" + sessionError);
         return;
     }
+    clearCurrentResult();
     detectionClock_.start();
     pendingSpectrum_ = instrument_->acquireSpectrum();
     if (pendingSpectrum_.isEmpty()) {
@@ -1470,6 +1459,12 @@ void AppController::startDetection() {
     emit scanSeriesChanged();
     setPhase(Phase::Acquiring, "正在采集");
     acquisitionTimer_.start();
+}
+
+void AppController::clearCurrentResult() {
+    // Only the active view is reset. Saved runs remain available for explicit opening.
+    currentRun_={};result_={};
+    emit currentResultCleared();
 }
 
 void AppController::cancelDetection() {

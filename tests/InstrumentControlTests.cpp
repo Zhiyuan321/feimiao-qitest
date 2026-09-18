@@ -58,6 +58,14 @@ private slots:
             const auto base=controller.massCalibrationProfile();path=controller.massCalibrationPath();
             QVERIFY(controller.synchronizeMassCalibration({{126,127},{237,238},{303,304}},base,&error));
             fitted=controller.massCalibrationProfile();QVERIFY(fitted!=base);QVERIFY(QFile::exists(path));
+            QFile saved(path);QVERIFY(saved.open(QIODevice::ReadOnly));
+            const auto document=QJsonDocument::fromJson(saved.readAll()).object();saved.close();
+            QCOMPARE(document["current"].toObject(),fitted);
+            QCOMPARE(document["previous"].toObject(),base);
+            const auto oldCoefficients=fitted["base_coefficients"].toObject();
+            for(const auto &key:{"calibrate_a","calibrate_b","calibrate_c"})
+                QCOMPARE(oldCoefficients[key],base[key]);
+            QVERIFY(std::abs(fitted["calibrate_c"].toDouble()-base["calibrate_c"].toDouble())>1.0);
             QVERIFY(!controller.synchronizeMassCalibration({{126,127},{237,238},{303,304}},base,&error));
             QVERIFY(error.contains("重新拟合"));QCOMPARE(controller.massCalibrationProfile(),fitted);
         }
@@ -608,6 +616,13 @@ private slots:
         });
         QVERIFY(network->startListening("127.0.0.1",0,10000));
         QTcpSocket client;client.connectToHost(QHostAddress::LocalHost,network->statusDetails().value("port").toUInt());
+        connect(&client,&QTcpSocket::readyRead,&client,[&] {
+            const auto wire=NetworkProtocol::heartbeatCommand();
+            while(client.peek(wire.size())==wire) {
+                client.read(wire.size());
+                client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x30));
+            }
+        });
         QTRY_VERIFY(network->statusDetails().value("tcpConnected").toBool());
         auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
         QTRY_VERIFY(network->statusDetails().value("connected").toBool());
@@ -648,18 +663,24 @@ private slots:
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
         QVERIFY(test::acknowledgeLegacyMethodFollowups(client));
         QTRY_VERIFY(!network->statusDetails().value("heartbeatPausedForMethod").toBool());
-        // Check measured temperature, not the method setpoint. Equality must fail.
-        for(int t:{849,850}) {
+        // Detection uses the measured 85 +/- 2 C band, inclusive at both ends.
+        for(int t:{829,871}) {
             trapTenths=t;auto payload=test::statusPayload();payload[17]=char(t>>8);payload[18]=char(t);
             port.deliver(test::frame(payload));QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,t/10.0);
             const int beforeReject=rejected.size();controller.startDetection();
             QCOMPARE(rejected.size(),beforeReject+1);
             QVERIFY(rejected.last()[0].toStringList().join(" ").contains("离子阱温度"));
+            QVERIFY(rejected.last()[0].toStringList().join(" ").contains("83.0～87.0"));
             QVERIFY(controller.phase()!=AppController::Phase::Acquiring);QVERIFY(controller.recentRuns().isEmpty());
         }
-        trapTenths=851;
+        for(int t:{830,849,850,870}) {
+            trapTenths=t;auto payload=test::statusPayload();payload[17]=char(t>>8);payload[18]=char(t);
+            port.deliver(test::frame(payload));QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,t/10.0);
+            QVERIFY(controller.checkDetectionStart());
+        }
+        trapTenths=withLibrary?870:830; // Both endpoints must pass the actual acquisition entry.
         auto readyPayload=test::statusPayload();readyPayload[17]=char(trapTenths>>8);readyPayload[18]=char(trapTenths);
-        port.deliver(test::frame(readyPayload));QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,85.1);
+        port.deliver(test::frame(readyPayload));QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,trapTenths/10.0);
         for(int raw:{20000,17000,16000,12000,1234}) {
             status[2]=char(raw>>8);status[3]=char(raw);client.write(test::networkFrame(status));
             QTRY_COMPARE(network->statusDetails().value("vacuumRaw").toInt(),raw);

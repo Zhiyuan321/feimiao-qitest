@@ -1,6 +1,7 @@
 #include "core/AnalysisEngine.h"
 #include "core/ChromatogramEngine.h"
 #include "report/ReportGenerator.h"
+#include "support/NamedOutputPath.h"
 #include "storage/WorkspaceRepository.h"
 #include "storage/RunArchiveCodec.h"
 #include "storage/ScanSeriesCodec.h"
@@ -29,6 +30,7 @@ private slots:
     void persistsRunAndAudit();
     void migratesTelemetryAndPreservesUnknownReadings();
     void writesTraceablePdf();
+    void reportTemplateOnlyListsSuspects();
     void versionsAndActivatesMethods();
     void archivesAndValidatesRawSpectrum();
     void rejectsNonpositiveMassAndNullScanOutput();
@@ -299,6 +301,46 @@ void WorkspaceTests::migratesTelemetryAndPreservesUnknownReadings() {
     QVERIFY(std::isnan(reopened.loadRun("real-unknown").telemetry.molecularPumpRpm));
 }
 
+void WorkspaceTests::reportTemplateOnlyListsSuspects() {
+    auto run=fixtureRun();run.sampleInfo={{"person_name","测试姓名<&>"},{"sample_id","S-001"},
+        {"instrument_model","测试仪器"},{"sample_type","普通"},{"ionization","APCI"},
+        {"screening_status","COMPLETE"},
+        {"ion_screening_snapshot",QJsonObject{{"entries",QJsonArray{
+            QJsonObject{{"name","可疑测试物"},{"qualitify_ion","85,127"},{"quantify_ion","127"}}}}}}};
+    auto result=fixtureResult();result.candidates[0].referenceId="lib-row-1";
+    result.candidates[0].name="可疑测试物";
+    ScreeningItem suspect;suspect.referenceId="lib-row-1";suspect.conclusion="可疑";
+    result.screeningItems={suspect};
+    for(const QString &state:{QString("未检出"),QString("未筛查")}) {
+        auto candidate=result.candidates[0];candidate.referenceId=state;candidate.name=state+"测试物";
+        result.candidates.append(candidate);auto item=suspect;item.referenceId=state;item.conclusion=state;
+        result.screeningItems.append(item);
+    }
+    const auto html=ReportGenerator::reportHtml(run,result,{0,1,2});
+    QVERIFY(html.contains("化合物名称"));QVERIFY(html.contains("被检人"));
+    QVERIFY(html.contains("测试姓名&lt;&amp;&gt;"));QVERIFY(!html.contains("浓度"));
+    QVERIFY(html.contains("可疑测试物"));QVERIFY(html.contains(">127<"));QVERIFY(!html.contains("85,127"));
+    QVERIFY(!html.contains("未检出测试物"));QVERIFY(!html.contains("未筛查测试物"));
+    QVERIFY(!ReportGenerator::reportHtml(run,result,{1,2}).contains("可疑测试物"));
+    const auto empty=ReportGenerator::reportHtml(run,result,{});
+    QVERIFY(empty.contains("本次报告无可疑化合物"));QVERIFY(!empty.contains("可疑测试物"));
+    run.sampleInfo["screening_status"]="PARTIAL";run.sampleInfo["screening_error"]="测试条目未完成";
+    QVERIFY(ReportGenerator::reportHtml(run,result,{}).contains("测试条目未完成"));
+    QTemporaryDir dir;QString error;
+    QCOMPARE(QFileInfo(namedOutputPath(dir.path(),"张三",".pdf")).fileName(),QString("张三.pdf"));
+    QFile existing(dir.filePath("张三.pdf"));QVERIFY(existing.open(QIODevice::WriteOnly));existing.write("keep");existing.close();
+    QCOMPARE(QFileInfo(namedOutputPath(dir.path(),"张三",".pdf")).fileName(),QString("张三-2.pdf"));
+    QCOMPARE(QFileInfo(namedOutputPath(dir.path(),"CON",".qit.json")).fileName(),QString("_CON.qit.json"));
+    QCOMPARE(QFileInfo(namedOutputPath(dir.path(),"甲/乙:*",".pdf")).fileName(),QString("甲_乙__.pdf"));
+    const auto capture=qEnvironmentVariable("QITEST_PDF_CAPTURE_DIR");
+    if(!capture.isEmpty()) {
+        QVERIFY(QDir().mkpath(capture));run.sampleInfo["screening_status"]="COMPLETE";run.sampleInfo.remove("screening_error");
+        QVERIFY2(ReportGenerator::writePdf(capture+"/template-suspect.pdf",run,result,&error),qPrintable(error));
+        result.candidates.clear();
+        QVERIFY2(ReportGenerator::writePdf(capture+"/template-empty.pdf",run,result,&error),qPrintable(error));
+    }
+}
+
 void WorkspaceTests::writesTraceablePdf() {
     QTemporaryDir dir;
     const QString path = dir.filePath("report.pdf");
@@ -320,7 +362,7 @@ void WorkspaceTests::writesTraceablePdf() {
     file.close();
     auto longResult = fixtureResult();
     longResult.candidates.clear();
-    for (int i=0; i<18; ++i) {
+    for (int i=0; i<45; ++i) {
         auto candidate = fixtureResult().candidates.first();
         candidate.name = QString("长名称候选 %1 <literal> & %2").arg(i).arg(QString(90, 'A'));
         candidate.evidence = QString("证据 %1：").arg(i) + QString("需要结合标准物和实验条件进行复核。 ").repeated(6)
