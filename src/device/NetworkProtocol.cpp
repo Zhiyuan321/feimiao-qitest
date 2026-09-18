@@ -61,8 +61,20 @@ bool NetworkProtocol::decodePressure(const NetworkFrame &frame, QVector<double> 
     for(int i=0;i<frame.payload.size();i+=2) values.append(u16(frame.payload,i) / 65535.0 * 2.5 * 5.7);
     *volts=values; return true;
 }
+double NetworkProtocol::pressureSampleIntervalMinutes(const QJsonObject &method) {
+    // Vendor formula: n / 1000 / 60 * (period_ramp_waveform_time / data[8] * 2).
+    // Use both confirmed method values in their original common scale; do not
+    // convert only the numerator (10000 -> 1000 would shorten the axis tenfold).
+    const double period=method.value("period").toDouble(),gasTime=method.value("cooling").toDouble();
+    if(!std::isfinite(period) || !std::isfinite(gasTime) || period<=0 || gasTime<=0) return 0;
+    return period/gasTime*2.0/1000.0/60.0;
+}
 QByteArray NetworkProtocol::tuningCommand(bool enabled) {
     return controlFrame(0x20, QByteArray(1, enabled ? char(0x22) : char(0x23)));
+}
+QByteArray NetworkProtocol::pinchValveCommand(bool enabled) {
+    // User identifies the network vent command as the pinch valve, including OFF.
+    return controlFrame(0x22,QByteArray(1,enabled?char(0x22):char(0x23)));
 }
 QByteArray NetworkProtocol::detectionCommand(bool enabled) {
     return controlFrame(0x15,QByteArray(1,enabled ? char(0x22) : char(0x23)));
@@ -71,9 +83,17 @@ QByteArray NetworkProtocol::heartbeatCommand() {
     // Match the old-program capture authorized on 2026-09-16.
     return controlFrame(0x30,QByteArray(1,char(0x23)));
 }
-QByteArray NetworkProtocol::legacyMethodFollowupCommand() {
-    // Captured post-method command; do not infer its physical meaning.
-    return controlFrame(0x50,QByteArray(1,char(0x00)));
+QByteArray NetworkProtocol::ionSourceVoltageCommand(double voltageV, QString *error) {
+    // Protocol: 2.5 V control -> 5000 V output, control encoded x100 in U8.
+    // old.pcapng 2026-09-17 and user-confirmed 3800 V: 0x50 payload BE (190).
+    const double encoded=voltageV/20.0;
+    if(!std::isfinite(voltageV) || voltageV<0 || voltageV>5000
+        || std::abs(encoded-std::round(encoded))>1e-6) {
+        if(error)*error="离子源电压需为0～5000 V，按20 V步进设置";
+        return {};
+    }
+    if(error)error->clear();
+    return controlFrame(0x50,QByteArray(1,char(int(std::llround(encoded)))));
 }
 QJsonObject NetworkProtocol::fullscanCalibrationProfile() {
     return {{"source","datafit.json"},{"section","Fullscan"},

@@ -10,6 +10,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTabWidget>
+#include <QFileDialog>
 #include "ui/MainWindow.h"
 #include "ui/ChatTranscript.h"
 #include "ui/ChromatogramDialog.h"
@@ -104,6 +105,278 @@ private slots:
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
         QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDirectory_.path());
+    }
+    void readinessUsesLiveVacuumAndTemperaturesWithoutMethod() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("readiness.sqlite").toUtf8());
+        test::FakeSerial port;auto board=test::statusPayload();
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery())return test::frame(board);
+            for(int i=0;i<4;++i)if(r==PumpProtocol::query(i))return test::pumpReply(i);
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        auto instrument=std::make_unique<NetworkInstrument>(std::move(serial));auto *adapter=instrument.get();
+        QVERIFY(adapter->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        status[2]=char(2828>>8);status[3]=char(2828);client.write(test::networkFrame(status));
+        QTRY_VERIFY(adapter->statusDetails()["operatingConditionsReady"].toBool());
+        QVERIFY(!adapter->health().ready); // No method ACK: equipment readiness is independent.
+        AppController controller(std::move(instrument));MainWindow window(&controller);window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+        window.findChild<QAction *>("OpenSettings")->trigger();
+        auto *tree=window.findChild<QTreeWidget *>("settingsTree");QVERIFY(tree);QTreeWidgetItemIterator items(tree);
+        while(*items) {
+            auto *item=*items;
+            if(item->data(0,Qt::UserRole+1).toString()=="常用部件") {
+                QVERIFY(QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem *,item),Q_ARG(int,0)));break;
+            }++items;
+        }
+        auto *ready=window.findChild<QLabel *>("instrumentReadiness3");QVERIFY(ready);
+        QTRY_COMPARE(ready->text(),QString("已就绪"));
+        QVERIFY(!controller.checkDetectionStart()); // Display change must not bypass detection prerequisites.
+        auto *blocked=window.findChild<QDialog *>("detectionStartBlockedDialog");QVERIFY(blocked);blocked->accept();
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+        for(int height:{768,700}) {
+            window.resize(1024,height);QTest::qWait(80);QCOMPARE(window.size(),QSize(1024,height));
+            QVERIFY(ready->isVisibleTo(&window));
+            QVERIFY(window.rect().contains(QRect(ready->mapTo(&window,QPoint()),ready->size())));
+            if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/equipment-ready-%1.png").arg(height)));
+        }
+        struct Reading {int td,trap;bool ready;};
+        for(const auto &r: {Reading{2200,800,true},Reading{2800,900,true},Reading{2801,900,false},
+                            Reading{2199,850,false},Reading{2500,799,false},Reading{2500,901,false},Reading{2549,851,true}}) {
+            board[15]=char(r.td>>8);board[16]=char(r.td);board[17]=char(r.trap>>8);board[18]=char(r.trap);
+            QTRY_COMPARE(controller.telemetry().tdTemperatureC,r.td/10.0);
+            QTRY_COMPARE(controller.telemetry().ionTrapTemperatureC,r.trap/10.0);
+            QTRY_COMPARE(ready->text(),r.ready?QString("已就绪"):QString("未就绪"));
+        }
+        // Vacuum loss and disconnected telemetry cannot keep the green status.
+        status[2]=char(20000>>8);status[3]=char(20000);client.write(test::networkFrame(status));
+        QTRY_COMPARE(ready->text(),QString("未就绪"));
+        status[2]=char(2828>>8);status[3]=char(2828);client.write(test::networkFrame(status));
+        QTRY_COMPARE(ready->text(),QString("已就绪"));
+        adapter->serial()->closePort();QTRY_COMPARE(ready->text(),QString("未就绪"));
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void pinchValveButtonWorksWithNetworkOnly() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("valve.sqlite").toUtf8());
+        auto instrument=std::make_unique<NetworkInstrument>();auto *adapter=instrument.get();
+        QVERIFY(adapter->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        client.write(test::networkFrame(status));QTRY_VERIFY(adapter->statusDetails()["connected"].toBool());
+        AppController controller(std::move(instrument));MainWindow window(&controller);window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+        window.findChild<QAction *>("OpenSettings")->trigger();
+        auto *tree=window.findChild<QTreeWidget *>("settingsTree");QVERIFY(tree);
+        QTreeWidgetItemIterator items(tree);
+        while(*items) {
+            auto *item=*items;
+            if(item->data(0,Qt::UserRole+1).toString()=="常用部件") {
+                QVERIFY(QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem *,item),Q_ARG(int,0)));break;
+            }
+            ++items;
+        }
+        auto *valve=window.findChild<QToolButton *>("instrumentControl_pinchValveOn");QVERIFY(valve);
+        QVERIFY(valve->isEnabled());QVERIFY(!adapter->serial()->portOpen());
+        for(bool enabled:{true,false}) {
+            QTest::qWait(10);valve->click();
+            auto *confirm=window.findChild<QPushButton *>("confirmInstrumentControl");QVERIFY(confirm);confirm->click();
+            QTRY_VERIFY(adapter->settingBusy());QVERIFY(!valve->isEnabled());
+            QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
+            client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x22));
+            QTRY_COMPARE(valve->isChecked(),enabled);QTRY_VERIFY(valve->isEnabled());
+        }
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+        for(int height:{768,700}) {
+            window.resize(1024,height);QTest::qWait(100);QCOMPARE(window.size(),QSize(1024,height));
+            QVERIFY(window.rect().contains(QRect(valve->mapTo(&window,QPoint()),valve->size())));
+            if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/pinch-valve-%1.png").arg(height)));
+        }
+        client.disconnectFromHost();QTRY_VERIFY(!valve->isEnabled());QVERIFY(valve->text().contains("未知"));
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void coldRunningDeviceCanContinueHeating_data() {
+        QTest::addColumn<bool>("warmReconnect");
+        QTest::newRow("cold-running")<<false;
+        QTest::newRow("interrupted-warm-reconnect")<<true;
+    }
+    void coldRunningDeviceCanContinueHeating() {
+        QFETCH(bool,warmReconnect);bool rejectTrap=warmReconnect;
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("resume.sqlite").toUtf8());
+        test::FakeSerial port;auto board=test::statusPayload();
+        board[15]=char(1100>>8);board[16]=char(1100);board[17]=char(375>>8);board[18]=char(375);
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery())return test::frame(board);
+            for(int i=0;i<4;++i)if(r==PumpProtocol::query(i))return test::pumpReply(i);
+            if(quint8(r[2])==0x02 || quint8(r[2])==0x13)
+                return test::frame(QByteArray::fromHex(rejectTrap && quint8(r[2])==0x13?"12":"11"),quint8(r[2]));
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        auto instrument=std::make_unique<NetworkInstrument>(std::move(serial));auto *adapter=instrument.get();
+        QVERIFY(adapter->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        client.write(test::networkFrame(status));
+        if(warmReconnect) {
+            QTRY_VERIFY(adapter->validateSetting("powerOn",true).allowed);
+            QSignalSpy done(adapter,&IInstrumentAdapter::settingFinished);
+            adapter->requestSetting("interrupted-start","powerOn",true);
+            QTRY_COMPARE(done.size(),1);QVERIFY(!done[0][2].toBool());
+            board[15]=char(2500>>8);board[16]=char(2500);board[17]=char(853>>8);board[18]=char(853);
+            rejectTrap=false;QVERIFY(adapter->serial()->openPort("TEST_ONLY",true));
+            QTRY_VERIFY(adapter->confirmedSettings().value("powerOn").toBool());
+            port.writes.clear(); // Only subsequent user-triggered continuation is examined below.
+        }
+        AppController controller(std::move(instrument));MainWindow window(&controller);window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+        window.findChild<QAction *>("OpenSettings")->trigger();auto *tree=window.findChild<QTreeWidget *>("settingsTree");QVERIFY(tree);
+        QTreeWidgetItemIterator items(tree);while(*items) {
+            auto *item=*items;if(item->data(0,Qt::UserRole+1).toString()=="常用部件") {
+                QVERIFY(QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem *,item),Q_ARG(int,0)));break;
+            }++items;
+        }
+        auto *on=window.findChild<QPushButton *>("instrumentStartupOn");QVERIFY(on);
+        QTRY_COMPARE(on->text(),QString("继续开机"));QVERIFY(on->isEnabled());QVERIFY(!on->isChecked());
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+        for(int height:{768,700}) {
+            window.resize(1024,height);QTest::qWait(100);QCOMPARE(window.size(),QSize(1024,height));
+            QVERIFY(window.rect().contains(QRect(on->mapTo(&window,QPoint()),on->size())));
+            if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/resume-heating-%1.png").arg(height)));
+        }
+        on->click();auto *confirm=window.findChild<QPushButton *>("confirmInstrumentControl");QVERIFY(confirm);confirm->click();
+        QTRY_VERIFY(adapter->statusDetails()["startupTemperaturesConfirmed"].toBool());
+        QTRY_VERIFY(!on->isEnabled());QVERIFY(on->isChecked());
+        QVERIFY(window.findChild<QLabel *>("instrumentStartupState")->text().contains(warmReconnect?"真空和温度已达标":"设定已确认"));
+        if(!capture.isEmpty())QVERIFY(window.grab().save(capture+"/heating-confirmed-700.png"));
+        QCOMPARE(port.writes.count(QByteArray::fromHex("55881300020055aa")),1);
+        QVERIFY(!port.writes.contains(PumpProtocol::powerCommand(true)));QVERIFY(adapter->serial()->portOpen());
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void reconnectDisplaysRunningDeviceAndBlocksRepeatedStartup() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("recovery.sqlite").toUtf8());
+        test::FakeSerial port;auto board=test::statusPayload();board[1]=char(0xee);bool stopped=false;int rpm=1200;
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                auto reply=test::pumpReply(i);if(i==0)reply.replace(10,6,QByteArray::number(rpm).rightJustified(6,'0'));
+                if(i==1 && stopped)reply.replace(10,6,"000000");return reply;
+            }
+            if(r==PumpProtocol::powerCommand(false)){stopped=true;return QByteArray();}
+            if(quint8(r[2])==0x08) {board[1]=char(0xff);return test::frame(QByteArray::fromHex("11"),0x08);}
+            if(quint8(r[2])==0x11) {board[6]=char(0xff);return test::frame(QByteArray::fromHex("11"),0x11);}
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        auto instrument=std::make_unique<NetworkInstrument>(std::move(serial));auto *adapter=instrument.get();
+        QVERIFY(adapter->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
+        AppController controller(std::move(instrument));MainWindow window(&controller);window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+        window.findChild<QAction *>("OpenSettings")->trigger();
+        auto *tree=window.findChild<QTreeWidget *>("settingsTree");QVERIFY(tree);QTreeWidgetItemIterator items(tree);
+        while(*items) {
+            auto *item=*items;
+            if(item->data(0,Qt::UserRole+1).toString()=="常用部件") {
+                QVERIFY(QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem *,item),Q_ARG(int,0)));break;
+            }
+            ++items;
+        }
+        auto *on=window.findChild<QPushButton *>("instrumentStartupOn");
+        auto *state=window.findChild<QLabel *>("instrumentStartupState");QVERIFY(on);QVERIFY(state);
+        QTRY_VERIFY(on->isChecked());QVERIFY(!on->isEnabled());
+        QVERIFY(state->text().contains("设备运行中"));
+        QVERIFY(!controller.updateInstrumentSetting("powerOn",true,true));
+        QVERIFY(adapter->serial()->portOpen());QVERIFY(!adapter->startupBusy());
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+        for(int height:{768,700}) {
+            window.resize(1024,height);QTest::qWait(100);QCOMPARE(window.size(),QSize(1024,height));
+            QVERIFY(window.rect().contains(QRect(state->mapTo(&window,QPoint()),state->size())));
+            if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/recovered-running-%1.png").arg(height)));
+        }
+        auto *off=window.findChild<QPushButton *>("instrumentStartupOff");QVERIFY(off);QTRY_VERIFY(off->isEnabled());
+        off->click();auto *confirm=window.findChild<QPushButton *>("confirmInstrumentControl");QVERIFY(confirm);confirm->click();
+        QTRY_VERIFY(adapter->shutdownBusy());QVERIFY(!on->isEnabled());QVERIFY(!off->isEnabled());
+        QTest::qWait(5200);QVERIFY(adapter->shutdownBusy());QVERIFY(!stopped);
+        QVERIFY(state->text().contains("低于75"));
+        board[17]=char(749>>8);board[18]=char(749);QTRY_VERIFY(stopped);
+        QVERIFY(state->text().contains("0 RPM"));QVERIFY(!off->isChecked());
+        if(!capture.isEmpty())QVERIFY(window.grab().save(capture+"/shutdown-coasting-700.png"));
+        rpm=0;QTRY_VERIFY(!adapter->shutdownBusy());QTRY_VERIFY(off->isChecked());QTRY_VERIFY(on->isEnabled());
+        QVERIFY(state->text().contains("关机完成"));
+        adapter->serial()->closePort();QTRY_VERIFY(!on->isChecked());QVERIFY(!on->isEnabled());
+        QVERIFY(state->text().contains("等待"));qunsetenv("QITEST_WORKSPACE_DB");
+    }
+    void realStartupControlsAndCancellationFitSmallScreen() {
+        QTemporaryDir dir; qputenv("QITEST_WORKSPACE_DB",dir.filePath("startup.sqlite").toUtf8());
+        test::FakeSerial port; auto board=test::statusPayload();board[3]=char(0xee);
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            if(quint8(r[2])==0x10) board[5]=quint8(r[5])==1?char(0xee):char(0xff);
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {auto reply=test::pumpReply(i);if(i==1)reply.replace(10,6,"000000");return reply;}
+            return test::frame(QByteArray::fromHex("11"),quint8(r[2]));
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        QTRY_VERIFY(serial->health().connected);
+        auto instrument=std::make_unique<NetworkInstrument>(std::move(serial));auto *adapter=instrument.get();
+        QVERIFY(adapter->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        // Hold vacuum above the molecular-pump start threshold.
+        const quint16 raw=quint16((std::log10(5e5)*1.286+6.143)*65536/14.25);
+        status[2]=char(raw>>8);status[3]=char(raw);
+        QTimer updates; connect(&updates,&QTimer::timeout,&client,[&] {client.write(test::networkFrame(status));});
+        updates.start(200);client.write(test::networkFrame(status));QTRY_VERIFY(adapter->statusDetails()["connected"].toBool());
+        AppController controller(std::move(instrument));MainWindow window(&controller);window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+        window.findChild<QAction *>("OpenSettings")->trigger();
+        auto *tree=window.findChild<QTreeWidget *>("settingsTree");QVERIFY(tree);
+        QTreeWidgetItemIterator items(tree);
+        while(*items) {
+            auto *item=*items;
+            if(item->data(0,Qt::UserRole+1).toString()=="常用部件") {
+                QVERIFY(QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem *,item),Q_ARG(int,0)));break;
+            }
+            ++items;
+        }
+        auto *on=window.findChild<QPushButton *>("instrumentStartupOn");
+        auto *off=window.findChild<QPushButton *>("instrumentStartupOff");
+        auto *cancel=window.findChild<QPushButton *>("cancelInstrumentStartup");
+        auto *flow=window.findChild<QPushButton *>("applyCarrierFlow");
+        QTRY_VERIFY(on->isEnabled());QTRY_VERIFY(off->isEnabled());QVERIFY(flow->isEnabled());
+        QVERIFY(window.findChild<QToolButton *>("instrumentControl_rfOn")->isEnabled());
+        QVERIFY(window.findChild<QToolButton *>("instrumentControl_molecularPumpOn")->isEnabled());
+        auto *rf=window.findChild<QToolButton *>("instrumentControl_rfOn");
+        for(bool target:{true,false}) {
+            rf->click();
+            auto *powerConfirm=window.findChild<QPushButton *>("confirmInstrumentControl");QVERIFY(powerConfirm);
+            powerConfirm->click();QVERIFY(!rf->isEnabled());
+            QTRY_COMPARE(rf->isChecked(),target);QTRY_VERIFY(rf->isEnabled());
+            QVERIFY(port.writes.contains(QByteArray::fromHex(target?"558810000101aa":"558810000102aa")));
+            QTest::qWait(10);
+        }
+        on->click();
+        auto *confirm=window.findChild<QPushButton *>("confirmInstrumentControl");QVERIFY(confirm);
+        QVERIFY(!adapter->startupBusy());confirm->click();QTRY_VERIFY(adapter->startupBusy());
+        QTRY_VERIFY(adapter->statusDetails()["startupMessage"].toString().contains("等待真空"));
+        QTest::qWait(5200); // Overall startup must survive the ordinary five-second setting timeout.
+        QVERIFY(adapter->startupBusy());QVERIFY(cancel->isVisible());QVERIFY(!on->isEnabled());QVERIFY(!flow->isEnabled());
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+        for(int height:{768,700}) {
+            window.resize(1024,height);QTest::qWait(100);QCOMPARE(window.size(),QSize(1024,height));
+            for(auto *button:{on,off,cancel,flow}) QVERIFY(window.rect().contains(QRect(button->mapTo(&window,QPoint()),button->size())));
+            if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/startup-%1.png").arg(height)));
+        }
+        cancel->click();QTRY_VERIFY(!adapter->startupBusy());QVERIFY(on->isEnabled());
+        QVERIFY(!port.writes.contains(PumpProtocol::powerCommand(true)));
+        qunsetenv("QITEST_WORKSPACE_DB");
     }
     void extendedPresetsPersistAndFitSmallScreen() {
         QTemporaryDir dir;
@@ -236,6 +509,37 @@ private slots:
         controller.stopNetworkListening();QTRY_COMPARE(plot->property("sampleCount").toInt(),0);
         qunsetenv("QITEST_WORKSPACE_DB");
     }
+    void pressureCaptureKeepsContinuousPeaks() {
+        const auto file=qEnvironmentVariable("QITEST_PRESSURE_CAPTURE");if(file.isEmpty())QSKIP("Optional local capture replay");
+        QFile f(file);QVERIFY(f.open(QIODevice::ReadOnly));const auto bytes=f.readAll();
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("pressure-replay.sqlite").toUtf8());
+        test::FakeSerial port;port.responder=[](const QByteArray &r) {return quint8(r[2])==0x30
+            ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("11"),quint8(r[2]));};
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY"));
+        QTRY_VERIFY(serial->health().connected);auto device=std::make_unique<NetworkInstrument>(std::move(serial));auto *adapter=device.get();
+        AppController controller(std::move(device));QVERIFY(adapter->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter->statusDetails()["tcpConnected"].toBool());auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        client.write(test::networkFrame(status));QTRY_VERIFY(adapter->statusDetails()["connected"].toBool());
+        const auto method=MethodDraft::defaultParameters();adapter->requestMethodParameters("replay",method);
+        QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
+        QVERIFY(test::acknowledgeLegacyMethodFollowups(client));QTRY_COMPARE(adapter->confirmedMethodParameters(),method);
+        std::unique_ptr<QWidget> page(createDeviceWaveformPanel(&controller,false));page->resize(900,530);page->show();
+        for(int i=0;i<bytes.size();i+=137)client.write(bytes.mid(i,137));
+        QTRY_COMPARE(adapter->pressureVolts().size(),7221);
+        auto *plot=page->findChild<QWidget *>("pressureVoltagePlot");QVERIFY(plot);
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),7221);QCOMPARE(plot->property("xUnit").toString(),QString("min"));
+        QVERIFY(std::abs(plot->property("xMaximum").toDouble()-0.481333333333333)<1e-10);
+        const auto values=adapter->pressureVolts();
+        for(int cycle=0;cycle<29;++cycle) {
+            const auto range=std::minmax_element(values.begin()+cycle*249,values.begin()+(cycle+1)*249);
+            QVERIFY(*range.second-*range.first>1.3);
+        }
+        const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty()) {
+            QDir().mkpath(capture);QTest::qWait(80);QVERIFY(page->grab().save(capture+"/old-capture-29-pressure-peaks.png"));
+        }
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void pressureCurveSurvivesCompletedDetection() {
         QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("pressure-end.sqlite").toUtf8());
         test::FakeSerial port;
@@ -273,10 +577,14 @@ private slots:
         client.write(ack+test::networkFrame(QByteArray::fromHex("100030005000ffff"),0x20,0x82,0,1));
         QTRY_COMPARE(done.size(),1);QVERIFY(done.last()[0].toBool());
         QTRY_VERIFY(label->text().contains("检测已结束"));
-        QTRY_COMPARE(plot->property("sampleCount").toInt(),4);
+        QTRY_COMPARE(plot->property("sampleCount").toInt(),9);
+        QCOMPARE(plot->property("xUnit").toString(),QString("min"));
+        QCOMPARE(plot->property("xMaximum").toDouble(),8*4.0/1000/60);
         QTest::qWait(1300); // Beyond the configured pressure timeout, with TCP status still fresh.
-        QCOMPARE(adapter->pressureVolts().size(),4);QVERIFY(label->text().contains("检测已结束"));
-        QVERIFY(!adapter->startAcquisition(0,&error));QCOMPARE(adapter->pressureVolts().size(),4);
+        QCOMPARE(adapter->pressureVolts().size(),9);QVERIFY(label->text().contains("检测已结束"));
+        QCOMPARE(adapter->pressureVolts()[0],0.0);QCOMPARE(adapter->pressureVolts()[4],14.25);
+        QVERIFY(label->text().contains("整次检测"));QVERIFY(label->text().contains("峰值 14.250"));
+        QVERIFY(!adapter->startAcquisition(0,&error));QCOMPARE(adapter->pressureVolts().size(),9);
         const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");
         if(!capture.isEmpty()) {QDir().mkpath(capture);QVERIFY(page->grab().save(capture+"/pressure-completed.png"));}
         {
@@ -323,6 +631,7 @@ private slots:
         QCOMPARE(plot.points().last().mz,2.0);
     }
     void rs485StatusPanelReadsAndInvalidates();
+    void rs485FailureExportsAndSavesEvidence();
     void networkPanelConnectsAlongside485();
     void bundledSamplesImportWithoutDuplicates();
     void externalArchivePreview();
@@ -331,6 +640,7 @@ private slots:
     void reportShowsVariableIonThresholdScreening();
     void detectionStartListsUnmetConditions();
     void fixedLandscapeNavigation();
+    void manualQuadraticCalibrationWorksheet();
     void professionalOfflineToolsValidateAndRemainUsable();
     void instrumentPowerButtonsReflectPartialState();
     void bundledExampleLoadsThreePlotsWithoutAi();
@@ -492,7 +802,7 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     QCOMPARE(table->item(2, 1)->text(), QString("关闭"));
     QCOMPARE(controller.telemetry().tdTemperatureC, 245.6);
     QCOMPARE(table->item(3, 1)->text(), QString("2.70E-05 mbar"));
-    QVERIFY(!controller.updateInstrumentSetting("powerOn", true, true));
+    QVERIFY(!controller.updateInstrumentSetting("rf48VOn", true, true)); // Unmapped controls remain unavailable.
     controller.startDetection(); QVERIFY(controller.phase() != AppController::Phase::Acquiring);
     QCoreApplication::processEvents();
     QVERIFY(window.rect().contains(QRect(listen->mapTo(&window, QPoint()), listen->size())));
@@ -553,6 +863,53 @@ void UiSmokeTests::networkPanelConnectsAlongside485() {
     qunsetenv("QITEST_WORKSPACE_DB");
 }
 
+void UiSmokeTests::rs485FailureExportsAndSavesEvidence() {
+    QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("failure.sqlite").toUtf8());
+    qputenv("QITEST_DIAGNOSTICS_DIR",dir.filePath("diagnostics").toUtf8());
+    test::FakeSerial port;port.reply=test::frame(test::statusPayload());
+    auto instrument=std::make_unique<Rs485Instrument>(&port,nullptr);auto *adapter=instrument.get();
+    AppController controller(std::move(instrument));MainWindow window(&controller);window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(commandButton(window,"OpenHome")->isVisibleTo(&window),4000);
+    window.findChild<QAction *>("OpenSettings")->trigger();auto *tree=window.findChild<QTreeWidget *>("settingsTree");
+    QTreeWidgetItemIterator items(tree);while(*items) {
+        auto *item=*items;if(item->data(0,Qt::UserRole+1).toString()=="运行状态") {
+            QVERIFY(QMetaObject::invokeMethod(tree,"itemClicked",Qt::DirectConnection,Q_ARG(QTreeWidgetItem *,item),Q_ARG(int,0)));break;
+        }++items;
+    }
+    auto *save=window.findChild<QPushButton *>("pumpExport");QVERIFY(save && save->isEnabled());
+    QVERIFY(adapter->openPort("TEST_ONLY"));QTRY_VERIFY(adapter->health().connected);
+    port.reply.clear();QTRY_VERIFY_WITH_TIMEOUT(!adapter->portOpen(),3500);
+    QVERIFY(save->isEnabled());
+    auto *status=window.findChild<QLabel *>("rs485ConnectionStatus");QVERIFY(status->isVisibleTo(&window));
+    QVERIFY(status->text().contains("超时"));
+    const auto automatic=controller.rs485Status().value("diagnosticPath").toString();QVERIFY(QFileInfo::exists(automatic));
+    QFile stored(automatic);QVERIFY(stored.open(QIODevice::ReadOnly));const auto preserved=stored.readAll();
+    const auto snapshot=QJsonDocument::fromJson(preserved).object();
+    QVERIFY(snapshot["busStatus"].toObject()["lastFailure"].toObject()["reason"].toString().contains("超时"));
+    QVERIFY(!snapshot["records"].toArray().isEmpty());
+    const auto capture=qEnvironmentVariable("QITEST_UI_CAPTURE_DIR");if(!capture.isEmpty())QDir().mkpath(capture);
+    for(int h:{768,700}) {
+        window.resize(1024,h);QTest::qWait(100);QCOMPARE(window.size(),QSize(1024,h));
+        for(auto *w:QList<QWidget *>{save,status,window.findChild<QPushButton *>("rs485OpenDiagnostics")})
+            QVERIFY(window.rect().contains(QRect(w->mapTo(&window,QPoint()),w->size())));
+        if(!capture.isEmpty())QVERIFY(window.grab().save(capture+QString("/485-failure-%1.png").arg(h)));
+    }
+    const auto path=dir.filePath("manual.json");bool dialogOpened=false;
+    QTimer::singleShot(100,&window,[&] {
+        for(auto *w:QApplication::topLevelWidgets())if(auto *dialog=qobject_cast<QFileDialog *>(w)) {
+            dialogOpened=true;dialog->setDirectory(dir.path());dialog->selectFile("manual.json");
+            if(auto *edit=dialog->findChild<QLineEdit *>("fileNameEdit"))edit->setText("manual.json");
+            QMetaObject::invokeMethod(dialog,"accept",Qt::DirectConnection);
+        }
+    });
+    save->click();QVERIFY(dialogOpened);QVERIFY2(QFileInfo::exists(path),qPrintable(window.findChild<QLabel *>("rs485ExportResult")->text()));
+    QVERIFY(window.findChild<QLabel *>("rs485ExportResult")->text().contains("已导出"));
+    port.reply=test::frame(test::statusPayload());QVERIFY(adapter->openPort("TEST_ONLY"));QTRY_VERIFY(adapter->health().connected);
+    QCOMPARE(controller.rs485Status().value("diagnosticPath").toString(),automatic);
+    stored.seek(0);QCOMPARE(stored.readAll(),preserved); // Reconnection cannot overwrite the saved failure.
+    adapter->closePort();QVERIFY(!status->text().contains("查询超时")); // Do not label a later manual disconnect as the old fault.
+    qunsetenv("QITEST_DIAGNOSTICS_DIR");qunsetenv("QITEST_WORKSPACE_DB");
+}
 void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QStandardPaths::setTestModeEnabled(true);
     QTemporaryDir directory;
@@ -609,7 +966,8 @@ void UiSmokeTests::rs485StatusPanelReadsAndInvalidates() {
     QCOMPARE(table->item(12, 1)->text(), QString("内载气"));
     QVERIFY(!window.statusBar()->isVisibleTo(&window));
     for (auto *widget : window.findChildren<QWidget *>())
-        if (widget->property("instrumentControl").toBool()) QVERIFY(!widget->isEnabled());
+        if (widget->property("instrumentControl").toBool())
+            QCOMPARE(widget->isEnabled(),(widget->property("instrumentControlKey").toString()=="ionHighVoltageOn" || widget->property("instrumentControlKey").toString()=="rfOn"));
     QCoreApplication::processEvents();
     QVERIFY(window.rect().contains(QRect(connectButton->mapTo(&window, QPoint()), connectButton->size())));
     QVERIFY(window.rect().contains(QRect(table->mapTo(&window, QPoint()), table->size())));
@@ -1179,7 +1537,7 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
         QVERIFY(button->minimumHeight() >= 78);
         QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonTextUnderIcon);
         QVERIFY(!button->icon().pixmap(72, 72).isNull());
-        QVERIFY(button->text().endsWith("已关闭"));
+        QVERIFY(button->text().endsWith(key=="internalCarrierGasOn"?"外载气":key=="pinchValveOn"?"关闭已确认":"已关闭"));
         QVERIFY(!button->text().contains('\n'));
     }
     window.findChild<QToolButton *>("instrumentControl_rfOn")->click();
@@ -1188,7 +1546,7 @@ void UiSmokeTests::instrumentPowerButtonsReflectPartialState() {
     on->click();
     QVERIFY(on->isChecked()); QVERIFY(!off->isChecked());
     QCOMPARE(state->text(), QString("已开启"));
-    QCOMPARE(ready->text(), QString("✓ 允许采集"));
+    QCOMPARE(ready->text(), QString("已就绪"));
     for (const auto &key : keys)
         QVERIFY(window.findChild<QToolButton *>("instrumentControl_" + key)->isChecked());
     off->toggle(); // Also used by native accessibility checkbox activation.
@@ -2409,6 +2767,27 @@ void UiSmokeTests::traceAnalysisUsesImportedScans() {
     shortTrace->findChild<QPushButton *>("calculateIntegral")->click();
     QVERIFY(shortTrace->findChild<QLabel *>("integrationResult")->text().startsWith("面积"));
     shortTrace->close();
+}
+
+void UiSmokeTests::manualQuadraticCalibrationWorksheet() {
+    Scientz::Ui::ThemeManager::apply(*qApp,Scientz::Ui::Density::Standard);
+    std::unique_ptr<QWidget> page(createInstrumentWorkbench("质量轴校准"));page->resize(600,560);page->show();
+    auto *table=page->findChild<QTableWidget *>("workbenchPoints");
+    auto *degree=page->findChild<QComboBox *>("massFitDegree");
+    auto *calculate=page->findChild<QPushButton *>("calculateWorkbench");
+    auto *status=page->findChild<QLabel *>("workbenchStatus");
+    auto *tabs=page->findChild<QTabWidget *>("workbenchTabs");
+    QCOMPARE(degree->currentText(),QString("二次拟合"));QCOMPARE(table->rowCount(),3);
+    calculate->click();QVERIFY(status->text().contains("有效"));
+    const double measured[]{126,237,303},theoretical[]{127,238,304};
+    for(int r=0;r<3;++r){table->item(r,0)->setText(QString::number(measured[r]));table->item(r,1)->setText(QString::number(theoretical[r]));}
+    calculate->click();QCOMPARE(tabs->currentIndex(),1);
+    auto *query=page->findChild<QDoubleSpinBox *>("massQuery");query->setValue(237);
+    page->findChild<QPushButton *>("applyMassAxis")->click();QVERIFY(status->text().contains("校正后 238 m/z"));
+    page->findChild<QPushButton *>("undoMassFit")->click();
+    page->findChild<QPushButton *>("applyMassAxis")->click();QVERIFY(status->text().contains("先拟合"));
+    tabs->setCurrentIndex(0);table->item(1,0)->setText("126");calculate->click();QVERIFY(status->text().contains("不可重复"));
+    table->item(1,0)->setText("237");table->setRowCount(2);calculate->click();QVERIFY(status->text().contains("至少 3 点"));
 }
 
 void UiSmokeTests::professionalOfflineToolsValidateAndRemainUsable() {

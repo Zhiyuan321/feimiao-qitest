@@ -28,10 +28,12 @@ public:
     // Input is the TCP unsigned 16-bit raw value, not the RS485 millivolt field.
     static double vacuumMbarFromRaw(quint16 value);
     static bool decodePressure(const NetworkFrame &frame, QVector<double> *volts);
+    static double pressureSampleIntervalMinutes(const QJsonObject &confirmedMethod);
     static QByteArray tuningCommand(bool enabled);
+    static QByteArray pinchValveCommand(bool enabled);
     static QByteArray detectionCommand(bool enabled);
     static QByteArray heartbeatCommand();
-    static QByteArray legacyMethodFollowupCommand();
+    static QByteArray ionSourceVoltageCommand(double voltageV, QString *error = nullptr);
     static QJsonObject fullscanCalibrationProfile();
     static QVector<double> fullscanMassAxis(const QJsonObject &parameters, QString *error = nullptr);
     // Fullscan 0x81 frame from the vendor V1.4 protocol and the supplied

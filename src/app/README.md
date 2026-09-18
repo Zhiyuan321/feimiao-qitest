@@ -1,7 +1,10 @@
 ﻿# 工作流程协调
 
+2026-09-18：内置适配器手动分子泵开启的宿主保护时限为11秒，给串口驱动10秒启动确认留出余量；其他普通设置每次显式恢复5秒。一键启停继续由设备各步骤管理时限，不受宿主5秒总时限影响。
+
 先读 AppController.h 的 public slots 和 signals，再找 cpp 中对应实现。
 - 控制按钮：updateInstrumentSetting；返回 true 是已提交，不是执行成功。
+- 内置网口/485按instrumentSettingAvailable逐项开放已接入控制，不把readOnly=false作为开放全部硬件的捷径。一键启停powerOn=true/false沿用确认和审计，但不使用5秒总超时；界面powerOff能力映射powerOn=false，重启读到运行状态即可关闭。每步仍由传输层限时确认，等真空/降温/转速时可cancelInstrumentStartup停止后续步骤。
 - 回执：构造函数内 settingFinished 连接；匹配请求号、控制键及实际回读。
 - 成功提示：预览路径只显示本地“已更新”；只有真实适配器的请求号、字段和回读全部匹配，才显示“设置成功”。
 - 检测：startDetection / cancelDetection / finishAcquisition。NetworkInstrument 完成开启确认、按预设秒数计时、关闭确认后进入保存。真实记录标为 DEVICE_UNVALIDATED，保留原始谱与扫描序列，不使用演示谱库。已指定库路径时冻结 .lib 内容，在完成后执行各个定性离子的一级阈值筛查，见 core/IonThresholdScreening；未配置或读取失败时保留原始数据并明确提示。
@@ -15,3 +18,5 @@
 
 状态从控制器发给界面；不要在 MainWindow 中单独保存另一套硬件真值。
 调试设备先看 ../device/README.md；回归测试是 tests/InstrumentControlTests.cpp、WorkspaceTests.cpp。
+
+2026-09-17离子源电压方法下发：old.pcapng中方法成功后0x50连续三条BE，用户确认设定3800 V；结合协议2.5V控制量对应5000V、控制量乘100，采用V/20编码为单字节（0～5000 V，20 V步进）。3500 V为AF，3800 V为BE，0仍发00。预检在任何写入之前完成；485只处理TD/离子阱/EFC/PWM，source由TCP接入，三次0x50均成功后才确认整套方法并恢复心跳。TD=0按用户确认仍发485 0x02数据0000，不跳过、不替换关加热命令。监控温度/电压保持设备回读，不能用设定值覆盖。此次旧抓包有气压波峰，新旧载气模式和多项方法参数不同，不能把0x50修复视为气压问题已实机解决。

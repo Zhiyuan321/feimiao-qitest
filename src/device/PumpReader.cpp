@@ -44,7 +44,7 @@ QVariantMap PumpReader::statusDetails() const {
 }
 bool PumpReader::exportFrames(const QString &path, const QVariantMap &busStatus, QString *error) const {
     QJsonArray records; for (const auto &record : records_) records.append(record);
-    const auto bytes = QJsonDocument(QJsonObject{{"mode", "共用485主控板及分子泵顺序查询；泵按mid(5,3)/mid(10,6)取数，398直接RPM、310/313除100为A/V、326直接℃（控制器即泵体）；未校验回复校验码，仅供回读核对，不作控制依据"},
+    const auto bytes = QJsonDocument(QJsonObject{{"mode", "共用485主控板及分子泵顺序查询；泵按mid(5,3)/mid(10,6)取数，398直接RPM、310/313除100为A/V、326直接℃（控制器即泵体）；未校验回复校验码，按用户确认以指令后新电流判断启停，>0开启、=0关闭"},
         {"busStatus", QJsonObject::fromVariantMap(busStatus)},
         {"pumpStatus", QJsonObject::fromVariantMap(statusDetails())}, {"records", records}}).toJson();
     QSaveFile file(path);

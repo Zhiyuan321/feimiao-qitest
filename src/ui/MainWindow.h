@@ -42,6 +42,7 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
+    void refreshInstrumentControls();
     QWidget *createStartupPage();
     QWidget *createWorkspacePage();
     QWidget *createHomePage();

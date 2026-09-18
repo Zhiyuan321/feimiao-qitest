@@ -603,9 +603,16 @@ QVariantMap AppController::pumpStatus() const {
 }
 bool AppController::exportPumpFrames(const QString &path) {
     const auto *serial = rs485Endpoint();
-    if (!serial || path.isEmpty()) return false;
+    if (path.isEmpty()) return false;
     QString error;
-    const bool saved = serial->exportFrames(path, &error);
+    bool saved=false;
+    if(serial) saved=serial->exportFrames(path,&error);
+    else {
+        const auto bytes=QJsonDocument(QJsonObject{{"note","当前没有485诊断会话；没有保留报文，不代表设备已连接"},
+            {"busStatus",QJsonObject{{"open",false},{"connected",false}}},{"records",QJsonArray{}}}).toJson();
+        QSaveFile file(path);saved=file.open(QIODevice::WriteOnly) && file.write(bytes)==bytes.size() && file.commit();
+        if(!saved) error=file.errorString();
+    }
     emit notice(saved ? "已导出485收发报文：" + path : "导出失败：" + error); return saved;
 }
 
@@ -623,7 +630,7 @@ bool AppController::updateInstrumentSetting(const QString &key, const QVariant &
     if (phase_ == Phase::Acquiring || phase_ == Phase::Analyzing) {
         emit notice("请等待检测完成后修改参数"); return false;
     }
-    if (instrument_->readOnly()) { emit notice("当前设备仅提供状态读取，硬件控制未开放"); return false; }
+    if (!instrumentSettingAvailable(key=="powerOn" && value.userType()==QMetaType::Bool && !value.toBool()?"powerOff":key)) { emit notice("当前操作未接入或设备正在处理其他指令"); return false; }
     // 固定顺序：并发限制 → 类型/范围 → 连接 → 厂家校验 → 用户确认 → 审计 → 下发。
     // 下方通用输入范围不是设备的物理安全范围；厂家适配器必须继续收紧校验。
     if (!pendingSettingId_.isEmpty()) { emit notice("请等待仪器确认上一项操作"); return false; }
@@ -668,12 +675,40 @@ bool AppController::updateInstrumentSetting(const QString &key, const QVariant &
         return false;
     }
     emit instrumentCommandPending(key, true);
-    settingTimeout_.start();
+    // Startup waits for measured vacuum, not a fixed five-second command timer.
+    // Each transport step still has its own bounded reply deadline.
+    if(key!="powerOn" || !qobject_cast<NetworkInstrument *>(instrument_.get())) {
+        // Let the serial driver's ten-second startup confirmation finish first.
+        const bool pumpStart=key=="molecularPumpOn" && value.toBool()
+            && (qobject_cast<NetworkInstrument *>(instrument_.get())
+                || qobject_cast<Rs485Instrument *>(instrument_.get()));
+        settingTimeout_.start(pumpStart?11000:5000);
+    }
     // A synchronous simulator ACK may clear pendingSettingId_ inside the slot.
     // Pass an independent ID so signal arguments and audit remain intact.
     const QString requestId = pendingSettingId_;
     instrument_->requestSetting(requestId, key, value);
     return true;
+}
+
+bool AppController::instrumentSettingAvailable(const QString &key) const {
+    if(!pendingSettingId_.isEmpty() || phase_==Phase::Acquiring || phase_==Phase::Analyzing) return false;
+    if(!instrument_->readOnly()) return true;
+    const auto *network=qobject_cast<NetworkInstrument *>(instrument_.get());
+    if((key=="powerOn" || key=="powerOff") && network) return network->validateSetting("powerOn",key=="powerOn").allowed;
+    if(key=="ionHighVoltageOn" || key=="rfOn") {
+        const auto *serial=network?network->serial():qobject_cast<Rs485Instrument *>(instrument_.get());
+        return serial && serial->health().connected && !serial->settingBusy()
+            && (!network || !network->settingBusy());
+    }
+    return network && network->supportsSetting(key) && !network->settingBusy()
+        && (key=="pinchValveOn" || network->serial()->health().connected)
+        && network->statusDetails().value("connected").toBool();
+}
+void AppController::cancelInstrumentStartup() {
+    if(pendingSettingKey_=="powerOn" && qobject_cast<NetworkInstrument *>(instrument_.get())) {
+        const QString id=pendingSettingId_; instrument_->cancelSetting(id);
+    }
 }
 
 QString AppController::aiSummary() const { return aiBridge_->statusSummary(); }

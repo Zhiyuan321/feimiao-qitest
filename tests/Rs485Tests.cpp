@@ -14,6 +14,80 @@ using namespace qitest::test;
 class Rs485Tests final : public QObject {
     Q_OBJECT
 private slots:
+    void serialPowerWaitsForAcknowledgementAndActualFlag_data() {
+        QTest::addColumn<int>("mode");QTest::addColumn<bool>("rf");
+        for(bool rf:{false,true}) {
+            const QByteArray prefix=rf?"rf-":"hv-";
+            QTest::newRow((prefix+"on-off").constData())<<0<<rf;
+            QTest::newRow((prefix+"rejected").constData())<<1<<rf;
+            QTest::newRow((prefix+"flag-mismatch").constData())<<2<<rf;
+            QTest::newRow((prefix+"missing-ack").constData())<<3<<rf;
+            QTest::newRow((prefix+"wrong-ack").constData())<<4<<rf;
+        }
+    }
+    void serialPowerWaitsForAcknowledgementAndActualFlag() {
+        QFETCH(int,mode);QFETCH(bool,rf);
+        const QString key=rf?"rfOn":"ionHighVoltageOn";const quint8 command=rf?0x10:0x09;
+        const int flag=rf?5:4;FakeSerial port;auto board=statusPayload();board[flag]=char(0xff);
+        bool commandSent=false,refreshFlag=false,target=true;
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) {
+                if(refreshFlag) board[flag]=target?char(0xee):char(0xff);
+                return frame(board);
+            }
+            if(quint8(r[2])==command) {
+                commandSent=true;target=quint8(r[5])==0x01;
+                if(mode==3) return QByteArray();
+                return frame(QByteArray(1,mode==1?char(0x12):char(0x11)),mode==4?(rf?0x09:0x10):command);
+            }
+            return QByteArray();
+        };
+        Rs485Instrument adapter(&port,nullptr);QVERIFY(adapter.openPort("TEST_ONLY"));
+        QTRY_VERIFY(adapter.health().connected);
+        QCOMPARE(adapter.confirmedSettings().value(key),QVariant(false));
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("hv-on",key,true);
+        QTRY_VERIFY(commandSent);
+        if(mode==0) {
+            QTest::qWait(200);QVERIFY(done.isEmpty()); // Positive ACK alone is insufficient.
+            refreshFlag=true;
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,5500);QCOMPARE(done[0][2].toBool(),mode==0);
+        QCOMPARE(port.writes.count(QByteArray::fromHex(rf?"558810000101aa":"558809000101aa")),1);
+        if(mode==0) {
+            QVERIFY(adapter.confirmedSettings().value(key).toBool());
+            adapter.requestSetting("hv-off",key,false);
+            QTRY_COMPARE(done.size(),2);QVERIFY(done[1][2].toBool());
+            QCOMPARE(port.writes.count(QByteArray::fromHex(rf?"558810000102aa":"558809000102aa")),1);
+            QCOMPARE(adapter.confirmedSettings().value(key),QVariant(false));
+        } else if(mode>=2) {
+            QVERIFY(!adapter.portOpen());port.deliver(frame(QByteArray::fromHex("11"),command));
+            QCOMPARE(done.size(),1);QVERIFY(!adapter.confirmedSettings().contains(key));
+        }
+    }
+    void controlsWaitForBoardStateAndRejectNegativeAck() {
+        FakeSerial port; auto payload=statusPayload();payload[6]=char(0xff);
+        int settling=-1;
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) {
+                if(settling>=0 && ++settling>=3) payload[6]=char(0xee);
+                return frame(payload);
+            }
+            if(quint8(r[2])==0x11) settling=0;
+            return frame(QByteArray(1,char(quint8(r[2])==2?0x12:0x11)),quint8(r[2]));
+        };
+        Rs485Instrument adapter(&port,nullptr);QVERIFY(adapter.openPort("TEST_ONLY"));QTRY_VERIFY(adapter.health().connected);
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("pump","diaphragmPumpOn",true);
+        QTRY_COMPARE(done.size(),1);QVERIFY(done[0][2].toBool());QVERIFY(settling>=3);
+        QCOMPARE(port.writes.count(Rs485Protocol::controlCommand(0x11,QByteArray::fromHex("01"))),1);
+        adapter.requestSetting("flow","efcMlMin",1.0);
+        QTRY_COMPARE(done.size(),2);QVERIFY(done[1][2].toBool());
+        QVERIFY(port.writes.contains(Rs485Protocol::controlCommand(0x12,QByteArray::fromHex("000a"))));
+        adapter.requestSetting("td","tdTemperatureC",250);
+        QTRY_COMPARE(done.size(),3);QVERIFY(!done[2][2].toBool());
+        QVERIFY(!adapter.confirmedSettings().contains("tdTemperatureC"));
+    }
     void highVoltageRawUsesFullUnsignedWord() {
         for (quint16 raw : {0, 5000, 5001, 37887, 37888, 37889, 65535}) {
             auto data=statusPayload();data[7]=char(raw>>8);data[8]=char(raw&0xff);
@@ -142,7 +216,7 @@ private slots:
         QCOMPARE(measurementText(5.03e-5, 'f', 2), QString("5.03E-05"));
         QCOMPARE(measurementText(1.0e20, 'f', 1), QString("1.0E+20"));
         QVERIFY(!adapter.confirmedSettings().contains("trapTemperatureC"));
-        QVERIFY(!adapter.confirmedSettings().contains("internalCarrierGasOn"));
+        QCOMPARE(adapter.confirmedSettings().value("internalCarrierGasOn").toBool(),true);
         QCOMPARE(adapter.statusDetails().value("highVoltageCurrentUa").toUInt(), 123u);
         QVERIFY(!adapter.validateSetting("powerOn", true).allowed);
         const int before = device.writes.size();
@@ -160,6 +234,35 @@ private slots:
         QVERIFY(std::isnan(adapter.health().ionSourceKv));
         QVERIFY(std::isnan(adapter.telemetry().ionSourceVoltageV));
     }
+    void efcMethodUsesConfirmedTenthsEncoding() {
+        FakeSerial device;
+        device.responder=[](const QByteArray &request) {
+            const quint8 command=quint8(request[2]);
+            return command==0x30 ? frame(statusPayload()) : frame(QByteArray::fromHex("11"),command);
+        };
+        Rs485Instrument adapter(&device,nullptr); QVERIFY(adapter.openPort("fixture"));
+        QTRY_VERIFY(adapter.health().connected);
+        QSignalSpy finished(&adapter,&Rs485Instrument::basicMethodParametersFinished);
+        auto parameters=MethodDraft::defaultParameters();
+        for (double flow : {0.0, 0.1, 1.0, 28.4, 50.0}) {
+            parameters.insert("carrier",flow);
+            const int before=device.writes.size(), count=finished.size();
+            QVERIFY(adapter.requestBasicMethodParameters("efc-fixture",parameters));
+            QTRY_COMPARE(finished.size(),count+1); QVERIFY(finished.last()[1].toBool());
+            const int encoded=int(std::llround(flow*10));
+            QByteArray expected=QByteArray::fromHex("5588120002");
+            expected.append(char(encoded>>8)); expected.append(char(encoded&255)); expected.append(char(0xaa));
+            int matches=0;
+            for(int i=before;i<device.writes.size();++i) if(device.writes[i]==expected) ++matches;
+            QCOMPARE(matches,1);
+        }
+        for (double flow : {-0.1, 0.01, 1.01, 50.1}) {
+            parameters.insert("carrier",flow);
+            QVERIFY(!adapter.validateBasicMethodParameters(parameters).allowed);
+        }
+        // Write scaling changes neither the established status layout nor its divisor.
+        QCOMPARE(adapter.telemetry().carrierGasFlowMlMin,28.4);
+    }
     void basicMethodStopsAtFirstRejectedAcknowledgement() {
         FakeSerial device;
         device.responder=[](const QByteArray &request){
@@ -176,7 +279,9 @@ private slots:
         QTRY_COMPARE(finished.size(),1);QVERIFY(!finished[0][1].toBool());
         QVector<int> controls;for(const auto &wire:device.writes)if(wire.size()>2&&quint8(wire[2])!=0x30)controls<<quint8(wire[2]);
         QCOMPARE(controls,QVector<int>({0x02,0x13}));
-        auto unsafe=parameters;unsafe.insert("source",1);QVERIFY(!adapter.validateBasicMethodParameters(unsafe).allowed);
+        auto networkVoltage=parameters;networkVoltage.insert("source",3500);
+        QVERIFY(adapter.validateBasicMethodParameters(networkVoltage).allowed); // TCP owns this field.
+
     }
     void confirmedIonSourceVoltageAndZero() {
         FakeSerial device;

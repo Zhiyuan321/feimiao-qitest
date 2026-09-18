@@ -1,6 +1,7 @@
 #include "device/NetworkInstrument.h"
 #include "NetworkTestFrames.h"
 #include "Rs485TestDevice.h"
+#include "PumpTestDevice.h"
 #include "core/MethodDraft.h"
 #include "core/ChromatogramEngine.h"
 #include <QFile>
@@ -9,13 +10,413 @@
 #include <QTemporaryDir>
 #include <QtTest>
 #include <cmath>
+#include <limits>
 using namespace qitest;
 class NetworkTests final : public QObject {
     Q_OBJECT
 private slots:
+    void slowPumpStartupKeepsBoardFreshAndCanResume_data() {
+        QTest::addColumn<bool>("confirmPump");
+        QTest::newRow("delayed-current")<<true;
+        QTest::newRow("timeout-then-warm-reconnect")<<false;
+    }
+    void slowPumpStartupKeepsBoardFreshAndCanResume() {
+        QFETCH(bool,confirmPump);
+        test::FakeSerial port;auto board=test::statusPayload();
+        bool pumpRunning=false,firstTd=true;QElapsedTimer pumpStart;
+        const auto td=Rs485Protocol::controlCommand(2,QByteArray::fromHex("00fa"));
+        const auto trap=Rs485Protocol::controlCommand(0x13,QByteArray::fromHex("0055"));
+        int boardQueriesDuringPumpWait=0;
+        port.responder=[&](const QByteArray &r) {
+            if(r==PumpProtocol::powerCommand(true)) {pumpStart.start();return QByteArray();}
+            if(r==Rs485Protocol::statusQuery()) {
+                if(pumpStart.isValid() && !pumpRunning) ++boardQueriesDuringPumpWait;
+                return test::frame(board);
+            }
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                if(confirmPump && pumpStart.isValid() && pumpStart.elapsed()>=6900) pumpRunning=true;
+                auto reply=test::pumpReply(i);if(i==1 && !pumpRunning)reply.replace(10,6,"000000");return reply;
+            }
+            if(r==td && firstTd) {
+                firstTd=false;
+                QTimer::singleShot(1200,&port,[&]{if(port.isOpen())port.deliver(test::frame(QByteArray::fromHex("11"),2));});
+                return QByteArray();
+            }
+            if(r.size()>5 && quint8(r[0])==0x55) {
+                const auto cmd=quint8(r[2]);
+                if(cmd==3)board[3]=char(0xee);
+                if(cmd==0x11)board[6]=char(0xee);
+                return test::frame(QByteArray::fromHex("11"),cmd);
+            }
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);
+        QVERIFY(serial->openPort("TEST_ONLY",true));NetworkInstrument adapter(std::move(serial));
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        QTimer updates;connect(&updates,&QTimer::timeout,&client,[&]{client.write(test::networkFrame(status));});updates.start(100);
+        QTRY_VERIFY(adapter.validateSetting("powerOn",true).allowed);
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("slow-start","powerOn",true);
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,15000);
+        QVERIFY2(done[0][2].toBool()==confirmPump,qPrintable(done[0][4].toString()));
+        QVERIFY2(boardQueriesDuringPumpWait>0,"Waiting for pump current must also refresh the main board");
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+        if(confirmPump) {
+            QVERIFY(adapter.serial()->portOpen());QVERIFY(adapter.serial()->health().connected);
+            QCOMPARE(port.writes.count(trap),1);return;
+        }
+        QVERIFY(adapter.serial()->portOpen());QVERIFY(adapter.serial()->health().connected);
+        QVERIFY(!port.writes.contains(trap));
+        QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("电流仍为0"));
+        QVERIFY(adapter.serial()->statusDetails()["lastFailure"].toMap()["reason"].toString().contains("485保持连接"));
+        QVERIFY(adapter.validateSetting("powerOn",true).allowed);
+        QTRY_VERIFY(adapter.validateSetting("powerOn",false).allowed); // Normal RPM polling resumes; shutdown remains available.
+        pumpRunning=true; // Hardware has started despite the missing timely confirmation.
+        QVERIFY(adapter.serial()->openPort("TEST_ONLY",true));
+        QTRY_VERIFY(adapter.confirmedSettings().value("powerOn").toBool());
+        QVERIFY(adapter.telemetry().tdTemperatureC>=220);QVERIFY(adapter.telemetry().ionTrapTemperatureC>=80);
+        const int writesBefore=port.writes.size();QTest::qWait(250);
+        QCOMPARE(port.writes.count(trap),0); // Reconnection never resumes controls automatically.
+        QVERIFY(adapter.statusDetails()["resumeHeatingAvailable"].toBool());
+        QVERIFY(adapter.validateSetting("powerOn",true).allowed);
+        adapter.requestSetting("resume-start","powerOn",true);
+        QTRY_COMPARE(done.size(),2);QVERIFY(done[1][2].toBool());
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+        QCOMPARE(port.writes.count(td),2);QCOMPARE(port.writes.count(trap),1);
+        for(int i=writesBefore;i<port.writes.size();++i) {
+            const auto &wire=port.writes[i];
+            QVERIFY(wire!=Rs485Protocol::controlCommand(3,QByteArray::fromHex("01")));
+            QVERIFY(wire!=Rs485Protocol::controlCommand(0x11,QByteArray::fromHex("01")));
+        }
+        QVERIFY(!adapter.validateSetting("powerOn",true).allowed);
+    }
+    void pinchValveRequiresMatchingReply_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("on-off")<<0;QTest::newRow("rejected")<<1;
+        QTest::newRow("timeout")<<2;QTest::newRow("disconnect")<<3;
+        QTest::newRow("cancel")<<4;
+    }
+    void pinchValveRequiresMatchingReply() {
+        QFETCH(int,mode);
+        NetworkInstrument adapter;
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        client.write(test::networkFrame(status));QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
+        QVERIFY(!adapter.confirmedSettings().contains("pinchValveOn"));
+        QVERIFY(!adapter.validateSetting("pinchValveOn",1).allowed);
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("valve-on","pinchValveOn",true);
+        QTRY_VERIFY(client.bytesAvailable()>0);
+        QCOMPARE(client.readAll(),test::networkFrame(QByteArray::fromHex("22"),0x10,0x22));
+        QVERIFY(adapter.settingBusy());QVERIFY(done.isEmpty());
+        QVERIFY(!adapter.validateSetting("pinchValveOn",false).allowed);
+        QString error;QVERIFY(!adapter.requestTuning(true,&error));QVERIFY(!adapter.startAcquisition(20,&error));
+        QVERIFY(!adapter.validateMethodParameters(MethodDraft::defaultParameters()).allowed);
+        client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x30));
+        client.write(test::networkFrame(QByteArray::fromHex("22"),0x10,0x22)); // Echo is not success.
+        QTest::qWait(40);QVERIFY(done.isEmpty());
+        if(mode==0 || mode==1) client.write(test::networkFrame(QByteArray(1,char(mode==0?0x11:0x12)),0x10,0x22));
+        if(mode==3) client.disconnectFromHost();
+        if(mode==4) adapter.cancelSetting("valve-on");
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,4000);QCOMPARE(done[0][2].toBool(),mode==0);
+        QVERIFY(!adapter.settingBusy());
+        if(mode==0) {
+            QVERIFY(adapter.confirmedSettings().value("pinchValveOn").toBool());
+            adapter.requestSetting("valve-off","pinchValveOn",false);
+            QTRY_VERIFY(client.bytesAvailable()>0);
+            QCOMPARE(client.readAll(),test::networkFrame(QByteArray::fromHex("23"),0x10,0x22));
+            client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x22));
+            QTRY_COMPARE(done.size(),2);QVERIFY(done[1][2].toBool());
+            QCOMPARE(adapter.confirmedSettings().value("pinchValveOn"),QVariant(false));
+            client.disconnectFromHost();QTRY_VERIFY(!adapter.statusDetails()["tcpConnected"].toBool());
+        } else if(mode>=2) {
+            QTRY_VERIFY(!adapter.statusDetails()["tcpConnected"].toBool());
+            client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x22));
+            QTest::qWait(20);QCOMPARE(done.size(),1); // A late ACK cannot revive the request.
+        }
+        QVERIFY(!adapter.confirmedSettings().contains("pinchValveOn"));
+    }
+    void runningPumpsResumeHeatingWithoutRestart_data() {
+        QTest::addColumn<bool>("rejectTrap");QTest::newRow("confirmed")<<false;QTest::newRow("rejected")<<true;
+    }
+    void runningPumpsResumeHeatingWithoutRestart() {
+        QFETCH(bool,rejectTrap);test::FakeSerial port;auto board=test::statusPayload();
+        board[15]=char(1100>>8);board[16]=char(1100);board[17]=char(375>>8);board[18]=char(375);
+        board[19]=char(328>>8);board[20]=char(328); // Video: 1.64 mL/min, 37.5 C trap.
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i))return test::pumpReply(i);
+            if(quint8(r[2])==0x02 || quint8(r[2])==0x13)
+                return test::frame(QByteArray::fromHex(rejectTrap && quint8(r[2])==0x13?"12":"11"),quint8(r[2]));
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        NetworkInstrument adapter(std::move(serial));QVERIFY(adapter.startListening("127.0.0.1",0,30000));
+        QTcpSocket client;client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        const auto pressure=[&](double p) {
+            const quint16 raw=quint16(std::round((std::log10(p)*1.286+6.143)*65536/14.25));
+            status[2]=char(raw>>8);status[3]=char(raw);client.write(test::networkFrame(status));
+        };
+        pressure(5e-2);QTRY_VERIFY(adapter.statusDetails()["resumeHeatingAvailable"].toBool());
+        const auto td=QByteArray::fromHex("558802000200faaa"), trap=QByteArray::fromHex("55881300020055aa");
+        QTest::qWait(250);QVERIFY(!port.writes.contains(td));QVERIFY(!port.writes.contains(trap)); // Readback alone sends nothing.
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("resume","powerOn",true);QTRY_VERIFY(port.writes.contains(td));
+        QTest::qWait(250);QVERIFY(!port.writes.contains(trap)); // Vacuum still above E-03.
+        pressure(5.02e-5);QTRY_COMPARE(done.size(),1);QCOMPARE(done[0][2].toBool(),!rejectTrap);
+        QCOMPARE(port.writes.count(td),1);QCOMPARE(port.writes.count(trap),1);
+        for(const auto &wire:port.writes) {
+            bool expected=wire==td || wire==trap || wire==Rs485Protocol::statusQuery();
+            for(int i=0;i<4;++i)expected=expected || wire==PumpProtocol::query(i);
+            QVERIFY2(expected,wire.toHex().constData()); // No gas-mode, diaphragm, or molecular-pump command.
+        }
+        QCOMPARE(adapter.telemetry().ionTrapTemperatureC,37.5); // ACK must not fabricate temperature.
+        if(!rejectTrap) {
+            QVERIFY(adapter.statusDetails()["startupTemperaturesConfirmed"].toBool());
+            QVERIFY(!adapter.validateSetting("powerOn",true).allowed);
+            QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("设定已确认"));
+            pressure(5.02e-5);QTest::qWait(250);QCOMPARE(port.writes.count(trap),1);
+        } else {
+            QVERIFY(!adapter.statusDetails()["startupTemperaturesConfirmed"].toBool());
+            QVERIFY(adapter.validateSetting("powerOn",true).allowed);
+        }
+        QVERIFY(adapter.serial()->portOpen());
+    }
+    void shutdownWaitsForCoolingAndRotor_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("complete")<<0;QTest::newRow("heat-reject")<<1;
+        QTest::newRow("heat-no-ack")<<2;QTest::newRow("heat-flag-mismatch")<<3;
+        QTest::newRow("cancel-cooling")<<4;QTest::newRow("disconnect-cooling")<<5;
+        QTest::newRow("speed-timeout")<<6;
+    }
+    void shutdownWaitsForCoolingAndRotor() {
+        QFETCH(int,mode);test::FakeSerial port;auto board=test::statusPayload();board[1]=char(0xee);
+        bool stopped=false;int rpm=1200;
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                if(i==0 && stopped && mode==6) return QByteArray();
+                auto reply=test::pumpReply(i);
+                if(i==0) reply.replace(10,6,QByteArray::number(rpm).rightJustified(6,'0'));
+                if(i==1 && stopped) reply.replace(10,6,"000000");
+                return reply;
+            }
+            if(r==PumpProtocol::powerCommand(false)) {stopped=true;return QByteArray();}
+            if(r==Rs485Protocol::controlCommand(0x08,QByteArray::fromHex("02"))) {
+                if(mode==2) return QByteArray();
+                if(mode!=1 && mode!=3) board[1]=char(0xff);
+                return test::frame(QByteArray::fromHex(mode==1?"12":"11"),0x08);
+            }
+            if(r==Rs485Protocol::controlCommand(0x11,QByteArray::fromHex("02"))) {
+                board[6]=char(0xff);return test::frame(QByteArray::fromHex("11"),0x11);
+            }
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        NetworkInstrument adapter(std::move(serial));QVERIFY(adapter.startListening("127.0.0.1",0,30000));
+        QTcpSocket client;client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        QTimer updates;connect(&updates,&QTimer::timeout,&client,[&]{if(client.state()==QAbstractSocket::ConnectedState)client.write(test::networkFrame(status));});
+        updates.start(200);client.write(test::networkFrame(status));
+        QTRY_VERIFY(adapter.validateSetting("powerOn",false).allowed);
+        const auto heating=QByteArray::fromHex("558808000102aa"), diaphragm=QByteArray::fromHex("558811000102aa");
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("shutdown","powerOn",false);
+        QTRY_VERIFY(port.writes.contains(heating));
+        QVERIFY(!adapter.validateSetting("powerOn",true).allowed);QVERIFY(!adapter.validateSetting("rfOn",true).allowed);
+        if(mode>=1 && mode<=3) {
+            QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,5500);QVERIFY(!done[0][2].toBool());QVERIFY(!stopped);
+            QVERIFY(!port.writes.contains(diaphragm));return;
+        }
+        QTRY_VERIFY(adapter.statusDetails()["startupMessage"].toString().contains("低于75"));
+        if(mode==4 || mode==5) {
+            if(mode==4) adapter.cancelSetting("shutdown");else client.disconnectFromHost();
+            QTRY_COMPARE(done.size(),1);QVERIFY(!done[0][2].toBool());QVERIFY(!stopped);return;
+        }
+        // 75.0 is not below 75; a cold TD reading does not bypass the trap.
+        board[15]=0;board[16]=char(200);board[17]=char(750>>8);board[18]=char(750);
+        QTest::qWait(1300);QVERIFY(!stopped);QVERIFY(!port.writes.contains(diaphragm));
+        board[17]=char(749>>8);board[18]=char(749);QTRY_VERIFY(stopped);
+        if(mode==6) {
+            QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,3000);QVERIFY(!done[0][2].toBool());
+            QVERIFY(!port.writes.contains(diaphragm));
+            port.deliver(test::pumpReply(0));QCOMPARE(done.size(),1);return;
+        }
+        QTest::qWait(5200); // Physical coast-down can exceed ordinary command deadlines.
+        QVERIFY(done.isEmpty());QVERIFY(adapter.serial()->portOpen());QVERIFY(!port.writes.contains(diaphragm));
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(false)),1);
+        rpm=0;QTRY_COMPARE(done.size(),1);QVERIFY(done[0][2].toBool());QCOMPARE(done[0][3],QVariant(false));
+        QCOMPARE(port.writes.count(diaphragm),1);QCOMPARE(port.writes.count(heating),1);
+        QVERIFY(port.writes.indexOf(heating)<port.writes.indexOf(PumpProtocol::powerCommand(false)));
+        QVERIFY(port.writes.indexOf(PumpProtocol::powerCommand(false))<port.writes.indexOf(diaphragm));
+        QVERIFY(adapter.serial()->portOpen());QVERIFY(!adapter.shutdownBusy());
+        QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("关机完成"));
+    }
+    void reconnectRestoresRunningStateWithoutPowerWrites() {
+        for(int session=0;session<2;++session) {
+            test::FakeSerial port;auto board=test::statusPayload();board[6]=char(0xee);
+            bool pumpRunning=true;
+            port.responder=[&](const QByteArray &r) {
+                if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+                for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                    auto reply=test::pumpReply(i);if(i==1 && !pumpRunning)reply.replace(10,6,"000000");return reply;
+                }
+                return QByteArray(); // No control response: recovery must never send controls.
+            };
+            auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);
+            QVERIFY(serial->openPort("TEST_ONLY",true));NetworkInstrument adapter(std::move(serial));
+            QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+            client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+            QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+            auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+            client.write(test::networkFrame(status));
+            QTRY_VERIFY(adapter.confirmedSettings().value("powerOn").toBool());
+            QVERIFY(adapter.statusDetails()["vacuumSystemReady"].toBool());
+            QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("设备运行中"));
+            QVERIFY(!adapter.validateSetting("powerOn",true).allowed);
+            QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+            adapter.requestSetting("repeat-start","powerOn",true);
+            QCOMPARE(done.size(),1);QVERIFY(!done[0][2].toBool());
+            QTest::qWait(1600);QVERIFY(adapter.serial()->portOpen());QVERIFY(adapter.serial()->health().connected);
+            for(const auto &wire:port.writes) {
+                bool query=wire==Rs485Protocol::statusQuery();
+                for(int i=0;i<4;++i) query=query || wire==PumpProtocol::query(i);
+                QVERIFY2(query,wire.toHex().constData());
+            }
+            client.disconnectFromHost();QTRY_VERIFY(!adapter.statusDetails()["connected"].toBool());
+            QVERIFY(!adapter.confirmedSettings().contains("powerOn"));QVERIFY(!adapter.statusDetails()["vacuumSystemReady"].toBool());
+            client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+            QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());client.write(test::networkFrame(status));
+            QTRY_VERIFY(adapter.confirmedSettings().value("powerOn").toBool());
+            pumpRunning=false;board[6]=char(0xff);
+            QTRY_COMPARE(adapter.confirmedSettings().value("powerOn"),QVariant(false));
+            QVERIFY(!adapter.statusDetails()["vacuumSystemReady"].toBool());
+            QVERIFY(adapter.validateSetting("powerOn",true).allowed);
+            adapter.serial()->closePort();QVERIFY(!adapter.confirmedSettings().contains("powerOn"));
+        }
+    }
+    void startupUsesActualCurrentAndDynamicGasVacuum_data() {
+        QTest::addColumn<int>("trapReply");
+        QTest::newRow("accepted-but-trap-still-cold")<<0;
+        QTest::newRow("trap-rejected")<<1;
+        QTest::newRow("trap-timeout")<<2;
+    }
+    void startupUsesActualCurrentAndDynamicGasVacuum() {
+        QFETCH(int,trapReply);
+        test::FakeSerial port; auto board=test::statusPayload();
+        board[15]=char(1100>>8);board[16]=char(1100);board[17]=char(375>>8);board[18]=char(375);
+        board[19]=0;board[20]=0; // Initially no carrier flow, irrespective of mode.
+        bool pumpRunning=false;
+        port.responder=[&](const QByteArray &r) {
+            if(r==PumpProtocol::powerCommand(true)) {pumpRunning=true;return QByteArray();}
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                auto reply=test::pumpReply(i); if(i==1 && !pumpRunning) reply.replace(10,6,"000000");return reply;
+            }
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            if(r.size()>5 && quint8(r[0])==0x55) {
+                const quint8 cmd=quint8(r[2]);
+                if(cmd==3) board[3]=quint8(r[5])==1?char(0xee):char(0xff);
+                if(cmd==0x11) board[6]=char(0xee);
+                if(cmd==0x13 && trapReply==2) return QByteArray();
+                if(cmd==0x13 && trapReply==1) return test::frame(QByteArray::fromHex("12"),cmd);
+                return test::frame(QByteArray::fromHex("11"),cmd);
+            }
+            return QByteArray();
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr); QVERIFY(serial->openPort("TEST_ONLY",true));
+        QTRY_VERIFY(serial->health().connected); NetworkInstrument adapter(std::move(serial));
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000)); QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21); status[9]=0;
+        const auto pressure=[&](double p) {
+            const quint16 raw=quint16(std::round((std::log10(p)*1.286+6.143)*65536/14.25));
+            status[2]=char(raw>>8);status[3]=char(raw);client.write(test::networkFrame(status));
+        };
+        pressure(8.01); QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
+        QVERIFY(!adapter.validateSetting("molecularPumpOn",true).allowed);
+        pressure(7.99);QTRY_VERIFY(adapter.validateSetting("molecularPumpOn",true).allowed);
+        pressure(8.01);QTRY_VERIFY(!adapter.validateSetting("molecularPumpOn",true).allowed);
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        QTRY_VERIFY(adapter.serial()->confirmedSettings().value("molecularPumpOn").isValid());
+        adapter.requestSetting("startup","powerOn",true);
+        const auto td=Rs485Protocol::controlCommand(2,QByteArray::fromHex("00fa"));
+        const auto trap=Rs485Protocol::controlCommand(0x13,QByteArray::fromHex("0055"));
+        QTRY_VERIFY(port.writes.contains(td)); QTest::qWait(100);
+        QVERIFY(!port.writes.contains(PumpProtocol::powerCommand(true))); QVERIFY(!port.writes.contains(trap));
+        QString error; QVERIFY(!adapter.startAcquisition(20,&error));
+        QVERIFY(!adapter.validateMethodParameters(MethodDraft::defaultParameters()).allowed);
+        QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("8 mbar"));
+        pressure(7.99); QTRY_VERIFY(pumpRunning);
+        QTRY_VERIFY(adapter.statusDetails()["startupMessage"].toString().contains("E-05"));
+        QVERIFY(!port.writes.contains(trap));
+        pressure(5e-4); QTest::qWait(100); QVERIFY(!port.writes.contains(trap));
+        pressure(5e-5); QTRY_VERIFY(port.writes.contains(trap));
+        QTRY_COMPARE(done.size(),1); QCOMPARE(done[0][2].toBool(),trapReply==0);
+        QTemporaryDir evidence;QString exportError;
+        QVERIFY(adapter.serial()->exportFrames(evidence.filePath("485.json"),&exportError));
+        QFile exported(evidence.filePath("485.json"));QVERIFY(exported.open(QIODevice::ReadOnly));
+        const auto history=QJsonDocument::fromJson(exported.readAll()).object()["busStatus"].toObject()["controlHistory"].toArray();
+        bool sent=false,ack=false,failed=false;
+        for(const auto &entry:history) {
+            const auto item=entry.toObject();if(item["key"].toString()!="trapTemperatureC") continue;
+            if(item["event"].toString()=="TX_ATTEMPT") sent=item["hex"].toString()=="55 88 13 00 02 00 55 aa";
+            if(item["event"].toString()=="ACK") {ack=true;QCOMPARE(item["accepted"].toBool(),trapReply==0);}
+            if(item["event"].toString()=="FAILED") failed=true;
+        }
+        QVERIFY(sent);QCOMPARE(ack,trapReply!=2);QCOMPARE(failed,trapReply==2);
+        if(trapReply!=0) {
+            QVERIFY(!adapter.statusDetails()["startupTemperaturesConfirmed"].toBool());
+            QVERIFY(!adapter.statusDetails()["startupMessage"].toString().contains("真空已就绪"));
+            if(trapReply==1) QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("离子阱85℃设定失败"));
+            QTest::qWait(150);QCOMPARE(done.size(),1);QCOMPARE(port.writes.count(trap),1);
+            return;
+        }
+        QCOMPARE(adapter.telemetry().ionTrapTemperatureC,37.5);
+        QVERIFY(adapter.statusDetails()["startupMessage"].toString().contains("设定已确认"));
+        QVERIFY(adapter.statusDetails()["vacuumSystemReady"].toBool());
+        pressure(5e-3); QTRY_VERIFY(!adapter.statusDetails()["vacuumSystemReady"].toBool());
+        board[19]=0;board[20]=char(200); // Valid status readback: 1 mL/min.
+        QTRY_VERIFY(adapter.statusDetails()["vacuumSystemReady"].toBool());
+        QCOMPARE(port.writes.count(trap),1);
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+        QCOMPARE(adapter.telemetry().carrierGasMode,QString("外载气"));
+        adapter.stopListening(); QVERIFY(!adapter.statusDetails()["vacuumSystemReady"].toBool());
+    }
+    void startupCancellationAndDisconnectStopFurtherCommands() {
+        test::FakeSerial port; auto board=test::statusPayload(); board[3]=char(0xee);
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {auto reply=test::pumpReply(i);if(i==1)reply.replace(10,6,"000000");return reply;}
+            return test::frame(QByteArray::fromHex("11"),quint8(r[2]));
+        };
+        auto serial=std::make_unique<Rs485Instrument>(&port,nullptr);QVERIFY(serial->openPort("TEST_ONLY",true));
+        QTRY_VERIFY(serial->health().connected);NetworkInstrument adapter(std::move(serial));
+        QVERIFY(adapter.startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        client.write(test::networkFrame(status));QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
+        QTRY_VERIFY(adapter.serial()->confirmedSettings().value("molecularPumpOn").isValid());
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        for(int i=0;i<2;++i) {
+            adapter.requestSetting(QString::number(i),"powerOn",true);
+            QTRY_VERIFY(adapter.statusDetails()["startupMessage"].toString().contains("等待真空"));
+            if(i==0) adapter.cancelSetting("0"); else client.disconnectFromHost();
+            QTRY_COMPARE(done.size(),i+1);QVERIFY(!done[i][2].toBool());QVERIFY(!adapter.startupBusy());
+        }
+        QVERIFY(!port.writes.contains(PumpProtocol::powerCommand(true)));
+    }
     void legacyCommandsAndFixedMethodFields() {
         QCOMPARE(NetworkProtocol::heartbeatCommand(),QByteArray::fromHex("5510300003010123fc1eaa"));
-        QCOMPARE(NetworkProtocol::legacyMethodFollowupCommand(),QByteArray::fromHex("55105000030101008556aa"));
+        QCOMPARE(NetworkProtocol::ionSourceVoltageCommand(0),QByteArray::fromHex("55105000030101008556aa"));
         const auto wire=NetworkProtocol::fullscanMethodCommand(MethodDraft::defaultParameters());
         const int expected[]{1,1,10000,50,3000,92,122,892,5000,325,549,579,590,380,0,
             20,20,500,500,500,1,3000,1000,30,50,10,100,100,0,0,802,446,207,651,674,0,0,9,1000,600,500,219,10,10,10};
@@ -27,15 +428,28 @@ private slots:
         }
         QCOMPARE(offset,93);
     }
+    void ionSourceVoltageMatchesCaptured3800V() {
+        QCOMPARE(NetworkProtocol::ionSourceVoltageCommand(3800),QByteArray::fromHex("55105000030101bef5d6aa"));
+        QCOMPARE(NetworkProtocol::ionSourceVoltageCommand(0),QByteArray::fromHex("55105000030101008556aa"));
+        NetworkProtocol parser;const auto frames=parser.feed(NetworkProtocol::ionSourceVoltageCommand(3500));
+        QCOMPARE(frames.size(),1);QCOMPARE(frames[0].payload,QByteArray::fromHex("af"));
+        QVERIFY(frames[0].receivedCrc==frames[0].calculatedCrc);
+        QCOMPARE(quint8(NetworkProtocol::ionSourceVoltageCommand(5000)[7]),quint8(250));
+        for(double invalid:{-1.0,3501.0,5001.0,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+            QString error;QVERIFY(NetworkProtocol::ionSourceVoltageCommand(invalid,&error).isEmpty());QVERIFY(!error.isEmpty());
+        }
+    }
     void legacyMethodFollowupsRequireAllAcks_data() {
-        QTest::addColumn<int>("mode");
-        QTest::newRow("success")<<0;
-        QTest::newRow("reject-second")<<1;
-        QTest::newRow("timeout-second")<<2;
-        QTest::newRow("disconnect-before-followup")<<3;
+        QTest::addColumn<int>("mode");QTest::addColumn<double>("source");
+        QTest::newRow("zero")<<0<<0.0;
+        QTest::newRow("3500V")<<0<<3500.0;
+        QTest::newRow("captured-3800V")<<0<<3800.0;
+        QTest::newRow("reject-second")<<1<<3800.0;
+        QTest::newRow("timeout-second")<<2<<3800.0;
+        QTest::newRow("disconnect-before-followup")<<3<<3800.0;
     }
     void legacyMethodFollowupsRequireAllAcks() {
-        QFETCH(int,mode);
+        QFETCH(int,mode);QFETCH(double,source);
         test::FakeSerial port;
         port.responder=[](const QByteArray &r){const quint8 c=quint8(r[2]);return c==0x30
             ?test::frame(test::statusPayload()):test::frame(QByteArray::fromHex("1100"),c);};
@@ -47,7 +461,16 @@ private slots:
         auto status=test::networkStatusWire().mid(7,21);status[9]=0;client.write(test::networkFrame(status));
         QTRY_VERIFY(adapter.statusDetails()["connected"].toBool());
         QSignalSpy done(&adapter,&IInstrumentAdapter::methodParametersFinished);
-        adapter.requestMethodParameters("legacy",MethodDraft::defaultParameters());
+        auto parameters=MethodDraft::defaultParameters();parameters.insert("source",source);
+        for(double invalid:{-20.0,3501.0,5020.0}) {
+            auto bad=parameters;bad.insert("source",invalid);
+            const int before=port.writes.size();
+            QVERIFY(!adapter.validateMethodParameters(bad).allowed);
+            adapter.requestMethodParameters("invalid",bad);
+            QCOMPARE(done.size(),1);QVERIFY(!done[0][1].toBool());done.clear();
+            QCOMPARE(port.writes.size(),before);QCOMPARE(client.bytesAvailable(),qint64(0));
+        }
+        adapter.requestMethodParameters("legacy",parameters);
         QTRY_VERIFY(client.bytesAvailable()>0);client.readAll();
         client.write(test::networkFrame(QByteArray::fromHex("11"),0x10,0x81));
         if(mode==3) {
@@ -56,7 +479,7 @@ private slots:
         }
         for(int i=0;i<3;++i) {
             QTRY_VERIFY(client.bytesAvailable()>0);
-            QCOMPARE(client.readAll(),QByteArray::fromHex("55105000030101008556aa"));
+            QCOMPARE(client.readAll(),NetworkProtocol::ionSourceVoltageCommand(source));
             QVERIFY(done.isEmpty());QVERIFY(adapter.confirmedMethodParameters().isEmpty());
             QVERIFY(!adapter.statusDetails()["heartbeatActive"].toBool());
             QString error;QVERIFY(!adapter.startAcquisition(1,&error));
@@ -75,6 +498,11 @@ private slots:
         QTRY_COMPARE(done.size(),1);QVERIFY(done[0][1].toBool());
         QCOMPARE(adapter.statusDetails()["methodFollowupsSent"].toInt(),3);
         QVERIFY(adapter.statusDetails()["heartbeatActive"].toBool());
+        QCOMPARE(adapter.confirmedMethodParameters().value("source").toDouble(),source);
+        QVERIFY(port.writes.contains(QByteArray::fromHex("55880200020000aa"))); // TD=0 really sent.
+        QCOMPARE(adapter.serial()->confirmedSettings().value("tdTemperatureC").toDouble(),0.0);
+        QCOMPARE(adapter.telemetry().tdTemperatureC,245.6); // Keep actual readback, not setpoint.
+        QCOMPARE(adapter.telemetry().ionSourceVoltageV,320.0);
     }
     void stopRetriesOnceWithoutExtendingDeadline_data() {
         QTest::addColumn<int>("mode");
@@ -572,6 +1000,11 @@ private slots:
         QVERIFY(QString::fromUtf8(coolingFile.readAll()).contains("方法返回值：0x29；冷却时间错误，设置失败"));
     }
     void pressureConversionUsesUnsignedBigEndianAnd65535() {
+        QCOMPARE(NetworkProtocol::pressureSampleIntervalMinutes(MethodDraft::defaultParameters()),4.0/1000/60);
+        auto method=MethodDraft::defaultParameters();method["cooling"]=2500;
+        QCOMPARE(NetworkProtocol::pressureSampleIntervalMinutes(method),8.0/1000/60);
+        method["cooling"]=0;QCOMPARE(NetworkProtocol::pressureSampleIntervalMinutes(method),0.0);
+        QCOMPARE(NetworkProtocol::pressureSampleIntervalMinutes({}),0.0);
         NetworkProtocol decoder; const auto frames=decoder.feed(test::networkFrame(QByteArray::fromHex("00008000ffff"),0x20,0x82));
         QCOMPARE(frames.size(),1);QVector<double> values;
         QVERIFY(NetworkProtocol::decodePressure(frames[0],&values)); QCOMPARE(values.size(),3);
@@ -580,6 +1013,18 @@ private slots:
         bad=frames[0];bad.command=0x81;QVERIFY(!NetworkProtocol::decodePressure(bad,&values));
         bad=frames[0];bad.payload=QByteArray(NetworkProtocol::MaximumWaveformPayload+2,0);
         QVERIFY(!NetworkProtocol::decodePressure(bad,&values));
+    }
+    void pressureKeepsEarlierPeaksWhenLastCycleIsFlat() {
+        NetworkInstrument adapter;QVERIFY(adapter.startListening("127.0.0.1",0,10000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,adapter.statusDetails()["port"].toUInt());
+        QTRY_VERIFY(adapter.statusDetails()["tcpConnected"].toBool());
+        const auto peak=test::networkFrame(QByteArray::fromHex("35004f003500"),0x20,0x82,0,0);
+        const auto flat=test::networkFrame(QByteArray::fromHex("0b000b010b00"),0x20,0x82,0,1);
+        client.write(peak.left(9));client.flush();QTest::qWait(10);QVERIFY(adapter.pressureVolts().isEmpty());
+        client.write(peak.mid(9)+flat);QTRY_COMPARE(adapter.pressureVolts().size(),6);
+        QVERIFY(adapter.pressureVolts()[1]>4);QVERIFY(adapter.pressureVolts().last()<0.7);
+        client.write(flat);QTest::qWait(50);QCOMPARE(adapter.pressureVolts().size(),6); // No duplicate plotted samples.
+        adapter.stopListening();QVERIFY(adapter.pressureVolts().isEmpty());
     }
     void pressureReadbackAndTuningAckAreSeparateFromPhysicalState() {
         NetworkInstrument adapter;QString error;QVERIFY(!adapter.requestTuning(true,&error));

@@ -1,5 +1,7 @@
 #include "device/Rs485Instrument.h"
+#include "device/StartupSequence.h"
 #include <cmath>
+#include <limits>
 #include "PumpTestDevice.h"
 #include <QFile>
 #include <QJsonDocument>
@@ -10,6 +12,244 @@ using namespace qitest;
 class PumpTests final : public QObject {
     Q_OBJECT
 private slots:
+    void zeroCurrentTimeoutKeepsConnectionAndPendingReply() {
+        test::FakeSerial port;QElapsedTimer sinceStart;
+        bool delayed=false,inFlight=false,overlap=false,currentOn=false;
+        port.responder=[&](const QByteArray &r) {
+            if(inFlight)overlap=true;
+            if(r==PumpProtocol::powerCommand(true)) {sinceStart.start();return r;} // Echo cannot confirm startup.
+            if(r==Rs485Protocol::statusQuery()) {
+                const auto reply=test::frame(test::statusPayload());
+                if(sinceStart.isValid() && sinceStart.elapsed()>9200 && !delayed) {
+                    delayed=true;inFlight=true;
+                    QTimer::singleShot(1000,&port,[&,reply]{inFlight=false;if(port.isOpen())port.deliver(reply.mid(8));});
+                    return reply.left(8);
+                }
+                return reply;
+            }
+            for(int i=0;i<4;++i)if(r==PumpProtocol::query(i)) {
+                auto reply=test::pumpReply(i);if(i==1 && !currentOn)reply.replace(10,6,"000000");return reply;
+            }
+            return QByteArray();
+        };
+        QTemporaryDir diagnostics;qputenv("QITEST_DIAGNOSTICS_DIR",diagnostics.path().toUtf8());
+        Rs485Instrument adapter(&port,nullptr);QVERIFY(adapter.openPort("TEST_ONLY",true));
+        QTRY_VERIFY(adapter.health().connected);QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        QElapsedTimer deadline;deadline.start();
+        adapter.requestSetting("zero-current","molecularPumpOn",true);
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,11500);
+        QVERIFY(deadline.elapsed()>=10000);
+        QVERIFY(!done[0][2].toBool());QVERIFY(done[0][4].toString().contains("电流仍为0"));
+        QVERIFY(adapter.portOpen());QVERIFY(adapter.health().connected);
+        QVERIFY(adapter.statusDetails()["lastFailure"].toMap()["pendingQuery"].toBool());
+        QFile saved(adapter.statusDetails()["diagnosticPath"].toString());QVERIFY(saved.open(QIODevice::ReadOnly));
+        const auto snapshot=QJsonDocument::fromJson(saved.readAll()).object();
+        QVERIFY(snapshot["busStatus"].toObject()["connected"].toBool());
+        QCOMPARE(snapshot["pumpStatus"].toObject()["molecularPumpCurrentA"].toDouble(),0.0);
+        QVERIFY(inFlight);QTRY_VERIFY(!inFlight);QTest::qWait(300);QVERIFY(!overlap);
+        QVERIFY(adapter.portOpen());QVERIFY(adapter.health().connected);
+        currentOn=true;QTRY_VERIFY(adapter.confirmedSettings().value("molecularPumpOn").toBool());
+        QCOMPARE(done.size(),1); // A later live current must not revive the failed operation.
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+        QVERIFY(adapter.pumpStatusDetails().contains("molecularPumpRpm"));
+        qunsetenv("QITEST_DIAGNOSTICS_DIR");
+    }
+    void powerTrafficDrainsBeforeNextQuery_data() {
+        QTest::addColumn<bool>("turnOn");QTest::newRow("start")<<true;QTest::newRow("stop")<<false;
+    }
+    void powerTrafficDrainsBeforeNextQuery() {
+        QFETCH(bool,turnOn);test::FakeSerial port;QElapsedTimer elapsed;bool sent=false,overlap=false;
+        port.responder=[&](const QByteArray &r) {
+            if(r==PumpProtocol::powerCommand(turnOn)) {
+                sent=true;elapsed.start();
+                QTimer::singleShot(50,&port,[&]{port.deliver("00110");});
+                QTimer::singleShot(90,&port,[&]{port.deliver("01006000000009\r");});
+                return QByteArray();
+            }
+            if(sent && elapsed.elapsed()<270) {overlap=true;return QByteArray::fromHex("1333536afe");}
+            if(r==Rs485Protocol::statusQuery())return test::frame(test::statusPayload());
+            for(int i=0;i<4;++i)if(r==PumpProtocol::query(i)) {
+                auto reply=test::pumpReply(i);
+                if(i==1)reply.replace(10,6,sent && turnOn?"000080":"000000");
+                if(i==0 && sent && !turnOn)reply.replace(10,6,"000000");
+                return reply;
+            }
+            return QByteArray();
+        };
+        Rs485Instrument adapter(&port,nullptr);QVERIFY(adapter.openPort("TEST_ONLY",true));
+        QTRY_VERIFY(adapter.health().connected);QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        if(turnOn)adapter.requestSetting("power","molecularPumpOn",true);else adapter.requestPumpShutdown("power");
+        QTRY_COMPARE(done.size(),1);QVERIFY(done[0][2].toBool());QVERIFY(!overlap);QVERIFY(adapter.portOpen());
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(turnOn)),1);
+    }
+    void powerUsesFreshCurrentAndNeverResends() {
+        test::FakeSerial port; bool hold=false; QByteArray current="000080";
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(test::statusPayload());
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                if(i==1 && hold) return QByteArray();
+                auto reply=test::pumpReply(i); if(i==1) reply.replace(10,6,current); return reply;
+            }
+            return QByteArray(); // Power commands have no dedicated ACK.
+        };
+        Rs485Instrument adapter(&port,nullptr); QVERIFY(adapter.openPort("TEST_ONLY",true));
+        QTRY_VERIFY(adapter.confirmedSettings().value("molecularPumpOn").toBool());
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        hold=true;
+        adapter.requestSetting("on","molecularPumpOn",true);
+        QTRY_VERIFY(port.writes.contains(PumpProtocol::powerCommand(true)));
+        QTest::qWait(100); QVERIFY(done.isEmpty());
+        QVERIFY(!adapter.confirmedSettings().contains("molecularPumpOn"));
+        port.deliver(PumpProtocol::powerCommand(true)+test::pumpReply(0));
+        QVERIFY(done.isEmpty()); // An echo and a speed reply cannot confirm current.
+        hold=false; port.deliver(test::pumpReply(1));
+        QTRY_COMPARE(done.size(),1); QVERIFY(done[0][2].toBool());
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+        current="000000";
+        adapter.requestSetting("off","molecularPumpOn",false);
+        QTRY_COMPARE(done.size(),2); QVERIFY(done[1][2].toBool());
+        QCOMPARE(done[1][3].toBool(),false);
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(false)),1);
+        QVERIFY(!adapter.confirmedSettings().value("molecularPumpOn").toBool());
+    }
+    void missingCurrentFailsAndLateReplyCannotConfirm() {
+        test::FakeSerial port;
+        port.responder=[](const QByteArray &r) { return r==Rs485Protocol::statusQuery()
+            ?test::frame(test::statusPayload()):QByteArray(); };
+        Rs485Instrument adapter(&port,nullptr); QVERIFY(adapter.openPort("TEST_ONLY",true));
+        QTRY_VERIFY(adapter.health().connected);
+        QSignalSpy done(&adapter,&IInstrumentAdapter::settingFinished);
+        adapter.requestSetting("on","molecularPumpOn",true);
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,2500);
+        QVERIFY(!done[0][2].toBool()); QVERIFY(!adapter.portOpen());
+        port.deliver(test::pumpReply(1)); QCOMPARE(done.size(),1);
+        QVERIFY(!adapter.confirmedSettings().contains("molecularPumpOn"));
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+    }
+    void startupSequenceRequiresConfirmedStagesAndFreshVacuum() {
+        StartupSequence sequence;
+        using Stage = StartupSequence::Stage;
+        QVERIFY(sequence.begin());
+        sequence.observeCarrierFlow(1.0, true);
+        QCOMPARE(sequence.pendingActions().size(), 2);
+        QCOMPARE(sequence.pendingActions()[1].value.toInt(), 250);
+        QVERIFY(!sequence.begin());
+        sequence.observeVacuum(1e-5, true);
+        QCOMPARE(sequence.stage(), Stage::Preparing);
+        sequence.confirmed("diaphragmPumpOn", true, true);
+        sequence.confirmed("tdTemperatureC", 250, true);
+        QCOMPARE(sequence.stage(), Stage::WaitingForRoughVacuum);
+        sequence.observeVacuum(8.0, true); // Equality must not start the molecular pump.
+        QCOMPARE(sequence.stage(), Stage::WaitingForRoughVacuum);
+        sequence.observeVacuum(7.99, true);
+        QCOMPARE(sequence.stage(), Stage::StartingPump);
+        QCOMPARE(sequence.pendingActions().first().key, QString("molecularPumpOn"));
+        sequence.observeVacuum(1e-5, true);
+        sequence.confirmed("tdTemperatureC", 250, true);
+        QCOMPARE(sequence.stage(), Stage::StartingPump); // Pressure/old ACK is insufficient.
+        sequence.confirmed("molecularPumpOn", true, true);
+        QCOMPARE(sequence.stage(), Stage::WaitingForVacuum);
+        QVERIFY(sequence.pendingActions().isEmpty());
+        sequence.observeVacuum(1e-2, true);
+        QCOMPARE(sequence.stage(), Stage::WaitingForVacuum);
+        sequence.observeVacuum(9.99e-3, true);
+        QCOMPARE(sequence.stage(), Stage::StartingTrapHeating);
+        QCOMPARE(sequence.pendingActions().first().value.toInt(), 85);
+        sequence.confirmed("trapTemperatureC", 85, true);
+        QCOMPARE(sequence.stage(), Stage::Complete);
+    }
+    void carrierFlowChangesVacuumCriteriaIncludingAfterCompletion() {
+        using Stage = StartupSequence::Stage;
+        StartupSequence sequence; QVERIFY(sequence.begin());
+        sequence.confirmed("diaphragmPumpOn", true, true);
+        sequence.confirmed("tdTemperatureC", 250, true);
+        sequence.observeVacuum(5e-4, true);
+        sequence.confirmed("molecularPumpOn", true, true);
+        sequence.observeVacuum(5e-5, true);
+        QCOMPARE(sequence.stage(), Stage::WaitingForVacuum); // Flow is still unknown.
+        sequence.observeCarrierFlow(0, false);
+        QVERIFY(!sequence.vacuumReady());
+        sequence.observeVacuum(1e-4, true);
+        sequence.observeCarrierFlow(0, true);
+        QCOMPARE(sequence.stage(), Stage::WaitingForVacuum); // E-04 fails with no gas.
+        sequence.observeVacuum(9.99e-5, true);
+        QCOMPARE(sequence.stage(), Stage::StartingTrapHeating);
+        QVERIFY(sequence.vacuumReady());
+        sequence.confirmed("trapTemperatureC", 85, true);
+        QCOMPARE(sequence.stage(), Stage::Complete);
+        sequence.observeCarrierFlow(0.1, true); // Gas enabled after startup completion.
+        sequence.observeVacuum(9.99e-3, true);
+        QVERIFY(sequence.vacuumReady());
+        QVERIFY(sequence.pendingActions().isEmpty()); // Never repeat the heating command.
+        sequence.observeVacuum(1e-2, true); QVERIFY(!sequence.vacuumReady());
+        sequence.observeVacuum(5e-3, true); QVERIFY(sequence.vacuumReady());
+        sequence.observeCarrierFlow(0, true); QVERIFY(!sequence.vacuumReady());
+        sequence.observeVacuum(5e-5, true); QVERIFY(sequence.vacuumReady());
+        sequence.observeCarrierFlow(-1, true); QVERIFY(!sequence.vacuumReady());
+        sequence.observeCarrierFlow(std::numeric_limits<double>::quiet_NaN(), true);
+        QVERIFY(!sequence.vacuumReady());
+        sequence.observeCarrierFlow(1, true); QVERIFY(sequence.vacuumReady());
+        sequence.observeVacuum(5e-5, false); QVERIFY(!sequence.vacuumReady());
+
+        StartupSequence flowing; QVERIFY(flowing.begin());
+        flowing.confirmed("diaphragmPumpOn", true, true);
+        flowing.confirmed("tdTemperatureC", 250, true);
+        flowing.observeVacuum(5e-4, true);
+        flowing.confirmed("molecularPumpOn", true, true);
+        flowing.observeCarrierFlow(0, true);
+        flowing.observeVacuum(5e-3, true);
+        QCOMPARE(flowing.stage(), Stage::WaitingForVacuum);
+        flowing.observeCarrierFlow(1, true); // Gas enabled while waiting for E-05.
+        QCOMPARE(flowing.stage(), Stage::StartingTrapHeating);
+    }
+    void molecularPumpEightMbarBoundary() {
+        using Stage=StartupSequence::Stage;
+        for(double p:{std::nextafter(8.0,0.0),7.99,1.0,5e-4,5e-5}) {
+            StartupSequence sequence;QVERIFY(sequence.begin());
+            sequence.confirmed("diaphragmPumpOn",true,true);
+            sequence.confirmed("tdTemperatureC",250,true);
+            sequence.observeVacuum(p,true);
+            QCOMPARE(sequence.stage(),Stage::StartingPump);
+        }
+        for(double p:{8.0,std::nextafter(8.0,9.0),8.01,10.0,1e4,0.0,-1.0,std::numeric_limits<double>::quiet_NaN(),
+                      std::numeric_limits<double>::infinity()})
+            QVERIFY(!StartupSequence::molecularPumpStartPressureAllowed(p));
+        for(double p:{8.0,8.01,10.0,1e4}) {
+            StartupSequence sequence;QVERIFY(sequence.begin());
+            sequence.confirmed("diaphragmPumpOn",true,true);
+            sequence.confirmed("tdTemperatureC",250,true);
+            sequence.observeVacuum(p,true);
+            QCOMPARE(sequence.stage(),Stage::WaitingForRoughVacuum);
+            QVERIFY(sequence.pendingActions().isEmpty());
+        }
+    }
+    void startupFailureNeverContinuesHeating() {
+        using Stage = StartupSequence::Stage;
+        for (double pressure : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+                                 std::numeric_limits<double>::infinity()}) {
+            StartupSequence sequence; QVERIFY(sequence.begin());
+            sequence.observeVacuum(pressure, true);
+            QCOMPARE(sequence.stage(), Stage::Failed);
+            sequence.confirmed("tdTemperatureC", 250, true);
+            sequence.observeVacuum(1e-5, true);
+            QVERIFY(sequence.pendingActions().isEmpty());
+        }
+        StartupSequence stale; QVERIFY(stale.begin());
+        stale.observeVacuum(1e-5, false); QCOMPARE(stale.stage(), Stage::Failed);
+        StartupSequence rejected; QVERIFY(rejected.begin());
+        rejected.confirmed("diaphragmPumpOn", true, false);
+        QCOMPARE(rejected.stage(), Stage::Failed);
+        StartupSequence mismatch; QVERIFY(mismatch.begin());
+        mismatch.confirmed("tdTemperatureC", 200, true);
+        QCOMPARE(mismatch.stage(), Stage::Failed);
+    }
+    void literalPowerCommandsAreNotQueryReplies() {
+        QCOMPARE(PumpProtocol::powerCommand(true).toHex(), QByteArray("303031313030313030363131313131313031350d"));
+        QCOMPARE(PumpProtocol::powerCommand(false).toHex(), QByteArray("303031313030313030363030303030303030390d"));
+        PumpReply reply;
+        QVERIFY(!PumpProtocol::extract(PumpProtocol::powerCommand(true), &reply));
+        QVERIFY(!PumpProtocol::extract(PumpProtocol::powerCommand(false), &reply));
+    }
     void highRawVoltageKeepsSharedPollingConnected() {
         test::FakeSharedBus transport;
         transport.mainPayload[7]=char(0x94);transport.mainPayload[8]=char(0x01);

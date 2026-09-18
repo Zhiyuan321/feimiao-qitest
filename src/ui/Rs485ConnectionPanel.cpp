@@ -4,6 +4,9 @@
 #include "domain/DisplayLabels.h"
 #include <QComboBox>
 #include <QFileDialog>
+#include <QDesktopServices>
+#include <QFileInfo>
+#include <QUrl>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
@@ -57,7 +60,15 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     layout->addLayout(actionRow);
     auto *status = new QLabel(this);
     status->setObjectName("rs485ConnectionStatus");
-    status->hide();
+    status->setWordWrap(true);layout->addWidget(status);
+    auto *openDiagnostics=new QPushButton("打开异常记录文件夹");openDiagnostics->setObjectName("rs485OpenDiagnostics");
+    openDiagnostics->setFixedHeight(32);openDiagnostics->hide();layout->addWidget(openDiagnostics);
+    connect(openDiagnostics,&QPushButton::clicked,this,[controller] {
+        const auto path=controller->rs485Status().value("diagnosticPath").toString();
+        if(!path.isEmpty())QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+    });
+    auto *exportResult=new QLabel(this);exportResult->setObjectName("rs485ExportResult");
+    exportResult->setWordWrap(true);exportResult->hide();layout->addWidget(exportResult);
     auto *pumpStatus = new QLabel(this); pumpStatus->setObjectName("pumpStatus"); pumpStatus->hide();
     auto *table = new QTableWidget(0, 3);
     table->setObjectName("rs485Readings");
@@ -105,8 +116,11 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
     connect(disconnectButton, &QPushButton::clicked, controller, &AppController::disconnectRs485);
     connect(simulationButton, &QPushButton::clicked, controller, &AppController::useSimulatedInstrument);
     connect(save, &QPushButton::clicked, this, [=] {
-        const auto path = QFileDialog::getSaveFileName(this, "导出主控板与分子泵收发报文", "485报文.json", "JSON (*.json)");
-        if (!path.isEmpty()) controller->exportPumpFrames(path);
+        auto path = QFileDialog::getSaveFileName(this, "导出主控板与分子泵收发报文", "485报文.json", "JSON (*.json)",nullptr,QFileDialog::DontUseNativeDialog);
+        if(path.isEmpty())return;
+        if(!path.endsWith(".json",Qt::CaseInsensitive))path+=".json";
+        const bool saved=controller->exportPumpFrames(path);
+        exportResult->setText(saved?"已导出："+path:"导出失败，请检查保存位置是否可写："+path);exportResult->show();
     });
     const auto update = [=] {
         const auto data = controller->rs485Status();
@@ -126,10 +140,10 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         refresh->setEnabled(!open && !busy);
         ports->setEnabled(hasPort && !open && !busy);
         const auto pump = controller->pumpStatus();
-        save->setEnabled(pump.value("retainedRecords").toInt() > 0);
+        save->setEnabled(true);
         connectButton->setToolTip(hasPort ? "连接串口并读取设备状态" : "连接设备后刷新串口列表");
         disconnectButton->setToolTip(open ? "断开当前串口" : "连接串口后可断开");
-        save->setToolTip(save->isEnabled() ? "导出已接收的485报文" : "收到有效485报文后可导出");
+        save->setToolTip("导出485诊断；断开或没有有效报文也可导出");
         pumpStatus->setText(pump.value("message", "勾选后，连接一次即可依次读取主控板和分子泵。").toString());
         disconnectButton->setEnabled(open);
         const bool pending = controller->realConnectionPending();
@@ -138,6 +152,13 @@ Rs485ConnectionPanel::Rs485ConnectionPanel(AppController *controller, QWidget *p
         status->setText(active ? data.value("message").toString()
             + (connected ? " · 更新于" + data.value("lastReadback").toString() : QString())
             : "选择连接仪器的串口。仅查询状态，不发送加热、电源或泵控制命令。");
+        const auto failure=data.value("lastFailure").toMap();
+        if(!open && !failure.isEmpty() && data.value("message")==failure.value("reason"))
+            status->setText("485已断开："+failure.value("reason").toString()+"\n可直接导出报文，无需重新连接。");
+        if(!data.value("diagnosticPath").toString().isEmpty()) status->setText(status->text()+"\n异常报文已自动保存。");
+        if(!data.value("diagnosticError").toString().isEmpty()) status->setText(status->text()+"\n自动保存失败："+data.value("diagnosticError").toString());
+        status->setToolTip(data.value("diagnosticPath").toString());
+        openDiagnostics->setVisible(!data.value("diagnosticPath").toString().isEmpty());
         ports->setToolTip(status->text());
         table->setToolTip(status->text());
         table->setVisible(true);

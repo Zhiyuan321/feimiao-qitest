@@ -11,6 +11,9 @@ struct PumpReply {
 class PumpProtocol {
 public:
     static QByteArray query(int index);
+    // User-supplied literals, 2026-09-17. Building a frame does not send it or
+    // establish an acknowledgement contract; startup must still wait for one.
+    static QByteArray powerCommand(bool enabled);
     static QByteArray parameter(int index);
     static bool extract(const QByteArray &wire, PumpReply *reply);
     QVector<QByteArray> feed(const QByteArray &bytes);

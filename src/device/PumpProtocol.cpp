@@ -1,6 +1,9 @@
 #include "device/PumpProtocol.h"
 
 namespace qitest {
+QByteArray PumpProtocol::powerCommand(bool enabled) {
+    return enabled ? QByteArray("0011001006111111015\r") : QByteArray("0011001006000000009\r");
+}
 QByteArray PumpProtocol::query(int index) {
     const QByteArray queries[]{"0010039802=?115\r", "0010031002=?099\r",
         "0010031302=?102\r", "0010032602=?106\r"};

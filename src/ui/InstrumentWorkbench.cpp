@@ -124,17 +124,27 @@ QWidget *createInstrumentWorkbench(const QString &kind,QWidget *parent) {
         auto *options=new QHBoxLayout;content->addLayout(options);
         auto *degree=new RoundedComboBox;degree->addItems({"线性拟合","二次拟合"});degree->setProperty("sciRole","analysisInput");degree->setMinimumHeight(44);degree->setVisible(mass);options->addWidget(degree,1);
         auto *mode=new RoundedComboBox;mode->addItems({"Fullscan","SIM","MS/MS"});mode->setProperty("sciRole","analysisInput");mode->setMinimumHeight(44);mode->setVisible(mass);options->addWidget(mode,1);
+        degree->setObjectName("massFitDegree");mode->setObjectName("massFitMode");
+        if(mass) {
+            degree->setCurrentIndex(1);
+            auto *hint=new QLabel("手填实测值与理论值，例如实测237、理论238。二次拟合至少需要3组不同质量数。");
+            hint->setWordWrap(true);hint->setObjectName("massCalibrationHint");content->addWidget(hint);
+        }
         QMap<QString,QDoubleSpinBox *> rf;
         if(!mass){auto *form=new QFormLayout;form->setRowWrapPolicy(QFormLayout::WrapLongRows);resultLayout->addLayout(form);for(const auto &k:QStringList{"RF低","RF高","AC低","AC高"})rf.insert(k,number(form,k+"（单位待确认）",k,0));}
         body->setToolTip(mass?"本地拟合：实测 m/z → 理论 m/z；仅在校准点范围内换算，不修改原始谱图。":"离线记录 RF/AC 范围与实测响应。最佳点仅为输入数据中响应最大的一点，不是厂家自动调谐算法。");
         auto *t=table(content,mass?QStringList{"实测 m/z","理论 m/z"}:QStringList{"RF 设定值","实测响应"});t->setObjectName("workbenchPoints");
+        if(mass) {
+            t->setRowCount(3);
+            for(int r=0;r<3;++r)for(int c=0;c<2;++c)t->setItem(r,c,new QTableWidgetItem);
+        }
         auto *row=new QHBoxLayout;content->addLayout(row);auto *add=button(row,"加一行","addWorkbenchRow");auto *remove=button(row,"删所选","removeWorkbenchRow");auto *calculate=button(row,mass?"拟合校准":"查找最大响应","calculateWorkbench");
         calculate->setProperty("sciRole","primary");
         auto fit=std::make_shared<MassAxisFit>();auto result=new QLabel;result->setWordWrap(true);result->setObjectName("workbenchResult");resultLayout->addWidget(result);
         auto *conversion=new QFormLayout;resultLayout->addLayout(conversion);auto *query=number(conversion,"待换算实测 m/z","massQuery",100);query->setVisible(mass);conversion->labelForField(query)->setVisible(mass);
         auto *apply=new QPushButton("计算校正质量数");apply->setObjectName("applyMassAxis");apply->setMinimumHeight(44);apply->setVisible(mass);resultLayout->addWidget(apply);
         apply->setProperty("sciRole","primary");
-        auto *undo=new QPushButton("撤销拟合");undo->setMinimumHeight(44);undo->setVisible(mass);resultLayout->addWidget(undo);
+        auto *undo=new QPushButton("撤销拟合");undo->setObjectName("undoMassFit");undo->setMinimumHeight(44);undo->setVisible(mass);resultLayout->addWidget(undo);
         resultLayout->addStretch();
         const auto invalidate=[=]{*dirty=true;*fit=MassAxisFit{};result->clear();};
         QObject::connect(t,&QTableWidget::cellChanged,page,[=]{invalidate();});QObject::connect(degree,QOverload<int>::of(&QComboBox::currentIndexChanged),page,[=]{invalidate();});QObject::connect(mode,QOverload<int>::of(&QComboBox::currentIndexChanged),page,[=]{invalidate();});
@@ -145,6 +155,7 @@ QWidget *createInstrumentWorkbench(const QString &kind,QWidget *parent) {
             QString error;QVector<MassAxisPair> points;if(!pairsFromTable(t,&points,&error)){status->setText(error);return;}
             if(mass){*fit=MassAxisCalibration::fit(points,degree->currentIndex()+1);if(!fit->valid){status->setText(fit->error);return;}
                 result->setText(QString("局部校准范围 %1–%2 m/z；训练点 RMS 残差 %3 m/z\ny = %4 + %5·z + %6·z²，z = (实测值 − %7) / %8\n未做独立标准验证，未同步仪器。").arg(fit->minimum).arg(fit->maximum).arg(fit->rms,0,'g',8).arg(fit->coefficients[0],0,'g',10).arg(fit->coefficients[1],0,'g',10).arg(fit->coefficients[2],0,'g',10).arg(fit->center).arg(fit->scale));status->setText("本地拟合完成");
+                tabs->setCurrentWidget(resultPage);
             }else{if(points.isEmpty()){status->setText("请录入实测响应数据");return;}
                 const auto best=std::max_element(points.begin(),points.end(),[](const MassAxisPair &a,const MassAxisPair &b){return a.theoretical<b.theoretical;});result->setText(QString("输入数据最大响应：RF=%1，响应=%2；仅供人工复核，未设置仪器").arg(best->measured).arg(best->theoretical));}
         });

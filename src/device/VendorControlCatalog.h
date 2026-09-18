@@ -21,6 +21,8 @@ class VendorControlCatalog {
 public:
     static const QVector<VendorControlSpec> &controls() {
         static const QVector<VendorControlSpec> entries{
+            {"rfOn", "RF（24V）", "RS-485", {}, 0x10, true, false, 1, 1},
+            {"ionHighVoltageOn", "离子源高压（HV 24V）", "RS-485", {}, 0x09, true, false, 1, 1},
             {"observationLightOn", "喷雾观察灯", "RS-485", {}, 0x01, true, true, 1, 1},
             {"coolingFanOn", "风扇（FAN）", "RS-485", {}, 0x05, true, true, 1, 1},
             {"wastePumpOn", "废液泵", "RS-485", {}, 0x06, true, true, 1, 1},
@@ -30,7 +32,7 @@ public:
             {"trapTemperatureC", "离子阱温度设定", "RS-485", " ℃", 0x13, false, false, 65535, 1},
             {"inletFlowPercent", "进气泵 PWM", "RS-485", " %", 0x14, false, false, 100, 1},
             {"pumpFlowPercent", "抽气泵 PWM", "RS-485", " %", 0x04, false, false, 100, 1},
-            {"efcMlMin", "EFC 流量", "RS-485", " mL/min", 0x12, false, false, 50, 1000}
+            {"efcMlMin", "EFC 流量", "RS-485", " mL/min", 0x12, false, false, 50, 10}
         };
         return entries;
     }

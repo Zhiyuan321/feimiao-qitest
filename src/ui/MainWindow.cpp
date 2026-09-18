@@ -313,29 +313,44 @@ MainWindow::MainWindow(AppController *controller, QWidget *parent)
     });
     connect(controller_, &AppController::instrumentConfirmationRequired, this,
         [this](const QString &key, const QVariant &value) {
-            if (QMessageBox::warning(this, "确认仪器操作",
-                    "此操作会改变真实仪器状态。请核对设备、安全互锁和目标值。\n"
-                    + key + " → " + value.toString() + "\n是否继续？",
-                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
-                controller_->updateInstrumentSetting(key, value, true);
+            auto *dialog=new QDialog(this);
+            dialog->setObjectName("instrumentControlConfirmation"); dialog->setWindowTitle("确认仪器操作");
+            dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->setWindowModality(Qt::WindowModal);
+            auto *layout=new QVBoxLayout(dialog);
+            const QMap<QString,QString> names{{"powerOn","一键开机"},{"diaphragmPumpOn","隔膜泵"},
+                {"molecularPumpOn","分子泵"},{"internalCarrierGasOn","载气模式"},{"pinchValveOn","夹管阀"},
+                {"ionHighVoltageOn","离子源高压（HV 24V）"},{"rfOn","RF（24V）"}};
+            const auto *spec=VendorControlCatalog::find(key);
+            const QString title=key=="powerOn" ? (!value.toBool()?QString("一键关机")
+                :controller_->networkStatus().value("resumeHeatingAvailable").toBool()?QString("继续开机升温"):QString("一键开机"))
+                :names.value(key,spec?spec->title:key);
+            const QString target=key=="internalCarrierGasOn"?(value.toBool()?"内载气":"外载气")
+                :value.userType()==QMetaType::Bool?(value.toBool()?"开启":"关闭"):value.toString();
+            auto *label=new QLabel("请核对设备状态和目标设置：\n"+title+" → "+target,dialog);
+            label->setWordWrap(true);layout->addWidget(label);
+            auto *buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel,dialog);
+            buttons->button(QDialogButtonBox::Ok)->setText("确认");
+            buttons->button(QDialogButtonBox::Ok)->setObjectName("confirmInstrumentControl");
+            buttons->button(QDialogButtonBox::Cancel)->setText("取消");
+            buttons->button(QDialogButtonBox::Cancel)->setDefault(true);layout->addWidget(buttons);
+            connect(buttons,&QDialogButtonBox::rejected,dialog,&QDialog::reject);
+            connect(buttons,&QDialogButtonBox::accepted,dialog,[this,dialog,key,value] {
+                dialog->accept(); controller_->updateInstrumentSetting(key,value,true);
+            });
+            dialog->resize(360,170);dialog->open();
         });
     connect(controller_, &AppController::instrumentCommandPending, this,
-        [this](const QString &, bool pending) {
-            for (auto *widget : findChildren<QWidget *>())
-                if (widget->property("instrumentControl").toBool()) widget->setEnabled(!pending && !controller_->instrumentReadOnly());
+        [this](const QString &, bool) {
+            refreshInstrumentControls();
         });
     connect(controller_, &AppController::instrumentSettingsChanged, this, [this] {
-        if (controller_->instrumentReadOnly())
-            for (auto *widget : findChildren<QWidget *>())
-                if (widget->property("instrumentControl").toBool()) widget->setEnabled(false);
+        refreshInstrumentControls();
         if (settingsDetailAction_ && settingsDetailStack_->currentIndex() == 0)
             populateSettingsDetail(settingsDetailAction_->property("module").toString(),
                                    settingsDetailAction_->property("subpage").toString());
     });
     QTimer::singleShot(0, this, [this] {
-        if (controller_->instrumentReadOnly())
-            for (auto *widget : findChildren<QWidget *>())
-                if (widget->property("instrumentControl").toBool()) widget->setEnabled(false);
+        refreshInstrumentControls();
     });
     connect(controller_, &AppController::aiStateChanged, this, [this](const QString &state) {
         if (aiStatus_) { aiStatus_->setText(state); aiStatus_->show(); }
@@ -409,6 +424,12 @@ QWidget *MainWindow::createStartupPage() {
     layout->addWidget(makeLabel("程序  ·  方法与谱库  ·  仪器状态  ·  真空与温控", "startupSteps"), 0, Qt::AlignHCenter);
     layout->addStretch();
     return page;
+}
+
+void MainWindow::refreshInstrumentControls() {
+    for(auto *widget:findChildren<QWidget *>())
+        if(widget->property("instrumentControl").toBool())
+            widget->setEnabled(controller_->instrumentSettingAvailable(widget->property("instrumentControlKey").toString()));
 }
 
 void MainWindow::startStartupSequence() {
@@ -1290,8 +1311,14 @@ QWidget *MainWindow::createSettingsPage() {
     off->setChecked(!initialSettings.value("powerOn").toBool());
     oneKeyRow->addWidget(on);
     oneKeyRow->addWidget(off);
+    auto *cancelStartup=new QPushButton("停止流程");
+    cancelStartup->setObjectName("cancelInstrumentStartup");
+    cancelStartup->setToolTip("停止后续开机步骤，已启动的部件保持现状");
+    cancelStartup->setVisible(false); oneKeyRow->addWidget(cancelStartup);
+    connect(cancelStartup,&QPushButton::clicked,controller_,&AppController::cancelInstrumentStartup);
     auto *powerState = makeLabel({}, "contextTitle");
     powerState->setObjectName("instrumentStartupState");
+    powerState->setWordWrap(true);
     oneKeyRow->addWidget(powerState);
     const QString startupHint = "常用部件的启停状态以仪器回执为准。";
     on->setToolTip(startupHint); off->setToolTip(startupHint);
@@ -1299,11 +1326,17 @@ QWidget *MainWindow::createSettingsPage() {
     controlLayout->addLayout(oneKeyRow);
     auto *readiness = new QGridLayout;
     readiness->setSpacing(8);
+    const auto conditionsReady = [this] {
+        const auto status=controller_->networkStatus();
+        return status.contains("operatingConditionsReady")
+            ? status.value("operatingConditionsReady").toBool() : controller_->health().ready;
+    };
+    const bool initiallyReady=conditionsReady();
     const QList<QPair<QString, QString>> readinessValues{
         {"真空系统", measurementText(initialHealth.vacuumMbar, 'E', 2) + " mbar"},
         {"腔内温度", measurementText(controller_->telemetry().ionTrapTemperatureC) + " ℃"},
         {"TD 温度", measurementText(initialHealth.tdTemperatureC, 'f', 1) + " ℃"},
-        {"系统状态", initialHealth.ready ? "✓ 允许采集" : "需要复核"}
+        {"系统状态", initiallyReady ? "已就绪" : "未就绪"}
     };
     for (int i = 0; i < readinessValues.size(); ++i) {
         auto *tile = new QWidget;
@@ -1314,16 +1347,17 @@ QWidget *MainWindow::createSettingsPage() {
         tileLayout->addWidget(makeLabel(readinessValues[i].first, "metadata"));
         auto *value = makeLabel(readinessValues[i].second, "contextTitle");
         value->setObjectName(QString("instrumentReadiness%1").arg(i));
-        if (initialHealth.ready) value->setProperty("sciState", "healthy");
+        if (initiallyReady) value->setProperty("sciState", "healthy");
         connect(controller_, &AppController::instrumentSettingsChanged, value,
-            [this, value, i](const QVariantMap &settings) {
+            [this, value, i, conditionsReady](const QVariantMap &) {
                 const auto health = controller_->health();
+                const bool ready=conditionsReady();
                 const QStringList values{measurementText(health.vacuumMbar, 'E', 2) + " mbar",
                     measurementText(controller_->telemetry().ionTrapTemperatureC) + " ℃",
                     measurementText(health.tdTemperatureC, 'f', 1) + " ℃",
-                    health.ready ? "✓ 允许采集" : "未就绪"};
+                    ready ? "已就绪" : "未就绪"};
                 value->setText(values[i]);
-                value->setProperty("sciState", health.ready ? "healthy" : "");
+                value->setProperty("sciState", ready ? "healthy" : "");
                 value->style()->unpolish(value); value->style()->polish(value);
             });
         tileLayout->addWidget(value);
@@ -1349,7 +1383,7 @@ QWidget *MainWindow::createSettingsPage() {
     manualGrid->setHorizontalSpacing(6);
     manualGrid->setVerticalSpacing(6);
     manualGrid->setAlignment(Qt::AlignTop);
-    const QStringList controls{"RF", "离子源高压", "隔膜泵", "分子泵", "夹管阀", "内载气"};
+    const QStringList controls{"RF", "离子源高压", "隔膜泵", "分子泵", "夹管阀", "载气模式"};
     const QStringList controlKeys{"rfOn", "ionHighVoltageOn", "diaphragmPumpOn",
         "molecularPumpOn", "pinchValveOn", "internalCarrierGasOn"};
     const QStringList controlIcons{"control-rf", "control-ion", "control-diaphragm",
@@ -1370,12 +1404,15 @@ QWidget *MainWindow::createSettingsPage() {
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         manualGrid->addWidget(button, i / 3, i % 3);
         button->setProperty("instrumentControl", true);
+        button->setProperty("instrumentControlKey",controlKeys[i]);
         button->setToolTip("点击提交操作；没有仪器回执不视为成功。");
         const auto refresh = [button, label = controls[i], key = controlKeys[i]](const QVariantMap &settings) {
             const QSignalBlocker blocker(button);
             const QVariant value = settings.value(key);
             button->setChecked(value.isValid() && value.toBool());
-            button->setText(label + (!value.isValid() ? " 状态未知" : value.toBool() ? " 已开启" : " 已关闭"));
+            button->setText(label + (!value.isValid() ? " 状态未知" : key=="internalCarrierGasOn"
+                ? (value.toBool()?" 内载气":" 外载气") : key=="pinchValveOn"
+                ? (value.toBool()?" 开启已确认":" 关闭已确认") : value.toBool() ? " 已开启" : " 已关闭"));
         };
         refresh(initialSettings);
         connect(controller_, &AppController::instrumentSettingsChanged, button, refresh);
@@ -1389,6 +1426,17 @@ QWidget *MainWindow::createSettingsPage() {
     for (int column = 0; column < 3; ++column) manualGrid->setColumnStretch(column, 1);
     manualPanel->setLayout(manualGrid);
     commonLayout->addWidget(manualPanel);
+    auto *flowRow=new QHBoxLayout;
+    flowRow->addWidget(makeLabel("载气流速", "metadata"));
+    auto *flow=new QDoubleSpinBox;
+    flow->setObjectName("carrierFlowSetpoint"); flow->setRange(0,50); flow->setDecimals(1);
+    flow->setSingleStep(0.1); flow->setSuffix(" mL/min");
+    flow->setValue(1.0); flowRow->addWidget(flow,1);
+    auto *applyFlow=new QPushButton("应用流速");
+    applyFlow->setObjectName("applyCarrierFlow"); applyFlow->setProperty("instrumentControl",true);
+    applyFlow->setProperty("instrumentControlKey","efcMlMin"); flowRow->addWidget(applyFlow);
+    connect(applyFlow,&QPushButton::clicked,this,[this,flow] {controller_->updateInstrumentSetting("efcMlMin",flow->value());});
+    commonLayout->addLayout(flowRow);
     commonLayout->addStretch();
     controlGroups->addWidget(commonControls);
     auto *auxiliary = new QWidget;
@@ -1432,6 +1480,8 @@ QWidget *MainWindow::createSettingsPage() {
             + "；" + entry->transport + "；操作结果以设备回读为准。";
         part->setToolTip(guidance);
         apply->setToolTip(guidance);
+        apply->setProperty("instrumentControlKey",entry->key);
+        apply->setEnabled(controller_->instrumentSettingAvailable(entry->key));
     };
     connect(part, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
         [this, part, switchValue, numericValue, refreshAuxiliary] {
@@ -1449,9 +1499,25 @@ QWidget *MainWindow::createSettingsPage() {
     refreshAuxiliary();
     settingsDetailStack_->addWidget(controlPage);
     on->setProperty("instrumentControl", true);
+    on->setProperty("instrumentControlKey","powerOn");
     off->setProperty("instrumentControl", true);
-    const auto refreshPower = [on, off, powerState, controlKeys](const QVariantMap &settings) {
+    off->setProperty("instrumentControlKey","powerOff");
+    off->setToolTip("关闭TD和离子阱加热；离子阱低于75℃后停分子泵，转速归零后停隔膜泵");
+    const auto refreshPower = [this,on, off, powerState, controlKeys,cancelStartup](const QVariantMap &settings) {
         const QSignalBlocker a(on), b(off);
+        const auto network=controller_->networkStatus();
+        const bool resume=network.value("resumeHeatingAvailable").toBool();
+        on->setText(resume?"继续开机":"开");
+        on->setToolTip(resume?"保持正在运行的泵和载气模式，继续设置温度并等待真空条件":"一键开机");
+        const bool shutdown=network.value("shutdownBusy").toBool();
+        cancelStartup->setVisible(network.value("startupBusy").toBool() || shutdown);
+        cancelStartup->setToolTip(shutdown?"停止后续关机步骤，已执行的操作保持现状":"停止后续开机步骤，已启动的部件保持现状");
+        if(network.contains("startupMessage")) {
+            powerState->setText(network.value("startupMessage").toString());
+            on->setChecked(settings.value("powerOn").toBool() && !resume);
+            off->setChecked(!shutdown && !network.value("startupBusy").toBool()
+                && settings.value("powerOn").isValid() && !settings.value("powerOn").toBool());return;
+        }
         const QVariant value = settings.value("powerOn");
         bool known = value.isValid(), allOn = value.toBool(), allOff = !value.toBool();
         for (const auto &key : controlKeys) {
@@ -1691,8 +1757,13 @@ QWidget *MainWindow::createSettingsPage() {
     });
     coolingButton->setProperty("instrumentControl", true);
     instrumentPowerButton->setProperty("instrumentControl", true);
+    coolingButton->setProperty("instrumentControlKey","coolingModeOn");
+    instrumentPowerButton->setProperty("instrumentControlKey",initialSettings.value("powerOn").toBool()?"powerOff":"powerOn");
     connect(controller_, &AppController::instrumentSettingsChanged, coolingButton,
-        [coolingButton, instrumentPowerButton](const QVariantMap &settings) {
+        [this,coolingButton, instrumentPowerButton](const QVariantMap &settings) {
+            const QString key=settings.value("powerOn").toBool()?"powerOff":"powerOn";
+            instrumentPowerButton->setProperty("instrumentControlKey",key);
+            instrumentPowerButton->setEnabled(controller_->instrumentSettingAvailable(key));
             coolingButton->setText(settings.value("coolingModeOn").toBool() ? "停止降温" : "开始降温");
             instrumentPowerButton->setText(settings.value("powerOn").toBool() ? "关闭仪器电源" : "开启仪器电源");
         });

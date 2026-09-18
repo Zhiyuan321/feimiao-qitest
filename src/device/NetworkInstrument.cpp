@@ -3,11 +3,61 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QFileInfo>
+#include <QUuid>
 
 namespace qitest {
 NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QObject *parent)
     : IInstrumentAdapter(parent), serial_(serial ? std::move(serial) : std::make_unique<Rs485Instrument>()) {
-    connect(serial_.get(), &IInstrumentAdapter::stateChanged, this, &IInstrumentAdapter::stateChanged);
+    connect(serial_.get(), &IInstrumentAdapter::stateChanged, this, [this] {
+        if(shutdownBusy()) {
+            if(!serial_->health().connected) finishShutdown(false,"485回读失效，关机流程已停止");
+            else {
+                if(shutdown_.stage()==ShutdownSequence::Stage::Cooling
+                    && (!serial_->confirmedSettings().value("molecularPumpOn").isValid()
+                        || !serial_->pumpStatusDetails().contains("molecularPumpRpm")))
+                    finishShutdown(false,"分子泵回读失效，关机流程已停止");
+                else if(shutdown_.stage()==ShutdownSequence::Stage::Cooling
+                    && serial_->confirmedSettings().value("heatingOn").toBool())
+                    finishShutdown(false,"加热状态重新开启，关机流程已停止");
+                else {
+                    shutdown_.observeTemperature(serial_->telemetry().ionTrapTemperatureC,true);
+                    advanceShutdown();
+                }
+            }
+        }
+        startup_.observeCarrierFlow(serial_->health().carrierGasMlMin,serial_->health().connected);
+        const auto stage=startup_.stage();
+        if(stage==StartupSequence::Stage::PreparingRunning || stage==StartupSequence::Stage::WaitingForVacuum || stage==StartupSequence::Stage::StartingTrapHeating
+            || stage==StartupSequence::Stage::Complete) {
+            const auto pump=serial_->confirmedSettings().value("molecularPumpOn");
+            if(!pump.isValid() || !pump.toBool()) {
+                startup_.observeCarrierFlow(0,false);
+                if(startupBusy()) stopStartup("分子泵电流为零或读数失效，已停止后续开机步骤");
+            }
+        }
+        if(startupBusy() && !serial_->health().connected) stopStartup("485状态失效，已停止后续开机步骤");
+        advanceStartup(); emit stateChanged();
+    });
+    connect(serial_.get(), &IInstrumentAdapter::settingFinished, this,
+        [this](const QString &id,const QString &key,bool success,const QVariant &actual,const QString &error) {
+            if(id==shutdownStepId_ && !id.isEmpty()) {
+                shutdownStepId_.clear();
+                if(!success) {finishShutdown(false,error);return;}
+                shutdown_.confirmed(key,success,actual);advanceShutdown();emit stateChanged();return;
+            }
+            // Child shutdown requests never escape as separate user operations,
+            // including a late failure emitted after stateChanged aborted the sequence.
+            if(id.startsWith("shutdown-step/")) return;
+            if(id==startupStepId_ && !id.isEmpty()) {
+                startupStepId_.clear(); startupStepKey_.clear();
+                if(!success) { stopStartup(key=="trapTemperatureC"?"离子阱85℃设定失败："+error:error); return; }
+                if(startupPreparingMode_) { startupPreparingMode_=false; startup_.begin(); }
+                else startup_.confirmed(key,actual,success);
+                advanceStartup(); emit stateChanged(); return;
+            }
+            if(id.startsWith("startup-step/")) return;
+            emit settingFinished(id,key,success,actual,error);
+        });
     connect(serial_.get(), &Rs485Instrument::basicMethodParametersFinished, this,
         [this](const QString &id,bool success,const QJsonObject &,const QString &error) {
             if (id!=methodRequestId_ || id.isEmpty()) return;
@@ -15,6 +65,10 @@ NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QO
             sendFullscanMethod();
         });
     server_.setMaxPendingConnections(1);
+    pinchTimer_.setSingleShot(true); pinchTimer_.setInterval(3000);
+    connect(&pinchTimer_,&QTimer::timeout,this,[this] {
+        closePeer("夹管阀应答超时，状态未知；已隔离旧连接，请重连后核对");
+    });
     heartbeatTimer_.setInterval(2000);
     heartbeatTimer_.setTimerType(Qt::PreciseTimer);
     connect(&heartbeatTimer_, &QTimer::timeout, this, &NetworkInstrument::sendHeartbeat);
@@ -35,12 +89,19 @@ NetworkInstrument::NetworkInstrument(std::unique_ptr<Rs485Instrument> serial, QO
     staleTimer_.setSingleShot(true);
     connect(&staleTimer_, &QTimer::timeout, this, [this] {
         fresh_ = false; status_ = {}; if(!acquisitionBusy()) decoder_.reset();
+        pinchConfirmed_=QVariant();
+        if(!pinchRequestId_.isEmpty()) closePeer("网口状态失效，夹管阀操作未确认");
+        startup_.observeVacuum(0,false); stopStartup("网口真空读数超时，开机流程已停止");
+        if(shutdownBusy()) finishShutdown(false,"网口回读超时，关机流程已停止");
         recordConnectionEvent("status_timeout", peer_);
         message_ = "网口状态超时，读数已失效；等待新的有效状态报文";
         emit stateChanged();
     });
     pressureTimer_.setSingleShot(true);
-    connect(&pressureTimer_, &QTimer::timeout, this, [this] {pressureVolts_.clear();pressureCycle_=-1;emit stateChanged();});
+    connect(&pressureTimer_, &QTimer::timeout, this, [this] {
+        if(!pressureRunTrace_) {pressureVolts_.clear();pressureCycle_=-1;}
+        emit stateChanged();
+    });
     tuningTimer_.setSingleShot(true); tuningTimer_.setInterval(3000);
     connect(&tuningTimer_, &QTimer::timeout, this, [this] {
         tuningPending_=false;
@@ -110,12 +171,17 @@ bool NetworkInstrument::startListening(const QString &address, quint16 port, int
     emit stateChanged(); return true;
 }
 void NetworkInstrument::closePeer(const QString &message) {
+    const QString pinchId=pinchRequestId_;
+    pinchTimer_.stop(); pinchRequestId_.clear(); pinchConfirmed_=QVariant();
+    startup_.observeVacuum(0,false); stopStartup(message);
+    if(shutdownBusy()) finishShutdown(false,message);
     heartbeatTimer_.stop(); heartbeatPausedForMethod_=false;
     if(acquisitionBusy()) finishNetworkAcquisition(false,message);
     stopRetryTimer_.stop(); stopReplyGuardTimer_.stop();
     methodFollowupDelay_.stop();
     pressureTimer_.stop(); pressureVolts_.clear(); pressureCycle_=-1;
     pressureAcquisitionCompleted_=false;
+    pressureRunTrace_=false;pressureDisplayLimit_=false;pressureSampleIntervalMinutes_=0;
     if(peer_ || !confirmedMethodParameters_.isEmpty())
         methodConfirmationReason_="网口连接变化后需重新确认方法："+message;
     confirmedMethodParameters_={};
@@ -132,6 +198,7 @@ void NetworkInstrument::closePeer(const QString &message) {
         old->abort(); old->deleteLater();
     }
     peerAddress_.clear(); message_ = message; emit stateChanged();
+    if(!pinchId.isEmpty()) emit settingFinished(pinchId,"pinchValveOn",false,{},message);
 }
 void NetworkInstrument::stopListening() {
     server_.close(); updateTimer_.stop(); closePeer("网口已停止监听");
@@ -225,14 +292,28 @@ void NetworkInstrument::receive() {
                     .arg(nextPressureCycle_).arg(frame.cycleIndex()));
             else if(!collecting || acquisitionError_.isEmpty()) {
                 if(collecting) ++nextPressureCycle_;
-                pressureVolts_=pressure; ++pressureFrameCount_;
-                pressureCycle_=frame.cycleIndex();
+                // Keep every sample of the run; do not overwrite earlier peaks with the last cycle.
+                // Outside an acquisition, a reset/gap starts a new display segment.
+                if(!pressureRunTrace_ && frame.cycleIndex()!=pressureCycle_ && frame.cycleIndex()!=pressureCycle_+1) pressureVolts_.clear();
+                if(!pressureRunTrace_) pressureSampleIntervalMinutes_=NetworkProtocol::pressureSampleIntervalMinutes(confirmedMethodParameters_);
+                if(frame.cycleIndex()!=pressureCycle_ && (!pressureRunTrace_ || frame.cycleIndex()==pressureCycle_+1)) {
+                    constexpr int maximumPressurePoints=1000000;
+                    const int room=maximumPressurePoints-pressureVolts_.size();
+                    pressureVolts_+=pressure.mid(0,room);
+                    if(room<pressure.size())pressureDisplayLimit_=true;
+                    pressureCycle_=frame.cycleIndex();
+                }
+                ++pressureFrameCount_;
                 // A final pressure frame may follow the stop acknowledgement in the same read.
                 if(!pressureAcquisitionCompleted_) pressureTimer_.start();
             }
         }
         const bool tuningAck=frame.action==0x10 && frame.command==0x20 && frame.count==1 && frame.index==1
             && frame.payload.size()==1 && (quint8(frame.payload[0])==0x11 || quint8(frame.payload[0])==0x12);
+        bool pinchSuccess=false;
+        const bool pinchAck=NetworkProtocol::decodeCommandAcknowledgement(frame,0x22,&pinchSuccess);
+        if(pinchAck && !pinchRequestId_.isEmpty())
+            finishPinchValve(pinchSuccess,pinchSuccess?QString():QString("设备拒绝夹管阀指令，实际状态未知"));
         if(tuningAck && tuningPending_) {
             tuningTimer_.stop(); tuningPending_=false;
             tuningMessage_=quint8(frame.payload[0])==0x11
@@ -266,7 +347,9 @@ void NetworkInstrument::receive() {
         if (decoded) {
             status_ = next; fresh_ = true; lastReadback_ = QDateTime::currentDateTime();
             staleTimer_.start(); message_ = "网口状态回读正常；Fullscan 方法与定时采集可用";
-        } else if(!pressureDecoded && !tuningAck && !methodAck && !followupAck && !acquisitionFrame && !heartbeatReply) ++unparsedFrames_;
+            startup_.observeVacuum(NetworkProtocol::vacuumMbarFromRaw(status_.vacuumRaw),true);
+            advanceStartup();
+        } else if(!pressureDecoded && !tuningAck && !pinchAck && !methodAck && !followupAck && !acquisitionFrame && !heartbeatReply) ++unparsedFrames_;
         recentFrames_.append(QJsonObject{{"time", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
             {"peer", peerAddress_}, {"direction", "RX"}, {"decodedStatus", decoded}, {"decodedPressure", pressureDecoded}, {"tuningAck", tuningAck}, {"methodAck",methodAck},
             {"heartbeatReply",heartbeatReply},{"methodFollowupAck",followupAck},{"action", frame.action}, {"command", frame.command}, {"frameCount", frame.count},
@@ -287,6 +370,7 @@ void NetworkInstrument::receive() {
 }
 bool NetworkInstrument::requestTuning(bool enabled, QString *error) {
     const auto fail=[error](const QString &message){if(error)*error=message;return false;};
+    if(settingBusy()) return fail("请等待开机或部件操作完成");
     if(acquisitionBusy()) return fail("检测期间不能切换调谐");
     if(!peer_ || peer_->state()!=QAbstractSocket::ConnectedState) return fail("请先连接网口仪器");
     if(tuningPending_ || !methodRequestId_.isEmpty()) return fail("正在等待上一条设备指令应答");
@@ -303,6 +387,7 @@ bool NetworkInstrument::requestTuning(bool enabled, QString *error) {
     emit stateChanged();return true;
 }
 CommandValidation NetworkInstrument::validateMethodParameters(const QJsonObject &parameters) const {
+    if(settingBusy()) return {false,"请等待开机或部件操作完成"};
     if(acquisitionBusy()) return {false,"检测期间不能修改方法"};
     if (!peer_ || peer_->state()!=QAbstractSocket::ConnectedState || !fresh_)
         return {false,"网口尚未收到有效状态回读"};
@@ -310,6 +395,9 @@ CommandValidation NetworkInstrument::validateMethodParameters(const QJsonObject 
     if (tuningPending_ || !methodRequestId_.isEmpty()) return {false,"正在等待上一条设备指令应答"};
     QString error;
     if (NetworkProtocol::fullscanMethodCommand(parameters,&error).isEmpty()) return {false,error};
+    if (!parameters.value("source").isDouble()) return {false,"离子源电压须填写数值"};
+    if (NetworkProtocol::ionSourceVoltageCommand(parameters.value("source").toDouble(),&error).isEmpty())
+        return {false,error};
     const auto serialValidation=serial_->validateBasicMethodParameters(parameters);
     if (!serialValidation.allowed) return serialValidation;
     return {true,{}};
@@ -346,7 +434,9 @@ void NetworkInstrument::sendLegacyMethodFollowup() {
     if(!peer_ || peer_->state()!=QAbstractSocket::ConnectedState) {
         closePeer("方法后续指令发送失败，等待仪器重连"); return;
     }
-    const auto wire=NetworkProtocol::legacyMethodFollowupCommand();
+    QString error;
+    const auto wire=NetworkProtocol::ionSourceVoltageCommand(pendingMethodParameters_.value("source").toDouble(),&error);
+    if(wire.isEmpty()) {finishMethod(false,error);return;}
     ++methodFollowupsSent_; methodStage_=3;
     recentFrames_.append(QJsonObject{{"time",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
         {"direction","TX"},{"peer",peerAddress_},{"action",0x10},{"command",0x50},
@@ -396,11 +486,224 @@ CommandValidation NetworkInstrument::validate(const InstrumentCommand &command) 
     if(command.id=="CancelAcquisition" && acquisitionBusy()) return {true,{}};
     return {false, "此入口仅支持状态读取；调谐请使用射频页，定时采集请使用样品分析页"};
 }
-CommandValidation NetworkInstrument::validateSetting(const QString &, const QVariant &) const {
-    return {false, "此入口不支持通用硬件设置；仅射频页支持调谐启停"};
+CommandValidation NetworkInstrument::validateSetting(const QString &key, const QVariant &value) const {
+    if(settingBusy() || acquisitionBusy() || tuningPending_ || !methodRequestId_.isEmpty())
+        return {false,"请等待当前设备操作完成"};
+    if(key=="ionHighVoltageOn" || key=="rfOn") {
+        if(fresh_ && status_.experimentRunning) return {false,"检测运行中不能切换电源"};
+        return serial_->validateSetting(key,value);
+    }
+    if(!fresh_ || status_.experimentRunning) return {false,"需要有效网口状态且检测已停止"};
+    if(key=="pinchValveOn") {
+        if(value.userType()!=QMetaType::Bool) return {false,"夹管阀开关须为是或否"};
+        return {true,{}};
+    }
+    if(key=="powerOn") {
+        if(value.userType()!=QMetaType::Bool) return {false,"启停值须为是或否"};
+        if(!value.toBool()) {
+            const auto check=serial_->validateSetting("molecularPumpOn",false);
+            if(!check.allowed) return check;
+            const auto parts=serial_->confirmedSettings(), readings=serial_->pumpStatusDetails();
+            if(!parts.value("molecularPumpOn").isValid() || !readings.contains("molecularPumpRpm"))
+                return {false,"请等待分子泵电流和转速回读"};
+            if(!parts.value("heatingOn").toBool() && !parts.value("diaphragmPumpOn").toBool()
+                && !parts.value("molecularPumpOn").toBool() && readings.value("molecularPumpRpm").toDouble()==0)
+                return {false,"加热和真空泵已关闭"};
+            return {true,{}};
+        }
+        const auto pump=serial_->confirmedSettings().value("molecularPumpOn");
+        if(!pump.isValid()) return {false,"请等待有效的分子泵电流回读，再判断是否需要开机"};
+        if(pump.toBool()) {
+            if(!observedPowerState().isValid()) return {false,"分子泵运行中，请先核对隔膜泵状态"};
+            if(!runningStartupNeedsHeating()) return {false,startupTemperaturesConfirmed()
+                ?"启动温度设定已确认，请核对实测温度；无需重复启动泵"
+                :"设备已运行且无需补充升温，无需重复开机"};
+            return serial_->validateSetting("tdTemperatureC",StartupSequence::TdTargetC);
+        }
+        return serial_->validateSetting("molecularPumpOn",true);
+    }
+    const double vacuum=health().vacuumMbar;
+    if(key=="molecularPumpOn" && value.toBool() && !StartupSequence::molecularPumpStartPressureAllowed(vacuum))
+        return {false,"真空度须小于8 mbar（8E0），才能开启分子泵"};
+    if(key=="diaphragmPumpOn" && !value.toBool()) {
+        const auto pump=serial_->confirmedSettings().value("molecularPumpOn");
+        if(!pump.isValid() || pump.toBool()) return {false,"请先确认分子泵已关闭"};
+    }
+    if(key=="trapTemperatureC" && value.toDouble()>0) {
+        const auto pump=serial_->confirmedSettings().value("molecularPumpOn");
+        const auto health=serial_->health();
+        if(!pump.isValid() || !pump.toBool() || !health.connected || !std::isfinite(health.carrierGasMlMin)
+            || health.carrierGasMlMin<0 || !(vacuum>0 && vacuum<(health.carrierGasMlMin>0?1e-2:1e-4)))
+            return {false,"真空系统尚未就绪，不能开启离子阱升温"};
+    }
+    return serial_->validateSetting(key,value);
 }
-void NetworkInstrument::requestSetting(const QString &id, const QString &key, const QVariant &) {
-    emit settingFinished(id, key, false, {}, validateSetting(key, {}).reason);
+void NetworkInstrument::requestSetting(const QString &id, const QString &key, const QVariant &value) {
+    const auto check=validateSetting(key,value);
+    if(id.isEmpty() || !check.allowed) { emit settingFinished(id,key,false,{},check.reason); return; }
+    if(key=="pinchValveOn") {
+        pinchRequestId_=id; pinchTarget_=value.toBool(); pinchConfirmed_=QVariant();
+        const auto wire=NetworkProtocol::pinchValveCommand(pinchTarget_);
+        recentFrames_.append(QJsonObject{{"time",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+            {"direction","TX"},{"peer",peerAddress_},{"action",0x10},{"command",0x22},
+            {"hex",QString::fromLatin1(wire.toHex(' '))}});
+        if(recentFrames_.size()>256) recentFrames_.removeFirst();
+        pinchTimer_.start();
+        if(!peer_ || peer_->write(wire)!=wire.size()) closePeer("夹管阀指令发送失败，状态未知");
+        emit stateChanged(); return;
+    }
+    if(key!="powerOn") { serial_->requestSetting(id,key,value); return; }
+    if(!value.toBool()) {
+        shutdown_=ShutdownSequence();shutdown_.begin();shutdownId_=id;
+        advanceShutdown();emit stateChanged();return;
+    }
+    shutdown_=ShutdownSequence();
+    startup_=StartupSequence(); startupId_=id;
+    if(serial_->confirmedSettings().value("molecularPumpOn").toBool()) {
+        startupPreparingMode_=false;
+        const auto target=serial_->confirmedSettings().value("tdTemperatureC");
+        startup_.resumeWithRunningPumps(target.isValid() && target.toDouble()==StartupSequence::TdTargetC);
+        startup_.observeCarrierFlow(serial_->health().carrierGasMlMin,serial_->health().connected);
+        startup_.observeVacuum(health().vacuumMbar,fresh_);
+        advanceStartup();emit stateChanged();return;
+    }
+    startupPreparingMode_=true;
+    startupStepId_="startup-step/"+QUuid::createUuid().toString(); startupStepKey_="internalCarrierGasOn";
+    startup_.observeCarrierFlow(serial_->health().carrierGasMlMin,serial_->health().connected);
+    serial_->requestSetting(startupStepId_,startupStepKey_,false); emit stateChanged();
+}
+QVariantMap NetworkInstrument::confirmedSettings() const {
+    auto values=serial_->confirmedSettings();
+    if(fresh_ && pinchConfirmed_.isValid()) values.insert("pinchValveOn",pinchConfirmed_);
+    const auto power=observedPowerState();
+    if(power.isValid()) values.insert("powerOn",power);
+    return values;
+}
+void NetworkInstrument::finishPinchValve(bool success,const QString &error) {
+    if(pinchRequestId_.isEmpty()) return;
+    const QString id=pinchRequestId_; pinchRequestId_.clear(); pinchTimer_.stop();
+    pinchConfirmed_=success?QVariant(pinchTarget_):QVariant();
+    emit settingFinished(id,"pinchValveOn",success,pinchConfirmed_,error); emit stateChanged();
+}
+void NetworkInstrument::advanceShutdown() {
+    if(!shutdownBusy() || !shutdownStepId_.isEmpty()) return;
+    if(shutdown_.stage()==ShutdownSequence::Stage::Failed) {finishShutdown(false,shutdown_.error());return;}
+    if(shutdown_.stage()==ShutdownSequence::Stage::Complete) {finishShutdown(true);return;}
+    const auto key=shutdown_.pendingKey();if(key.isEmpty()) return;
+    shutdownStepId_="shutdown-step/"+QUuid::createUuid().toString();
+    const QString requestId=shutdownStepId_;
+    if(key=="molecularPumpOn") serial_->requestPumpShutdown(requestId);
+    else serial_->requestSetting(requestId,key,false);
+}
+void NetworkInstrument::finishShutdown(bool success,const QString &error) {
+    if(!shutdownBusy()) return;
+    const QString id=shutdownId_,step=shutdownStepId_;shutdownId_.clear();shutdownStepId_.clear();
+    if(!success) {shutdown_.fail(error);serial_->cancelSetting(step,error);}
+    emit settingFinished(id,"powerOn",success,success?QVariant(false):QVariant(),error);emit stateChanged();
+}
+void NetworkInstrument::advanceStartup() {
+    if(!startupBusy() || !startupStepId_.isEmpty()) return;
+    if(startup_.stage()==StartupSequence::Stage::Failed) { stopStartup(startup_.error()); return; }
+    if(startup_.stage()==StartupSequence::Stage::Complete) {
+        const QString id=startupId_; startupId_.clear();
+        emit settingFinished(id,"powerOn",true,true,{}); return;
+    }
+    const auto actions=startup_.pendingActions();
+    if(actions.isEmpty()) return;
+    startupStepId_="startup-step/"+QUuid::createUuid().toString(); startupStepKey_=actions.first().key;
+    serial_->requestSetting(startupStepId_,startupStepKey_,actions.first().value);
+}
+void NetworkInstrument::stopStartup(const QString &reason) {
+    if(!startupBusy()) return;
+    const QString id=startupId_,step=startupStepId_;
+    startupId_.clear(); startupStepId_.clear(); startupStepKey_.clear(); startupPreparingMode_=false;
+    startup_.fail(reason); serial_->cancelSetting(step,reason);
+    emit settingFinished(id,"powerOn",false,{},reason); emit stateChanged();
+}
+void NetworkInstrument::cancelSetting(const QString &id) {
+    if(!id.isEmpty() && id==pinchRequestId_) closePeer("夹管阀操作已取消，状态未知；需重新连接");
+    else if(!id.isEmpty() && id==shutdownId_) finishShutdown(false,"已停止后续关机步骤，已执行的操作保持现状");
+    else if(!id.isEmpty() && id==startupId_) stopStartup("已停止后续开机步骤；已启动的部件保持现状");
+    else serial_->cancelSetting(id);
+}
+QVariant NetworkInstrument::observedPowerState() const {
+    if(!fresh_ || !serial_->health().connected) return {};
+    const auto parts=serial_->confirmedSettings();
+    const auto diaphragm=parts.value("diaphragmPumpOn"), pump=parts.value("molecularPumpOn");
+    if(!diaphragm.isValid() || !pump.isValid() || diaphragm.toBool()!=pump.toBool()) return {};
+    return pump;
+}
+bool NetworkInstrument::startupTemperaturesConfirmed() const {
+    const auto values=serial_->confirmedSettings();
+    return values.value("tdTemperatureC").isValid() && values.value("trapTemperatureC").isValid()
+        && values.value("tdTemperatureC").toDouble()==StartupSequence::TdTargetC
+        && values.value("trapTemperatureC").toDouble()==StartupSequence::TrapTargetC;
+}
+bool NetworkInstrument::runningStartupNeedsHeating() const {
+    const auto power=observedPowerState();const auto temperatures=serial_->telemetry();
+    return power.isValid() && power.toBool() && !startupTemperaturesConfirmed()
+        && std::isfinite(temperatures.tdTemperatureC) && std::isfinite(temperatures.ionTrapTemperatureC)
+        // Residual heat after an interrupted startup does not confirm its settings.
+        // Permit an explicit continuation without restarting already running pumps.
+        && (startup_.stage()==StartupSequence::Stage::Failed
+            || temperatures.tdTemperatureC<StartupSequence::TdTargetC-StartupSequence::TdToleranceC
+            || temperatures.ionTrapTemperatureC<StartupSequence::TrapTargetC-StartupSequence::TrapToleranceC);
+}
+bool NetworkInstrument::observedVacuumReady() const {
+    const auto power=observedPowerState();const auto state=serial_->health();
+    const double pressure=health().vacuumMbar,flow=state.carrierGasMlMin;
+    return power.isValid() && power.toBool() && std::isfinite(pressure) && pressure>0
+        && std::isfinite(flow) && flow>=0 && pressure<(flow>0?1e-2:1e-4);
+}
+bool NetworkInstrument::operatingConditionsReady() const {
+    const auto state=serial_->telemetry();
+    return observedVacuumReady()
+        && std::isfinite(state.tdTemperatureC) && std::isfinite(state.ionTrapTemperatureC)
+        && std::abs(state.tdTemperatureC-StartupSequence::TdTargetC)<=StartupSequence::TdToleranceC
+        && std::abs(state.ionTrapTemperatureC-StartupSequence::TrapTargetC)<=StartupSequence::TrapToleranceC;
+}
+QString NetworkInstrument::startupMessage() const {
+    if(shutdownBusy()) {
+        switch(shutdown_.stage()) {
+        case ShutdownSequence::Stage::StoppingHeating:return "正在关闭TD和离子阱加热";
+        case ShutdownSequence::Stage::Cooling:return QString("关机降温中，离子阱%1℃，等待低于75℃").arg(serial_->telemetry().ionTrapTemperatureC,0,'f',1);
+        case ShutdownSequence::Stage::StoppingPump:return "分子泵正在停止，等待电流归零及转速0 RPM";
+        case ShutdownSequence::Stage::StoppingDiaphragm:return "分子泵转速已归零，正在关闭隔膜泵";
+        default:break;
+        }
+    }
+    if(shutdown_.stage()==ShutdownSequence::Stage::Failed) return shutdown_.error();
+    if(shutdown_.stage()==ShutdownSequence::Stage::Complete && observedPowerState().isValid()
+        && !observedPowerState().toBool()) return "关机完成，加热和真空泵已关闭";
+    if(startup_.stage()==StartupSequence::Stage::Failed) return startup_.error();
+    if(!startupBusy()) {
+        if(!fresh_ || !serial_->health().connected) return "等待网口和485有效回读";
+        const auto parts=serial_->confirmedSettings();
+        const auto pump=parts.value("molecularPumpOn");
+        if(!pump.isValid()) return "等待分子泵电流回读";
+        if(pump.toBool()) {
+            if(!observedPowerState().isValid()) return "分子泵运行中，请核对隔膜泵状态";
+            if(!observedVacuumReady()) return "设备运行中，真空尚未就绪";
+            if(operatingConditionsReady()) return "设备运行中，真空和温度已达标";
+            if(startupTemperaturesConfirmed())
+                return QString("温度设定已确认（TD250℃/离子阱85℃），实测尚未达标");
+            return runningStartupNeedsHeating()?"真空已就绪，点击继续开机完成升温":"设备运行中，真空已就绪，实测温度未达标";
+        }
+        if(startup_.stage()!=StartupSequence::Stage::Failed)
+            return parts.value("diaphragmPumpOn").toBool()?"隔膜泵已开启，分子泵未开启":"真空泵已关闭";
+    }
+    if(startupPreparingMode_) return "正在设置外载气模式";
+    switch(startup_.stage()) {
+    case StartupSequence::Stage::Preparing:return "正在开启隔膜泵、TD升温至250℃";
+    case StartupSequence::Stage::PreparingRunning:return "泵已运行，正在设置TD250℃，继续完成升温";
+    case StartupSequence::Stage::WaitingForRoughVacuum:return "等待真空度小于8 mbar（8E0）";
+    case StartupSequence::Stage::StartingPump:return "等待分子泵电流大于0";
+    case StartupSequence::Stage::WaitingForVacuum:return serial_->health().carrierGasMlMin>0?"载气已开，等待E-03 mbar":"载气未开，等待E-05 mbar";
+    case StartupSequence::Stage::StartingTrapHeating:return "真空已就绪，开启离子阱升温至85℃";
+    case StartupSequence::Stage::Complete:return startup_.vacuumReady()?"真空已就绪，加热已启动":"加热已启动，真空尚未就绪";
+    case StartupSequence::Stage::Failed:return startup_.error();
+    default:return "尚未执行一键开机";
+    }
 }
 QVariantMap NetworkInstrument::statusDetails() const {
     QVariantMap data{{"listening", server_.isListening()}, {"tcpConnected", peer_ != nullptr},
@@ -411,9 +714,19 @@ QVariantMap NetworkInstrument::statusDetails() const {
         {"rejectedConnections", rejectedConnections_},
         {"validFrames", validFrames_}, {"unparsedFrames", unparsedFrames_},
         {"rejectedBytes", decoder_.rejectedBytes()}, {"retainedFrames", recentFrames_.size()}};
+    data.insert("startupStage",int(startup_.stage()));
+    data.insert("startupTemperaturesConfirmed",startupTemperaturesConfirmed());
+    data.insert("resumeHeatingAvailable",runningStartupNeedsHeating() && validateSetting("powerOn",true).allowed);
+    data.insert("shutdownBusy",shutdownBusy());
+    data.insert("startupBusy",startupBusy()); data.insert("startupMessage",startupMessage());
+    data.insert("pinchValvePending",!pinchRequestId_.isEmpty());
+    data.insert("vacuumSystemReady",observedVacuumReady());
+    data.insert("operatingConditionsReady",operatingConditionsReady());
     data.insert("pressureFrames",pressureFrameCount_); data.insert("pressurePoints",pressureVolts_.size());
     data.insert("pressureCycle",pressureCycle_);
     data.insert("pressureAcquisitionCompleted",pressureAcquisitionCompleted_);
+    data.insert("pressureSampleIntervalMinutes",pressureSampleIntervalMinutes_);
+    data.insert("pressureDisplayLimit",pressureDisplayLimit_);
     data.insert("waveformFormat","whole-cycle-u16be-legacy-crc-record-only");
     data.insert("waveformCrcPolicy","record_only");
     data.insert("waveformCrcMismatches",waveformCrcMismatches_);
@@ -516,6 +829,7 @@ bool NetworkInstrument::exportFrames(const QString &path, QString *error) const 
 
 bool NetworkInstrument::startAcquisition(int seconds,QString *error) {
     const auto fail=[error](const QString &text){if(error)*error=text;return false;};
+    if(settingBusy()) return fail("请等待开机或部件操作完成");
     if(acquisitionBusy() || tuningPending_ || !methodRequestId_.isEmpty()) return fail("请等待当前设备操作完成");
     if(stopReplyGuardTimer_.isActive()) return fail("正在收尾上一轮关闭回复，请稍后开始检测");
     if(!peer_ || !fresh_ || status_.experimentRunning) return fail("需要有效网口回读且仪器已停止检测");
@@ -533,6 +847,8 @@ bool NetworkInstrument::startAcquisition(int seconds,QString *error) {
     acquisitionCancelled_=false; acquisitionError_.clear(); acquisitionState_=1;
     pressureTimer_.stop(); pressureVolts_.clear(); pressureCycle_=-1;
     pressureAcquisitionCompleted_=false;
+    pressureRunTrace_=true;pressureDisplayLimit_=false;
+    pressureSampleIntervalMinutes_=NetworkProtocol::pressureSampleIntervalMinutes(confirmedMethodParameters_);
     errorRawReceives_.clear();acquisitionParseFailure_={};
     if(!sendDetection(true)) {closePeer("检测开启发送失败，设备状态未知");return false;}
     notify();

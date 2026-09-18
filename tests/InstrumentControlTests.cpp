@@ -4,6 +4,7 @@
 #include "device/Rs485Instrument.h"
 #include "device/NetworkInstrument.h"
 #include "Rs485TestDevice.h"
+#include "PumpTestDevice.h"
 #include "NetworkTestFrames.h"
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -49,6 +50,38 @@ class InstrumentControlTests : public QObject {
 private:
     QTemporaryDir settingsDirectory_;
 private slots:
+    void manualPumpStartupWaitsBeyondFiveSeconds() {
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("pump.sqlite").toUtf8());
+        test::FakeSerial port;QElapsedTimer startup;
+        port.responder=[&](const QByteArray &r) {
+            if(r==PumpProtocol::powerCommand(true)) {startup.start();return r;}
+            if(r==Rs485Protocol::statusQuery()) return test::frame(test::statusPayload());
+            for(int i=0;i<4;++i) if(r==PumpProtocol::query(i)) {
+                auto reply=test::pumpReply(i);
+                if(i==1 && (!startup.isValid() || startup.elapsed()<6500)) reply.replace(10,6,"000000");
+                return reply;
+            }
+            return QByteArray();
+        };
+        auto instrument=std::make_unique<Rs485Instrument>(&port,nullptr);auto *adapter=instrument.get();
+        auto network=std::make_unique<NetworkInstrument>(std::move(instrument));auto *net=network.get();
+        AppController controller(std::move(network));QVERIFY(adapter->openPort("TEST_ONLY",true));
+        QVERIFY(net->startListening("127.0.0.1",0,30000));QTcpSocket client;
+        client.connectToHost(QHostAddress::LocalHost,net->statusDetails()["port"].toUInt());
+        QTRY_VERIFY(net->statusDetails()["tcpConnected"].toBool());
+        auto status=test::networkStatusWire().mid(7,21);status[9]=0;
+        QTimer updates;connect(&updates,&QTimer::timeout,&client,[&]{client.write(test::networkFrame(status));});updates.start(100);
+        QTRY_VERIFY(controller.instrumentSettingAvailable("molecularPumpOn"));
+        QTRY_VERIFY(adapter->pumpStatusDetails().contains("molecularPumpCurrentA"));
+        QSignalSpy done(adapter,&IInstrumentAdapter::settingFinished);
+        QVERIFY(controller.updateInstrumentSetting("molecularPumpOn",true,true));
+        QTest::qWait(5500);QCOMPARE(done.size(),0);QVERIFY(adapter->portOpen());
+        QVERIFY(!controller.instrumentSettingAvailable("molecularPumpOn"));
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(),1,4000);QVERIFY(done[0][2].toBool());
+        QVERIFY(controller.instrumentSettings().value("molecularPumpOn").toBool());
+        QCOMPARE(port.writes.count(PumpProtocol::powerCommand(true)),1);
+        controller.disconnectRs485();qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void analysisStorageWaitKeepsGuiResponsive() {
         QTemporaryDir dir;
         const QString path = dir.filePath("responsive-save.sqlite");
@@ -207,6 +240,43 @@ private slots:
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory_.path());
         QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, settingsDirectory_.path());
     }
+    void serialPowerControlWithoutTcp_data() {
+        QTest::addColumn<bool>("rf");QTest::addColumn<bool>("network");
+        QTest::newRow("rf-serial")<<true<<false;QTest::newRow("hv-serial")<<false<<false;
+        QTest::newRow("rf-network-adapter")<<true<<true;QTest::newRow("hv-network-adapter")<<false<<true;
+    }
+    void serialPowerControlWithoutTcp() {
+        QFETCH(bool,rf);QFETCH(bool,network);
+        const QString key=rf?"rfOn":"ionHighVoltageOn";const quint8 command=rf?0x10:0x09;
+        const int flag=rf?5:4;
+        QTemporaryDir dir;qputenv("QITEST_WORKSPACE_DB",dir.filePath("hv.sqlite").toUtf8());
+        test::FakeSerial port;auto board=test::statusPayload();board[flag]=char(0xff);
+        port.responder=[&](const QByteArray &r) {
+            if(r==Rs485Protocol::statusQuery()) return test::frame(board);
+            if(quint8(r[2])==command) {
+                board[flag]=quint8(r[5])==1?char(0xee):char(0xff);
+                return test::frame(QByteArray::fromHex("11"),command);
+            }
+            return QByteArray();
+        };
+        auto instrument=std::make_unique<Rs485Instrument>(&port,nullptr);auto *adapter=instrument.get();
+        std::unique_ptr<IInstrumentAdapter> selected;
+        if(network) selected=std::make_unique<NetworkInstrument>(std::move(instrument));
+        else selected=std::move(instrument);
+        AppController controller(std::move(selected));QVERIFY(adapter->openPort("TEST_ONLY"));
+        QTRY_VERIFY(controller.health().connected);
+        QVERIFY(controller.instrumentSettingAvailable(key));
+        QVERIFY(!controller.instrumentSettingAvailable("pinchValveOn"));
+        for(bool target:{true,false}) {
+            QVERIFY(controller.updateInstrumentSetting(key,target,true));
+            QVERIFY(!controller.instrumentSettingAvailable(key));
+            QTRY_VERIFY(controller.instrumentSettingAvailable(key));
+            QCOMPARE(controller.instrumentSettings().value(key),QVariant(target));
+        }
+        controller.disconnectRs485();QVERIFY(!controller.instrumentSettingAvailable(key));
+        QVERIFY(!controller.instrumentSettings().value(key).isValid());
+        qunsetenv("QITEST_WORKSPACE_DB");
+    }
     void rs485ReadbackClearsUnknownFieldsAndCannotControlOrAcquire() {
         QTemporaryDir dir;
         qputenv("QITEST_WORKSPACE_DB", dir.filePath("rs485.sqlite").toUtf8());
@@ -337,8 +407,9 @@ private slots:
         QVERIFY(VendorControlCatalog::controlPayload("tdTemperatureC", 56, &bytes));
         QCOMPARE(bytes, QByteArray::fromHex("0038"));
         QVERIFY(VendorControlCatalog::controlPayload("efcMlMin", 28.4, &bytes));
-        QCOMPARE(bytes, QByteArray::fromHex("6ef0"));
+        QCOMPARE(bytes, QByteArray::fromHex("011c"));
         const auto previous = bytes;
+        QVERIFY(!VendorControlCatalog::controlPayload("efcMlMin", 1.01, &bytes));
         QVERIFY(!VendorControlCatalog::controlPayload("efcMlMin", 50.001, &bytes));
         QVERIFY(!VendorControlCatalog::controlPayload("tdTemperatureC", 56.1, &bytes));
         QVERIFY(!VendorControlCatalog::controlPayload("tdTemperatureC", std::numeric_limits<double>::quiet_NaN(), &bytes));

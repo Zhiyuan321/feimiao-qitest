@@ -28,6 +28,11 @@ public:
     CommandValidation validate(const InstrumentCommand &command) const override;
     CommandValidation validateSetting(const QString &, const QVariant &) const override;
     void requestSetting(const QString &id, const QString &key, const QVariant &) override;
+    void cancelSetting(const QString &id) override;
+    void cancelSetting(const QString &id,const QString &reason);
+    void requestPumpShutdown(const QString &id);
+    static bool supportsSetting(const QString &key);
+    bool settingBusy() const { return !controlId_.isEmpty(); }
     QVector<SpectrumPoint> acquireSpectrum() override { return {}; }
     void cancel() override {}
     bool readOnly() const override { return true; }
@@ -49,9 +54,19 @@ private:
     void receive();
     void sendNextBasicParameter();
     void finishBasicParameters(bool success, const QString &error = {});
-    void fail(const QString &message);
+    void fail(const QString &message, bool abnormal = true);
+    void recordFailure(const QString &message);
+    void saveFailureDiagnostics();
+    void pumpConfirmationExpired();
     void clearReadings();
     void clearMainReadings();
+    void sendControl();
+    void queueSetting(const QString &id,const QString &key,const QVariant &value,bool waitForRest);
+    bool controlWaitForRest_ = false;
+    bool pumpTurnaround_ = false;
+    void finishControl(bool success, const QString &error = {});
+    void recordControl(const QString &event, const QVariantMap &details = {});
+    bool controlReadbackMatches() const;
     QIODevice *transport_;
     QSerialPort *serial_ = nullptr;
     QTimer pollTimer_, timeout_, mainFreshTimer_;
@@ -69,5 +84,15 @@ private:
     int basicIndex_ = -1;
     QString basicRequestId_;
     QJsonObject basicParameters_;
+    QString controlId_, controlKey_;
+    QVariant controlValue_;
+    QByteArray controlWire_;
+    quint8 controlCommand_ = 0;
+    int controlStage_ = 0; // 0 idle, 1 queued, 2 board ACK, 3 board status, 4 pump current
+    QTimer controlDeadline_, pumpFreshTimer_;
+    QVariantMap confirmedSetpoints_;
+    QVariantList controlHistory_;
+    QVariantMap lastFailure_;
+    QString diagnosticPath_, diagnosticError_;
 };
 } // namespace qitest

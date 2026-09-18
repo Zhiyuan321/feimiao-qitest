@@ -49,6 +49,8 @@ public:
     InstrumentTelemetry telemetry() const;
     InstrumentDescriptor instrumentDescriptor() const;
     bool instrumentReadOnly() const { return instrument_->readOnly(); }
+    bool instrumentSettingAvailable(const QString &key) const;
+    void cancelInstrumentStartup();
     bool realConnectionPending() const;
     QString instrumentConnectionSummary() const { return instrument_->connectionSummary(); }
     QVariantMap rs485Status() const;

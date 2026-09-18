@@ -1,6 +1,8 @@
 #pragma once
 #include "device/Rs485Instrument.h"
 #include "device/NetworkProtocol.h"
+#include "device/StartupSequence.h"
+#include "device/ShutdownSequence.h"
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QJsonObject>
@@ -28,7 +30,12 @@ public:
     InstrumentDescriptor descriptor() const override;
     InstrumentHealth health() const override;
     InstrumentTelemetry telemetry() const override;
-    QVariantMap confirmedSettings() const override { return serial_->confirmedSettings(); }
+    QVariantMap confirmedSettings() const override;
+    bool startupBusy() const { return !startupId_.isEmpty(); }
+    bool supportsSetting(const QString &key) const { return key == "powerOn" || key == "pinchValveOn" || Rs485Instrument::supportsSetting(key); }
+    bool shutdownBusy() const { return !shutdownId_.isEmpty(); }
+    bool settingBusy() const { return shutdownBusy() || startupBusy() || !pinchRequestId_.isEmpty() || serial_->settingBusy(); }
+    void cancelSetting(const QString &id) override;
     bool readOnly() const override { return true; }
     QString connectionSummary() const override;
     CommandValidation validate(const InstrumentCommand &command) const override;
@@ -44,6 +51,26 @@ signals:
     void acquisitionScan(const qitest::SpectrumScan &scan);
     void acquisitionFinished(bool success, bool cancelled, const QString &error);
 private:
+    void finishPinchValve(bool success, const QString &error = {});
+    QString pinchRequestId_;
+    bool pinchTarget_ = false;
+    QVariant pinchConfirmed_;
+    QTimer pinchTimer_;
+    void advanceShutdown();
+    void finishShutdown(bool success,const QString &error = {});
+    ShutdownSequence shutdown_;
+    QString shutdownId_,shutdownStepId_;
+    void advanceStartup();
+    void stopStartup(const QString &reason);
+    QString startupMessage() const;
+    QVariant observedPowerState() const;
+    bool observedVacuumReady() const;
+    bool operatingConditionsReady() const;
+    bool startupTemperaturesConfirmed() const;
+    bool runningStartupNeedsHeating() const;
+    StartupSequence startup_;
+    QString startupId_, startupStepId_, startupStepKey_;
+    bool startupPreparingMode_ = false;
     bool sendDetection(bool enabled);
     void receiveAcquisition(const NetworkFrame &frame);
     void finishNetworkAcquisition(bool success, const QString &error);
@@ -68,6 +95,8 @@ private:
     quint64 pressureFrameCount_ = 0;
     int pressureCycle_ = -1;
     bool pressureAcquisitionCompleted_ = false;
+    bool pressureRunTrace_ = false, pressureDisplayLimit_ = false;
+    double pressureSampleIntervalMinutes_ = 0;
     bool tuningPending_ = false, tuningTarget_ = false;
     QString tuningMessage_ = "调谐尚未操作";
     NetworkProtocol decoder_;
